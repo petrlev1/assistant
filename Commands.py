@@ -7,7 +7,7 @@ import subprocess
 # === Настройка клиента OpenRouter ===
 client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1", 
-    api_key="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"  # <-- замени на свой ключ
+    api_key="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"  # <-- замени на свой ключ
 )
 
 # === Функция для выполнения действий ===
@@ -40,7 +40,7 @@ def execute_command(command):
     # === Обращение к модели ===
 def get_model_response(user_input):
     response = client.chat.completions.create(
-        model="mistralai/mistral-7b-instruct",  # можно выбрать другую модель
+        model="deepseek/deepseek-r1-0528-qwen3-8b",  # можно выбрать другую модель
         messages=[
             {"role": "system", "content": "Ты помощник, который переводит естественные команды пользователя в простые инструкции для управления компьютером."},
             {"role": "user", "content": user_input}
