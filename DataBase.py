@@ -5,7 +5,7 @@ import pandas as pd
 # === Настройка клиента OpenRouter ===
 client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1", 
-    api_key="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"  # <-- замени на свой ключ
+    api_key="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"  # <-- замени на свой ключ
 )
 
 

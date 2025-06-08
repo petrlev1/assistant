@@ -1,32 +1,41 @@
-import dashscope
-from dashscope import Generation
+import pyautogui
+import time
+import webbrowser
 
-# Установите ваш API ключ
-dashscope.api_key = 'sk-bb2885064dc340d292343ca7bc762966'
+#Действия пользователя
+def open_browser_and_go_to_yandex():
+    
+    print("🖱️ Имитирую открытие браузера...")
 
-def call_qwen(prompt):
-    try:
-        response = Generation.call(
-            model='qwen-max',
-            prompt=prompt
-        )
-        if response is None:
-            print("API returned None.")
-            return None
-        elif response.error:
-            print(f"API error: {response.error}")
-            return None
-        return response.output.text
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        return None
+    '''
+    # 1. Нажимаем Win + 1 / 2 / 3 — чтобы открыть браузер с панели задач (пример для Chrome)
+    pyautogui.hotkey('win', '1')  # замени на нужный номер ярлыка
+    time.sleep(1)
+    '''
 
-# Пример использования
-if __name__ == '__main__':
-    user_prompt = "Расскажи интересный факт о космосе."
-    answer = call_qwen(user_prompt)
-    if answer:
-        print("Ответ Qwen:")
-        print(answer)
-    else:
-        print("Не удалось получить ответ от Qwen.")
+    print("🌐 Открываю Яндекс в браузере по умолчанию...")
+    webbrowser.open("yandex.ru") 
+    
+    time.sleep(0.5)
+    # 2. Нажимаем Ctrl+L — выделяем адресную строку
+    pyautogui.hotkey('ctrl', 'l')
+    time.sleep(0.5)
+
+    # 3. Печатаем адрес сайта
+    pyautogui.write("https://mail.ru",  interval=0.1)
+    time.sleep(0.5)
+
+    pyautogui.press('enter')
+    time.sleep(2)
+
+    pyautogui.write("qqq",  interval=0.1)
+    time.sleep(0.5)
+
+    # 4. Нажимаем Enter
+    pyautogui.press('enter')
+
+    print("✅ Браузер открыт, переход на Яндекс выполнен.")
+
+# Запуск
+if __name__ == "__main__":
+    open_browser_and_go_to_yandex()

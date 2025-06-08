@@ -3,66 +3,82 @@ import pyautogui
 import webbrowser
 import os
 import subprocess
+import pytesseract
+import cv2
+import numpy as np
 
 # === Настройка клиента OpenRouter ===
 client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1", 
-    api_key="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"  # <-- замени на свой ключ
+    api_key="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"  # <-- замени на свой ключ
 )
 
-# === Функция для выполнения действий ===
-def execute_command(command):
-    command = command.lower()
+# Убедись, что Tesseract установлен и добавлен в PATH
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-    if "браузер" in command or "google chrome" in command:
-        webbrowser.open("https://google.com") 
-        return "Открываю браузер."
+def get_text_positions():
+    # Делаем скриншот экрана
+    img = pyautogui.screenshot()
+    img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
-    elif "скриншот" in command:
-        pyautogui.screenshot("screenshot.png")
-        return "Сделал скриншот рабочего стола."
+    # Распознаём текст
+    data = pytesseract.image_to_data(img, lang='rus+eng', output_type=pytesseract.Output.DICT)
 
-    elif "выключи компьютер" in command:
-        os.system("shutdown /s /t 1")
-        return "Выключаю компьютер."
+    # Сохраняем координаты каждого слова
+    text_positions = []
+    n_boxes = len(data['text'])
+    for i in range(n_boxes):
+        if int(data['conf'][i]) > 60:  # уверенность > 60%
+            (x, y, w, h) = (data['left'][i], data['top'][i], data['width'][i], data['height'][i])
+            center = (x + w // 2, y + h // 2)
+            text_positions.append({
+                'text': data['text'][i].lower(),
+                'box': (x, y, x + w, y + h),
+                'center': center
+            })
+    return text_positions
 
-    elif "блокнот" in command or "notepad" in command:
-        subprocess.Popen("notepad.exe")
-        return "Запускаю Блокнот."
+def execute_dynamic_command(command):
+    print(f"[Команда]: {command}")
+    words = command.lower().split()
 
-    elif "закрой окно" in command:
-        pyautogui.hotkey('alt', 'f4')
-        return "Закрываю текущее окно."
+    # Получаем все найденные слова на экране
+    text_positions = get_text_positions()
 
-    else:
-        return "Не понял команду. Попробуйте ещё раз."
+    # Примеры: "Нажми на поиск", "Кликни на параметры"
+    for word in words:
+        for item in text_positions:
+            if word in item['text']:
+                print(f"🔍 Нашёл '{item['text']}' на экране.")
+                pyautogui.click(item['center'])
+                return f"✅ Кликнул на '{item['text']}'."
     
-    # === Обращение к модели ===
-def get_model_response(user_input):
-    response = client.chat.completions.create(
-        model="deepseek/deepseek-r1-0528-qwen3-8b",  # можно выбрать другую модель
-        messages=[
-            {"role": "system", "content": "Ты помощник, который переводит естественные команды пользователя в простые инструкции для управления компьютером."},
-            {"role": "user", "content": user_input}
-        ]
-    )
-    return response.choices[0].message.content.strip()
+    print("Элемент не найден на экране.")
+    return "Элемент не найден."
 
-# === Основной цикл для ввода действия ===
-print("Введите команду или 'выход' для завершения.")
+def get_model_response(user_input):
+    try:
+        response = client.chat.completions.create(
+            model="deepseek/deepseek-r1-0528-qwen3-8b",
+            messages=[
+                {"role": "system", "content": "Ты помощник, который переводит естественные команды пользователя в точные инструкции для компьютера. Отвечай коротко и точно."},
+                {"role": "user", "content": user_input}
+            ]
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"[Ошибка при обращении к модели]: {e}")
+        return ""
+    
+    print("🤖 Введите команду (или 'выход'):")
 while True:
-    user_text = input("Какую команду выполнить?: ")
-    if user_text.lower() in ["выход", "exit", "quit"]:
-        print("Завершаю работу.")
+    user_input = input("Вы: ")
+    if user_input.lower() in ["выход", "quit", "exit"]:
+        print("👋 Завершаю работу.")
         break
 
-    # Получаем ответ модели
-    try:
-        interpreted_command = get_model_response(user_text)
-        print(f"[Модель]: {interpreted_command}")
+    interpreted = get_model_response(user_input)
+    print(f"🧠 [Модель]: {interpreted}")
 
-        # Выполняем команду
-        result = execute_command(interpreted_command)
-        print(f"[Система]: {result}")
-    except Exception as e:
-        print(f"[Ошибка]: {e}")
+    result = execute_dynamic_command(interpreted)
+    print(f"💻 [Результат]: {result}")
