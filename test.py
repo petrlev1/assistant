@@ -28,7 +28,7 @@ def open_browser_and_go_to_yandex():
     pyautogui.press('enter')
     time.sleep(2)
 
-    pyautogui.write("qqq",  interval=0.1)
+    pyautogui.write("qqq",  interval=0.2)
     time.sleep(0.5)
 
     # 4. Нажимаем Enter
