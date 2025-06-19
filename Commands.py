@@ -9,8 +9,9 @@ import os
 import time
 import re
 from dotenv import load_dotenv
+import random
 
-# Укажи путь к tesseract.exe (если не добавлен в PATH)
+# Укажи путь к tesseract.exe (если не в PATH)
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # Загрузка переменных окружения
@@ -52,18 +53,25 @@ def ask_model(prompt):
     print("❌ Не удалось получить ответ ни от одной модели.")
     return ""
 
+# === Плавное движение мыши как у человека ===
+def human_like_move(x, y, duration=0.5):
+    """Плавно двигает мышь к цели с небольшим дрожанием"""
+    start_x, start_y = pyautogui.position()
+    steps = 10
+    for i in range(steps):
+        dx = (x - start_x) * (i / steps) + random.uniform(-5, 5)
+        dy = (y - start_y) * (i / steps) + random.uniform(-5, 5)
+        pyautogui.moveTo(start_x + dx, start_y + dy, duration=duration / steps)
+    pyautogui.moveTo(x, y)  # Точное позиционирование в конце
+
 # === Поиск текста на экране и клик по нему ===
 def click_on_text(target_text, threshold=0.7):
     print(f"🔍 Ищу текст '{target_text}' на экране...")
 
-    # Делаем скриншот экрана
     screenshot = pyautogui.screenshot()
     img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
-
-    # Преобразуем в чёрно-белое изображение для лучшего распознавания
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # Распознаём текст с изображения
     data = pytesseract.image_to_data(gray, lang='rus+eng', output_type=pytesseract.Output.DICT)
 
     found = False
@@ -76,9 +84,26 @@ def click_on_text(target_text, threshold=0.7):
             center_y = y + h // 2
 
             print(f"🖱️ Найдено: '{text}' на координатах ({x}, {y}) размером {w}x{h}")
-            pyautogui.click(center_x, center_y)
-            print(f"✅ Кликнуто по тексту '{text}'")
+
+            # Случайный сдвиг для натурального клика
+            jitter_x = random.randint(-5, 5)
+            jitter_y = random.randint(-5, 5)
+            final_x = center_x + jitter_x
+            final_y = center_y + jitter_y
+
+            # Плавное движение мыши
+            move_duration = random.uniform(0.3, 0.7)
+            print(f"🧭 Перемещаюсь к точке за {move_duration:.2f} секунд...")
+            human_like_move(final_x, final_y, duration=move_duration)
+
+            # Пауза, как будто пользователь "думает"
+            time.sleep(random.uniform(0.5, 1.0))
+
+            # Клик
+            pyautogui.click()
+            print(f"✅ Естественный клик выполнен по '{text}'")
             found = True
+            break
 
     if not found:
         print(f"❌ Текст '{target_text}' не найден на экране.")
@@ -134,11 +159,7 @@ def execute_command(command):
     if click_match:
         target_text = click_match.group(1).strip()
         result = click_on_text(target_text)
-        if result:
-            return True
-        else:
-            print("🔄 Текст не найден на экране.")
-            return False
+        return result
 
     # --- Открытие программы или сайта ---
     app_match = re.search(r'(?:открой|open|launch|run|start)\s+(.+)', cmd)
@@ -180,7 +201,7 @@ def execute_command(command):
 
 # === Бесконечный цикл ввода команд ===
 def main():
-    print("🤖 Введите вашу команду для управления компьютером (или 'выход'): ")
+    print("🤖 Введите вашу команду для управления компьютером (или 'выход'):")
 
     while True:
         user_input = input("> ").strip()
@@ -190,7 +211,7 @@ def main():
 
         system_prompt = f"""
 Вы — голосовой помощник, который должен преобразовать естественный язык пользователя в конкретное действие.
-ВАЖНО: Отвечайте ТОЛЬКО одной строкой на РУССКОМ языке. Никаких объяснений, только простая команда.
+ВАЖНО: Отвечайте ТОЛЬКО одной строкой на РУССКОМ языке.
 
 Допустимые действия:
 - Напиши [текст]
