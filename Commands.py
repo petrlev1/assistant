@@ -91,7 +91,8 @@ def get_screen_text_and_image():
     save_screenshot(img_cv2, prefix="screen_raw")
 
     # OCR
-    data = pytesseract.image_to_data(gray, lang='rus+eng', output_type=pytesseract.Output.DICT)
+    config = '--oem 3 --psm 6 -c tessedit_char_whitelist=АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюяABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+    data = pytesseract.image_to_data(gray, lang='rus+eng', config=config, output_type=pytesseract.Output.DICT)
     recognized_text = " ".join([text for text in data['text'] if text.strip()])
     return recognized_text, img_cv2  # Возвращаем текст и изображение
 
@@ -99,6 +100,7 @@ def get_screen_text_and_image():
 def describe_screen_changes(current_text, previous_text):
     prompt = f"""
 Вы — голосовой помощник. Объясните, что изменилось на экране.
+Пиши на русском языке.
 Текст до: "{previous_text[:500]}"
 Текст сейчас: "{current_text[:500]}"
 
@@ -236,6 +238,7 @@ def main():
 
         prompt = f"""
 Вы — голосовой помощник. Опишите кратко, что вы видите на экране.
+Пиши на русском языке.
 Найденный текст: "{current_text[:500]}"...
 
 Описание:
