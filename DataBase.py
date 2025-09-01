@@ -6,7 +6,7 @@ from sentence_transformers import util, SentenceTransformer
 # === Настройка клиента OpenRouter ===
 client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="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"  # Замените на свой
+    api_key="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"  # Замените на свой ключ
 )
 
 # === Доступные модели ===
@@ -59,17 +59,21 @@ def load_knowledge_from_txt(file_path="DataBase.txt"):
                                 if clean_key.lower().startswith("unnamed"):
                                     continue
                                 if value and value.strip():
-                                    # Улучшенный формат для лучшего понимания
                                     parts.append(f"{clean_key} — {value.strip()}")
+
                             if parts:
-                                # Делаем фразу более "естественной" для семантического поиска
-                                entry = f"В компании Аквесегмент: {', '.join(parts)}."
+                                # Улучшенный формат: делаем из данных читаемые предложения
+                                if "Проект" in row and "Ответственный" in row:
+                                    entry = f"Проект {row['Проект']} находится в статусе «{row.get('Статус', 'не указан')}». Ответственный — {row['Ответственный']}."
+                                elif "Имя" in row and "Должность" in row:
+                                    entry = f"{row['Имя']} работает {row['Должность']}. Контакт: email — {row.get('Email', 'не указан')}, телефон — {row.get('Телефон', 'не указан')}."
+                                else:
+                                    entry = "В компании Аквесегмент: " + ", ".join(parts) + "."
                                 knowledge.append(entry)
                     print(f"✅ Загружено {len(rows)} строк из файла: {csv_file}")
                 except Exception as e:
                     print(f"❌ Ошибка при чтении файла {csv_file}: {e}")
 
-    # 3. Проверка на пустоту
     if not knowledge:
         knowledge = [
             "База знаний пуста. Пожалуйста, создайте файл DataBase.txt или добавьте CSV-файлы в папку Database."
@@ -91,35 +95,37 @@ def find_relevant_info(query, top_k=3):
         print("⚠️ База знаний пуста.")
         return "Лебедев — это великий космонавт."
 
-    # Пересоздаём эмбеддинги, если база изменилась
     if len(corpus_embeddings) != len(my_knowledge):
         corpus_embeddings = model.encode(my_knowledge, convert_to_tensor=True)
 
     query_embedding = model.encode(query, convert_to_tensor=True)
     hits = util.semantic_search(query_embedding, corpus_embeddings, top_k=top_k)
 
-    # Понижаем порог — лучше показать что-то, чем ничего
     if hits[0][0]['score'] < 0.3:
-        print("⚠️ Низкая релевантность. Возвращаем резерв.")
-        return "Лебедев — это великий космонавт."
+        print("⚠️ Низкая релевантность найденных данных.")
+        return "Я не знаю ответа на этот вопрос."
 
-    # Возвращаем наиболее релевантные строки
     result = [my_knowledge[hit['corpus_id']] for hit in hits[0]]
     return "\n".join(result)
 
 def ask_model(question, selected_model):
     context = find_relevant_info(question)
-    # print("\n🔍 Переданный контекст модели:\n", context)  # Раскомментировано для отладки
+    # print("\n🔍 Переданный контекст модели:\n", context)
 
     try:
         response = client.chat.completions.create(
             model=selected_model,
             messages=[
                 {"role": "system", "content": f"""
-                 Ты — помощник в компании Аквесегмент. Отвечай дружелюбно, кратко и профессионально.
-                 Используй следующую информацию:
-                 {context}
-                 Если не знаешь — скажи честно.
+Ты — профессиональный помощник компании Аквесегмент. Отвечай кратко, ясно и строго на основе информации ниже.
+
+Правила:
+- Если ответа нет в информации — скажи «Я не знаю».
+- Не выдумывай и не предполагай.
+- Анализируй данные и формулируй ответ самостоятельно.
+
+Информация:
+{context}
                 """},
                 {"role": "user", "content": question}
             ]
