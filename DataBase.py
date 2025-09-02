@@ -97,7 +97,7 @@ corpus_embeddings = model.encode(my_knowledge, convert_to_tensor=True, show_prog
 tokenized_corpus = [doc.split(" ") for doc in my_knowledge]
 bm25 = BM25Okapi(tokenized_corpus)
 
-def find_relevant_info(query, top_k=5, alpha=0.7):
+def find_relevant_info(query, top_k=5, alpha=0.7): # Настройка гибридного поиска
     """
     Гибридный поиск: комбинирует семантический и лексический поиск.
     
@@ -158,7 +158,7 @@ def find_relevant_info(query, top_k=5, alpha=0.7):
     return "\n".join(result)
 
 def ask_model(question, selected_model):
-    context = find_relevant_info(question, top_k=5, alpha=0.7) # Настройки гибридного поиска
+    context = find_relevant_info(question)
     print("\n🔍 Переданный контекст модели:\n", context)
 
     try:
