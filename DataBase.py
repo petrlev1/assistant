@@ -8,28 +8,26 @@ import pickle
 import hashlib
 import torch
 from pathlib import Path
+import PyPDF2
 
 # === Настройка клиента OpenRouter ===
 client = openai.OpenAI(
-    base_url="https://openrouter.ai/api/v1",  # Исправленный URL без пробелов
-    api_key="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"  # Замените на свой ключ
+    base_url="https://openrouter.ai/api/v1",
+    api_key="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"
 )
 
 # === Доступные модели ===
 AVAILABLE_MODELS = [
     "mistralai/mistral-7b-instruct:free"
-    #"deepseek/deepseek-r1-0528-qwen3-8b:free"
 ]
 
 def get_file_embedding_cache_path(file_path, knowledge_content):
     """Генерирует путь к кэш-файлу для конкретного файла знаний"""
-    # Создаем хэш от содержимого файла
     content_hash = hashlib.md5(str(sorted(knowledge_content)).encode('utf-8')).hexdigest()
-    # Имя кэш-файла включает имя оригинального файла и хэш содержимого
     cache_dir = Path("embeddings_cache")
-    cache_dir.mkdir(exist_ok=True)  # Создаем папку для кэшей, если её нет
-    filename = Path(file_path).stem  # Получаем имя файла без расширения
-    return cache_dir / f"{filename}_{content_hash[:12]}.pkl"  # Берем только часть хэша для краткости
+    cache_dir.mkdir(exist_ok=True)
+    filename = Path(file_path).stem
+    return cache_dir / f"{filename}_{content_hash[:12]}.pkl"
 
 def load_or_create_embeddings(file_path, knowledge_content, model):
     """Загружает эмбеддинги из кэша или создает их заново"""
@@ -43,16 +41,15 @@ def load_or_create_embeddings(file_path, knowledge_content, model):
     else:
         print(f"🧠 Создание эмбеддингов для {file_path}...")
         embeddings = model.encode(knowledge_content, convert_to_tensor=True, show_progress_bar=True)
-        # Сохраняем эмбеддинги в кэш
         with open(cache_path, 'wb') as f:
             pickle.dump(embeddings, f)
         print(f"✅ Эмбеддинги сохранены в кэш: {cache_path}")
     
     return embeddings
 
-# === Загрузка знаний из txt и всех CSV в папке Database ===
 def load_knowledge_from_txt(file_path="DataBase.txt"):
-    all_knowledge = {}  # Словарь: путь_к_файлу -> список_строк
+    """Загрузка знаний из txt, CSV и PDF файлов в папке Database"""
+    all_knowledge = {}
     
     # 1. Загрузка из txt
     txt_knowledge = []
@@ -70,12 +67,16 @@ def load_knowledge_from_txt(file_path="DataBase.txt"):
     except FileNotFoundError:
         print(f"❌ Файл {file_path} не найден.")
 
-    # 2. Загрузка всех CSV из папки Database
+    # 2. Загрузка всех файлов из папки Database
     database_folder = "Database"
     if not os.path.exists(database_folder):
         print(f"⚠️ Папка '{database_folder}' не найдена.")
     else:
-        csv_files = [f for f in os.listdir(database_folder) if f.lower().endswith(".csv")]
+        files = os.listdir(database_folder)
+        csv_files = [f for f in files if f.lower().endswith(".csv")]
+        pdf_files = [f for f in files if f.lower().endswith(".pdf")]
+        
+        # Обработка CSV файлов
         if not csv_files:
             print(f"⚠️ В папке '{database_folder}' нет CSV-файлов.")
         else:
@@ -100,7 +101,6 @@ def load_knowledge_from_txt(file_path="DataBase.txt"):
                                     parts.append(f"{clean_key} — {value.strip()}")
 
                             if parts:
-                                # Улучшенный формат: делаем из данных читаемые предложения
                                 if "Проект" in row and "Ответственный" in row:
                                     entry = f"Проект {row['Проект']} находится в статусе «{row.get('Статус', 'не указан')}». Ответственный — {row['Ответственный']}."
                                 elif "Имя" in row and "Должность" in row:
@@ -113,35 +113,64 @@ def load_knowledge_from_txt(file_path="DataBase.txt"):
                 except Exception as e:
                     print(f"❌ Ошибка при чтении файла {csv_file}: {e}")
 
+        # Обработка PDF файлов
+        if not pdf_files:
+            print(f"⚠️ В папке '{database_folder}' нет PDF-файлов.")
+        else:
+            for pdf_file in pdf_files:
+                file_path = os.path.join(database_folder, pdf_file)
+                pdf_knowledge = []
+                try:
+                    with open(file_path, 'rb') as f:
+                        pdf_reader = PyPDF2.PdfReader(f)
+                        print(f"📄 Обработка PDF файла: {pdf_file} (всего страниц: {len(pdf_reader.pages)})")
+                        
+                        for page_num, page in enumerate(pdf_reader.pages):
+                            text = page.extract_text()
+                            if text:
+                                # Разбиваем текст на абзацы
+                                paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                                for paragraph in paragraphs:
+                                    # Фильтруем короткие абзацы
+                                    if len(paragraph) > 50:
+                                        pdf_knowledge.append(f"[{pdf_file}, стр. {page_num+1}] {paragraph}")
+                    
+                    if pdf_knowledge:
+                        print(f"✅ Извлечено {len(pdf_knowledge)} фрагментов из файла: {pdf_file}")
+                        all_knowledge[file_path] = pdf_knowledge
+                    else:
+                        print(f"⚠️ Из файла {pdf_file} не удалось извлечь текст или он пуст.")
+                        
+                except Exception as e:
+                    print(f"❌ Ошибка при чтении PDF файла {pdf_file}: {e}")
+
     if not all_knowledge:
         all_knowledge["default"] = [
-            "База знаний пуста. Пожалуйста, создайте файл DataBase.txt или добавьте CSV-файлы в папку Database."
+            "База знаний пуста. Пожалуйста, создайте файл DataBase.txt или добавьте файлы в папку Database."
         ]
 
     return all_knowledge
 
 # === Подготовка к гибридному поиску ===
-# 1. Загрузка знаний
 all_knowledge_dict = load_knowledge_from_txt()
 
 # Объединяем все знания в один список для поиска
 my_knowledge = []
-file_mapping = {}  # Для отслеживания, из какого файла какой фрагмент
+file_mapping = {}
 current_index = 0
 
 for file_path, knowledge_list in all_knowledge_dict.items():
     my_knowledge.extend(knowledge_list)
-    # Создаем маппинг индексов к файлам
     for i in range(len(knowledge_list)):
         file_mapping[current_index + i] = file_path
     current_index += len(knowledge_list)
 
 print(f"📊 Всего загружено {len(my_knowledge)} фрагментов знаний из {len(all_knowledge_dict)} файлов.")
 
-# 2. Модель для семантического поиска
+# Модель для семантического поиска
 model = SentenceTransformer('intfloat/multilingual-e5-large')
 
-# 3. Создаем/загружаем эмбеддинги для каждого файла отдельно
+# Создаем/загружаем эмбеддинги для каждого файла отдельно
 all_embeddings = []
 for file_path, knowledge_list in all_knowledge_dict.items():
     file_embeddings = load_or_create_embeddings(file_path, knowledge_list, model)
@@ -153,28 +182,19 @@ if len(all_embeddings) > 1:
 else:
     corpus_embeddings = all_embeddings[0]
 
-# 4. Подготовка для BM25 (лексический поиск)
+# Подготовка для BM25 (лексический поиск)
 tokenized_corpus = [doc.split(" ") for doc in my_knowledge]
 bm25 = BM25Okapi(tokenized_corpus)
 
 def find_relevant_info(query, top_k=5, alpha=0.7):
-    """
-    Гибридный поиск: комбинирует семантический и лексический поиск.
-    
-    :param query: Вопрос пользователя
-    :param top_k: Количество топ результатов
-    :param alpha: Вес семантического поиска (0 - только BM25, 1 - только семантика)
-    :return: Строка с релевантной информацией
-    """
+    """Гибридный поиск: комбинирует семантический и лексический поиск."""
     global corpus_embeddings
 
     if not my_knowledge:
         print("⚠️ База знаний пуста.")
         return "Лебедев — это великий космонавт."
 
-    # Проверка размера эмбеддингов
     if len(corpus_embeddings) != len(my_knowledge):
-        # Пересоздаем эмбеддинги если размер не совпадает
         all_embeddings = []
         for file_path, knowledge_list in all_knowledge_dict.items():
             file_embeddings = load_or_create_embeddings(file_path, knowledge_list, model)
@@ -185,12 +205,12 @@ def find_relevant_info(query, top_k=5, alpha=0.7):
         else:
             corpus_embeddings = all_embeddings[0]
 
-    # 1. Семантический поиск
+    # Семантический поиск
     query_embedding = model.encode(query, convert_to_tensor=True)
     semantic_hits = util.semantic_search(query_embedding, corpus_embeddings, top_k=len(my_knowledge))
     semantic_scores = {hit['corpus_id']: hit['score'] for hit in semantic_hits[0]}
 
-    # 2. Лексический поиск (BM25)
+    # Лексический поиск (BM25)
     tokenized_query = query.split(" ")
     bm25_scores = bm25.get_scores(tokenized_query)
     
@@ -200,18 +220,17 @@ def find_relevant_info(query, top_k=5, alpha=0.7):
     else:
         bm25_scores_norm = bm25_scores
 
-    # 3. Комбинирование оценок
+    # Комбинирование оценок
     combined_scores = {}
     for i in range(len(my_knowledge)):
         sem_score = semantic_scores.get(i, 0.0)
         bm25_score = bm25_scores_norm[i]
-        # Линейная комбинация
         combined_scores[i] = alpha * sem_score + (1 - alpha) * bm25_score
 
-    # 4. Сортировка по комбинированной оценке
+    # Сортировка по комбинированной оценке
     sorted_indices = sorted(combined_scores.keys(), key=lambda x: combined_scores[x], reverse=True)
     
-    # 5. Выбор топ-K результатов
+    # Выбор топ-K результатов
     top_indices = sorted_indices[:top_k]
     
     # Фильтрация по порогу
@@ -246,13 +265,15 @@ def ask_model(question, selected_model):
                 {"role": "user", "content": question}
             ]
         )
-        return response.choices[0].message.content.strip()
+        answer = response.choices[0].message.content.strip()
+        return f"\nОтвет ИИ модели:\n{answer}"
     except Exception as e:
-        return f"Ошибка при обращении к модели: {e}"
+        return f"Ответ ИИ модели:\nОшибка при обращении к модели: {e}"
 
 # === Основной цикл ===
 if __name__ == "__main__":
     print("Добро пожаловать в систему RAG с гибридным поиском!")
+    print("Поддерживаются файлы: TXT, CSV, PDF")
     print("Модели будут отвечать поочерёдно на каждый ваш вопрос.")
     print("Введите 'выход', 'exit', 'q' или 'quit' для завершения.")
 
