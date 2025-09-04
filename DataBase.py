@@ -22,7 +22,8 @@ client = openai.OpenAI(
 
 # === Доступные модели ===
 AVAILABLE_MODELS = [
-    "mistralai/mistral-7b-instruct:free"
+    "mistralai/mistral-7b-instruct:free",
+    "qwen/qwen3-30b-a3b-thinking-2507" #платный
 ]
 
 class TerminalRedirect:
@@ -100,20 +101,35 @@ class RAGApplication:
         
         # Фрейм для ввода вопроса
         input_frame = ttk.Frame(self.chat_tab)
-        input_frame.pack(padx=10, pady=(0, 10), fill="x")
+        input_frame.pack(padx=10, pady=(0, 10), fill="both", expand=True)
         
-        # Поле ввода вопроса
-        self.question_entry = ttk.Entry(input_frame)
-        self.question_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        self.question_entry.bind("<Return>", self.ask_question)
+        # Многострочное поле ввода с переносом текста
+        self.question_text = scrolledtext.ScrolledText(input_frame, wrap=tk.WORD, height=4)
+        self.question_text.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        self.question_text.bind("<Control-Return>", self.ask_question)  # Ctrl+Enter для отправки
+        self.question_text.bind("<Control-KeyPress>", self.handle_ctrl_key)  # Обработка Ctrl+C, Ctrl+V
+        
+        # Фрейм для кнопок
+        buttons_frame = ttk.Frame(input_frame)
+        buttons_frame.pack(side="right", fill="y")
         
         # Кнопка отправки вопроса
-        self.ask_button = ttk.Button(input_frame, text="Отправить", command=self.ask_question)
-        self.ask_button.pack(side="right")
+        self.ask_button = ttk.Button(buttons_frame, text="Отправить\n(Ctrl+Enter)", command=self.ask_question, width=12)
+        self.ask_button.pack(pady=(0, 5))
+        
+        # Кнопка очистки поля ввода
+        self.clear_input_button = ttk.Button(buttons_frame, text="Очистить\nввод", command=self.clear_input, width=12)
+        self.clear_input_button.pack(pady=(0, 5))
         
         # Кнопка очистки диалога
-        self.clear_button = ttk.Button(self.chat_tab, text="Очистить диалог", command=self.clear_dialog)
-        self.clear_button.pack(pady=(0, 10))
+        self.clear_dialog_button = ttk.Button(buttons_frame, text="Очистить\nдиалог", command=self.clear_dialog, width=12)
+        self.clear_dialog_button.pack()
+        
+        # Подсказка
+        hint_label = ttk.Label(self.chat_tab, 
+                              text="Подсказка: Используйте Ctrl+Enter для отправки, Ctrl+C для копирования, Ctrl+V для вставки",
+                              foreground="gray")
+        hint_label.pack(pady=(0, 10))
         
         # === Вкладка базы знаний ===
         # Фрейм для управления файлами
@@ -147,6 +163,13 @@ class RAGApplication:
         self.status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
+    def handle_ctrl_key(self, event):
+        """Обработка Ctrl+C и Ctrl+V"""
+        # Позволяем стандартные сочетания клавиш работать
+        if event.keysym in ('c', 'v', 'a') and event.state & 0x4:  # Ctrl+C, Ctrl+V, Ctrl+A
+            return  # Позволяем обработку по умолчанию
+        return "break"  # Блокируем другие Ctrl+ комбинации
+    
     def setup_model(self):
         """Инициализация модели и загрузка базы знаний"""
         def model_thread():
@@ -490,45 +513,50 @@ class RAGApplication:
         return "\n".join(result)
     
     def ask_model(self, question):
-        """Отправка запроса к модели"""
+        """Отправка запроса ко всем доступным моделям"""
         context = self.find_relevant_info(question, top_k=5, alpha=0.7)
-        print(f"\n🔍 Переданный контекст модели:\n{context}")
+        print(f"\n🔍 Переданный контекст моделям:\n{context}")
         
-        try:
-            print("🤖 Отправка запроса к модели...")
-            response = client.chat.completions.create(
-                model=AVAILABLE_MODELS[0],
-                messages=[
-                    {"role": "system", "content": f"""
+        answers = []
+        
+        for i, model_name in enumerate(AVAILABLE_MODELS):
+            try:
+                print(f"🤖 Отправка запроса к модели {model_name}...")
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": f"""
 Ты — профессиональный помощник компании Аквесегмент. Отвечай кратко, ясно и строго на основе информации ниже.
 
 Правила:
 - Если ответа нет в информации — скажи «Я не знаю».
 - Не выдумывай и не предполагай.
 - Анализируй данные и формулируй ответ самостоятельно.
+- Отвечай на негативные вопросы и отзывы в соответствии с ответами в базе знаний.
+- Отвечай на позитивные вопросы и отзывы своими словами в виде слов благодарности за обращение в компанию.
 
 Информация:
 {context}
-                    """},
-                    {"role": "user", "content": question}
-                ]
-            )
-            answer = response.choices[0].message.content.strip()
-            print("✅ Ответ получен от модели")
-            return answer
-        except Exception as e:
-            error_msg = f"❌ Ошибка при обращении к модели: {e}"
-            print(error_msg)
-            return error_msg
+                        """},
+                        {"role": "user", "content": question}
+                    ]
+                )
+                answer = response.choices[0].message.content.strip()
+                answers.append(f"Ответ ИИ модели {model_name}:\n{answer}\n")
+                print(f"✅ Ответ получен от модели {model_name}")
+            except Exception as e:
+                error_msg = f"❌ Ошибка при обращении к модели {model_name}: {e}"
+                print(error_msg)
+                answers.append(f"Ответ ИИ модели {model_name}:\nОшибка: {error_msg}\n")
+        
+        return "\n---\n".join(answers)  # Разделяем ответы линией для лучшей читаемости
     
     def ask_question(self, event=None):
         """Обработка вопроса пользователя"""
-        question = self.question_entry.get().strip()
+        # Получаем текст из многострочного поля ввода
+        question = self.question_text.get("1.0", tk.END).strip()
         if not question:
             return
-        
-        # Очистка поля ввода
-        self.question_entry.delete(0, tk.END)
         
         # Добавление вопроса в диалог
         self.append_to_dialog(f"Вы: {question}\n", "user")
@@ -542,7 +570,7 @@ class RAGApplication:
             try:
                 answer = self.ask_model(question)
                 # Добавление ответа в диалог
-                formatted_answer = f"Ответ ИИ модели:\n{answer}\n\n"
+                formatted_answer = f"{answer}\n\n"
                 self.root.after(0, lambda: self.append_to_dialog(formatted_answer, "assistant"))
             except Exception as e:
                 error_response = f"Ответ ИИ модели:\nОшибка: {e}\n\n"
@@ -552,6 +580,10 @@ class RAGApplication:
                 self.root.after(0, lambda: self.status_var.set("Готов к работе"))
         
         threading.Thread(target=process_question, daemon=True).start()
+    
+    def clear_input(self):
+        """Очистка поля ввода"""
+        self.question_text.delete("1.0", tk.END)
     
     def append_to_dialog(self, text, tag=None):
         """Добавление текста в диалог"""
