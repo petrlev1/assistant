@@ -11,15 +11,175 @@ import torch
 from pathlib import Path
 import PyPDF2
 import logging
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import json
+import sys
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+class RAGSettings:
+    """Класс для управления настройками RAG-системы"""
+    def __init__(self):
+        self.settings_file = "rag_settings.json"
+        self.default_settings = {
+            "disable_openrouter_models": False,
+            "disable_hybrid_search": False,
+            "openrouter_api_key": "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",
+            "openrouter_base_url": "https://openrouter.ai/api/v1"
+        }
+        self.settings = self.load_settings()
+    
+    def load_settings(self):
+        """Загрузка настроек из файла"""
+        try:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    # Объединяем с настройками по умолчанию
+                    for key, value in self.default_settings.items():
+                        if key not in settings:
+                            settings[key] = value
+                    return settings
+            else:
+                return self.default_settings.copy()
+        except Exception as e:
+            logger.error(f"Ошибка загрузки настроек: {e}")
+            return self.default_settings.copy()
+    
+    def save_settings(self):
+        """Сохранение настроек в файл"""
+        try:
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(self.settings, f, indent=4, ensure_ascii=False)
+            logger.info("Настройки сохранены")
+        except Exception as e:
+            logger.error(f"Ошибка сохранения настроек: {e}")
+    
+    def get(self, key, default=None):
+        """Получение значения настройки"""
+        return self.settings.get(key, default)
+    
+    def set(self, key, value):
+        """Установка значения настройки"""
+        self.settings[key] = value
+
+class SettingsWindow:
+    """Окно настроек RAG-системы"""
+    def __init__(self, settings, rag_system):
+        self.settings = settings
+        self.rag_system = rag_system
+        self.window = None
+        self.create_window()
+    
+    def create_window(self):
+        """Создание окна настроек"""
+        self.window = tk.Tk()
+        self.window.title("Настройки RAG-системы")
+        self.window.geometry("500x400")
+        self.window.resizable(True, True)
+        
+        # Создание вкладок
+        notebook = ttk.Notebook(self.window)
+        notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Вкладка основных настроек
+        main_frame = ttk.Frame(notebook)
+        notebook.add(main_frame, text="Основные")
+        
+        # Вкладка API настроек
+        api_frame = ttk.Frame(notebook)
+        notebook.add(api_frame, text="API")
+        
+        # === Основные настройки ===
+        ttk.Label(main_frame, text="Основные настройки системы:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+        
+        # Отключение моделей OpenRouter
+        self.disable_openrouter_var = tk.BooleanVar(value=self.settings.get("disable_openrouter_models", False))
+        disable_openrouter_check = ttk.Checkbutton(
+            main_frame, 
+            text="Отключить модели OpenRouter (только поиск без генерации)", 
+            variable=self.disable_openrouter_var
+        )
+        disable_openrouter_check.pack(anchor="w", padx=20, pady=5)
+        
+        # Отключение гибридного поиска
+        self.disable_hybrid_search_var = tk.BooleanVar(value=self.settings.get("disable_hybrid_search", False))
+        disable_hybrid_search_check = ttk.Checkbutton(
+            main_frame, 
+            text="Отключить гибридный поиск (передавать всю базу знаний в модели)", 
+            variable=self.disable_hybrid_search_var
+        )
+        disable_hybrid_search_check.pack(anchor="w", padx=20, pady=5)
+        
+        # Информация о текущем состоянии
+        info_frame = ttk.LabelFrame(main_frame, text="Информация о системе")
+        info_frame.pack(fill="x", padx=20, pady=20)
+        
+        ttk.Label(info_frame, text=f"Фрагментов в базе знаний: {len(self.rag_system.my_knowledge) if self.rag_system.my_knowledge else 0}").pack(anchor="w", padx=5, pady=2)
+        ttk.Label(info_frame, text=f"Загружено файлов: {len(self.rag_system.all_knowledge_dict) if self.rag_system.all_knowledge_dict else 0}").pack(anchor="w", padx=5, pady=2)
+        
+        # === API настройки ===
+        ttk.Label(api_frame, text="Настройки OpenRouter API:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+        
+        # Базовый URL
+        ttk.Label(api_frame, text="Base URL:").pack(anchor="w", padx=20, pady=(5, 0))
+        self.base_url_var = tk.StringVar(value=self.settings.get("openrouter_base_url", "https://openrouter.ai/api/v1"))
+        base_url_entry = ttk.Entry(api_frame, textvariable=self.base_url_var, width=50)
+        base_url_entry.pack(fill="x", padx=20, pady=5)
+        
+        # API ключ
+        ttk.Label(api_frame, text="API ключ:").pack(anchor="w", padx=20, pady=(10, 0))
+        self.api_key_var = tk.StringVar(value=self.settings.get("openrouter_api_key", ""))
+        api_key_entry = ttk.Entry(api_frame, textvariable=self.api_key_var, width=50, show="*")
+        api_key_entry.pack(fill="x", padx=20, pady=5)
+        
+        # Кнопки
+        button_frame = ttk.Frame(self.window)
+        button_frame.pack(fill="x", padx=10, pady=10)
+        
+        ttk.Button(button_frame, text="Сохранить настройки", command=self.save_settings).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Применить", command=self.apply_settings).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Отмена", command=self.window.destroy).pack(side="right", padx=5)
+        
+        # Центрирование окна
+        self.window.update_idletasks()
+        x = (self.window.winfo_screenwidth() // 2) - (self.window.winfo_width() // 2)
+        y = (self.window.winfo_screenheight() // 2) - (self.window.winfo_height() // 2)
+        self.window.geometry(f"+{x}+{y}")
+    
+    def save_settings(self):
+        """Сохранение настроек"""
+        self.settings.set("disable_openrouter_models", self.disable_openrouter_var.get())
+        self.settings.set("disable_hybrid_search", self.disable_hybrid_search_var.get())
+        self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
+        self.settings.set("openrouter_api_key", self.api_key_var.get().strip())
+        self.settings.save_settings()
+        messagebox.showinfo("Настройки", "Настройки сохранены!")
+        self.window.destroy()
+    
+    def apply_settings(self):
+        """Применение настроек без закрытия окна"""
+        self.settings.set("disable_openrouter_models", self.disable_openrouter_var.get())
+        self.settings.set("disable_hybrid_search", self.disable_hybrid_search_var.get())
+        self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
+        self.settings.set("openrouter_api_key", self.api_key_var.get().strip())
+        self.settings.save_settings()
+        messagebox.showinfo("Настройки", "Настройки применены!")
+    
+    def show(self):
+        """Отображение окна настроек"""
+        self.window.mainloop()
+
+# === Настройки RAG-системы ===
+settings = RAGSettings()
+
 # === Настройка клиента OpenRouter ===
 client = openai.OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key="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"
+    base_url=settings.get("openrouter_base_url", "https://openrouter.ai/api/v1").rstrip(),  # Убираем пробелы
+    api_key=settings.get("openrouter_api_key", "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")
 )
 
 # === Доступные модели ===
@@ -29,6 +189,11 @@ AVAILABLE_MODELS = [
 ]
 
 class RAGCore:
+    # Единые настройки поиска для всего класса
+    DEFAULT_SEARCH_TOP_K = 30
+    DEFAULT_SEARCH_ALPHA = 0.5
+    MAX_CONTEXT_FRAGMENTS = 100
+    
     def __init__(self):
         """Инициализация RAG-системы"""
         self.my_knowledge = []
@@ -37,6 +202,7 @@ class RAGCore:
         self.corpus_embeddings = None
         self.bm25 = None
         self.tokenized_corpus = None
+        self.settings = settings
         
         # Инициализация модели
         self._setup_model()
@@ -234,8 +400,17 @@ class RAGCore:
             logger.error(f"❌ Ошибка загрузки базы знаний: {e}")
             return False
     
-    def find_relevant_info(self, query, top_k=5, alpha=0.7):
+    def find_relevant_info(self, query, top_k=None, alpha=None):
         """Гибридный поиск"""
+        # Используем значения по умолчанию, если не переданы другие
+        actual_top_k = top_k if top_k is not None else self.DEFAULT_SEARCH_TOP_K
+        actual_alpha = alpha if alpha is not None else self.DEFAULT_SEARCH_ALPHA
+        
+        # Проверяем настройку отключения гибридного поиска
+        if self.settings.get("disable_hybrid_search", False):
+            logger.info("🔤 Гибридный поиск отключен. Передаем всю базу знаний.")
+            return "\n".join(self.my_knowledge[:self.MAX_CONTEXT_FRAGMENTS])
+        
         logger.info(f"\n🔍 Поиск релевантной информации для запроса: \"{query}\"")
         
         if not self.my_knowledge or self.corpus_embeddings is None or self.bm25 is None:
@@ -264,13 +439,13 @@ class RAGCore:
         for i in range(len(self.my_knowledge)):
             sem_score = semantic_scores.get(i, 0.0)
             bm25_score = bm25_scores_norm[i]
-            combined_scores[i] = alpha * sem_score + (1 - alpha) * bm25_score
+            combined_scores[i] = actual_alpha * sem_score + (1 - actual_alpha) * bm25_score
 
         # Сортировка по комбинированной оценке
         sorted_indices = sorted(combined_scores.keys(), key=lambda x: combined_scores[x], reverse=True)
         
         # Выбор топ-K результатов
-        top_indices = sorted_indices[:top_k]
+        top_indices = sorted_indices[:actual_top_k]
         
         # Фильтрация по порогу
         best_score = combined_scores[top_indices[0]] if top_indices else 0
@@ -284,8 +459,12 @@ class RAGCore:
     
     def ask_model(self, question):
         """Отправка запроса ко всем доступным моделям"""
-        context = self.find_relevant_info(question, top_k=5, alpha=0.7)
+        context = self.find_relevant_info(question, top_k=self.DEFAULT_SEARCH_TOP_K, alpha=self.DEFAULT_SEARCH_ALPHA)
         logger.info(f"\n🔍 Переданный контекст моделям:\n{context}")
+        
+        # Проверяем настройку отключения моделей OpenRouter
+        if self.settings.get("disable_openrouter_models", False):
+            return f"🔍 Найденный контекст:\n{context}\n\n⚠️ Отправка запросов моделям OpenRouter отключена."
         
         answers = []
         
@@ -296,7 +475,9 @@ class RAGCore:
                     model=model_name,
                     messages=[
                         {"role": "system", "content": f"""
-Ты — профессиональный помощник компании Аквесегмент. Отвечай кратко, ясно и строго на основе информации ниже.
+Ты — информационный ассистент компании ООО «ГТИ-ОПТ», специализирующейся на оптовой и розничной продаже оборудования для водоочистки и водоподготовки. В твоей базе знаний представлена актуальная информация, которую ты должен использовать для ответов на вопросы клиентов.
+
+Отвечай кратко, ясно и строго на основе информации ниже.
 
 Правила:
 - Если ответа нет в информации — скажи «Я не знаю».
@@ -331,13 +512,9 @@ def get_rag_system():
         rag_system = RAGCore()
     return rag_system
 
-# Для тестирования
+# Для тестирования и запуска интерфейса настроек
 if __name__ == "__main__":
-    # Пример использования
+    # Создание и отображение окна настроек
     rag = get_rag_system()
-    
-    # Тестовый запрос
-    test_question = "Расскажи о компании ГТИ-ОПТ"
-    print(f"Вопрос: {test_question}")
-    print("Ответ:")
-    print(rag.ask_model(test_question))
+    settings_window = SettingsWindow(settings, rag)
+    settings_window.show()

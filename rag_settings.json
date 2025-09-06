@@ -1,0 +1,6 @@
+{
+    "disable_openrouter_models": false,
+    "disable_hybrid_search": false,
+    "openrouter_api_key": "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",
+    "openrouter_base_url": "https://openrouter.ai/api/v1"
+}
