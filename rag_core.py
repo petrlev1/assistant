@@ -32,6 +32,7 @@ class RAGSettings:
             # Настройки поиска
             "search_top_k": 10,
             "search_alpha": 0.7,
+            "relevance_threshold": 0.2,
             "max_context_fragments": 100
         }
         self.settings = self.load_settings()
@@ -82,7 +83,7 @@ class SettingsWindow:
         """Создание окна настроек"""
         self.window = tk.Tk()
         self.window.title("Настройки RAG-системы")
-        self.window.geometry("600x500")
+        self.window.geometry("600x550")
         self.window.resizable(True, True)
         
         # Создание вкладок
@@ -145,6 +146,13 @@ class SettingsWindow:
         alpha_entry = ttk.Entry(search_frame, textvariable=self.alpha_var, width=10)
         alpha_entry.pack(anchor="w", padx=20, pady=5)
         ttk.Label(search_frame, text="0.0 - только ключевые слова, 1.0 - только семантика (0.0-1.0)", foreground="gray").pack(anchor="w", padx=20)
+        
+        # Порог релевантности
+        ttk.Label(search_frame, text="Порог релевантности:").pack(anchor="w", padx=20, pady=(10, 0))
+        self.threshold_var = tk.StringVar(value=str(self.settings.get("relevance_threshold", 0.2)))
+        threshold_entry = ttk.Entry(search_frame, textvariable=self.threshold_var, width=10)
+        threshold_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Label(search_frame, text="Минимальный скор релевантности (0.0-1.0). Рекомендуется 0.1-0.3", foreground="gray").pack(anchor="w", padx=20)
         
         # MAX_CONTEXT_FRAGMENTS - максимальное количество фрагментов при отключенном поиске
         ttk.Label(search_frame, text="Максимум фрагментов при отключенном поиске:").pack(anchor="w", padx=20, pady=(10, 0))
@@ -213,6 +221,17 @@ class SettingsWindow:
                 self.settings.set("search_alpha", 0.7)
             
             try:
+                threshold = float(self.threshold_var.get())
+                if 0.0 <= threshold <= 1.0:
+                    self.settings.set("relevance_threshold", threshold)
+                else:
+                    messagebox.showwarning("Предупреждение", "Порог релевантности должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.2).")
+                    self.settings.set("relevance_threshold", 0.2)
+            except ValueError:
+                messagebox.showwarning("Предупреждение", "Неверное значение порога релевантности. Установлено значение по умолчанию (0.2).")
+                self.settings.set("relevance_threshold", 0.2)
+            
+            try:
                 max_context = int(self.max_context_var.get())
                 if 10 <= max_context <= 500:
                     self.settings.set("max_context_fragments", max_context)
@@ -262,6 +281,17 @@ class SettingsWindow:
             except ValueError:
                 messagebox.showwarning("Предупреждение", "Неверное значение ALPHA. Установлено значение по умолчанию (0.7).")
                 self.settings.set("search_alpha", 0.7)
+            
+            try:
+                threshold = float(self.threshold_var.get())
+                if 0.0 <= threshold <= 1.0:
+                    self.settings.set("relevance_threshold", threshold)
+                else:
+                    messagebox.showwarning("Предупреждение", "Порог релевантности должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.2).")
+                    self.settings.set("relevance_threshold", 0.2)
+            except ValueError:
+                messagebox.showwarning("Предупреждение", "Неверное значение порога релевантности. Установлено значение по умолчанию (0.2).")
+                self.settings.set("relevance_threshold", 0.2)
             
             try:
                 max_context = int(self.max_context_var.get())
@@ -514,6 +544,7 @@ class RAGCore:
         # Используем значения из настроек, если не переданы другие
         actual_top_k = top_k if top_k is not None else self.settings.get("search_top_k", 10)
         actual_alpha = alpha if alpha is not None else self.settings.get("search_alpha", 0.7)
+        relevance_threshold = self.settings.get("relevance_threshold", 0.2)
         max_context_fragments = self.settings.get("max_context_fragments", 100)
         
         # Проверяем настройку отключения гибридного поиска
@@ -559,8 +590,8 @@ class RAGCore:
         
         # Фильтрация по порогу
         best_score = combined_scores[top_indices[0]] if top_indices else 0
-        if best_score < 0.2:
-            logger.warning("⚠️ Низкая релевантность найденных данных.")
+        if best_score < relevance_threshold:  # <-- Используем настраиваемый порог
+            logger.warning(f"⚠️ Низкая релевантность найденных данных (скор: {best_score:.3f}).")
             return "Я не знаю ответа на этот вопрос."
 
         result = [self.my_knowledge[idx] for idx in top_indices]
