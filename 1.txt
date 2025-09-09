@@ -1,0 +1,8 @@
+Команды:
+python run_web.py - запуск веб-интерфейса с хостом: http://localhost:5000/
+python telegram_bot.py - запуск телеграм бота
+python rag_core.py - запуск ядра программы с настройками
+
+Telegram bot:
+@pprotestbot_bot
+7502394795:AAFlLzJzlI-ciWxmSQMF6poO4uWZx-p-bK0

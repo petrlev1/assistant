@@ -1,0 +1,358 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG-ассистент ГТИ-ОПТ</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50, #3498db);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 70vh;
+        }
+
+        .messages {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+
+        .user-message {
+            background: #3498db;
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .assistant-message {
+            background: #e9ecef;
+            color: #333;
+        }
+
+        .system-message {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        .input-area {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+
+        #question {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            font-size: 16px;
+            resize: vertical;
+            min-height: 60px;
+            max-height: 200px;
+        }
+
+        #question:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+        }
+
+        #send-btn {
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+
+        #send-btn:hover {
+            background: linear-gradient(135deg, #2980b9, #2573a7);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.3);
+        }
+
+        #send-btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .status {
+            text-align: center;
+            padding: 10px;
+            color: #666;
+            font-style: italic;
+        }
+
+        .typing-indicator {
+            display: none;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .typing-indicator span {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #666;
+            border-radius: 50%;
+            margin: 0 2px;
+            animation: bounce 1.3s linear infinite;
+        }
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.15s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.3s;
+        }
+
+        @keyframes bounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-5px); }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+                border-radius: 10px;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .header p {
+                font-size: 1em;
+            }
+
+            .messages {
+                padding: 15px;
+            }
+
+            .input-container {
+                flex-direction: column;
+            }
+
+            #send-btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Информационный ассистент ГТИ-ОПТ</h1>
+            <p>Специалист по оборудованию для водоочистки и водоподготовки</p>
+        </div>
+
+        <div class="chat-container">
+            <div class="messages" id="messages">
+                <div class="message system-message">
+                    👋 Добро пожаловать! Я информационный ассистент компании ГТИ-ОПТ.<br>
+                    Задайте ваш вопрос о водоочистном оборудовании, и я постараюсь ответить на основе нашей базы знаний.
+                </div>
+            </div>
+
+            <div class="typing-indicator" id="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+                Обработка запроса...
+            </div>
+
+            <div class="input-area">
+                <div class="input-container">
+                    <textarea 
+                        id="question" 
+                        placeholder="Введите ваш вопрос здесь... Например:&#10;• Какие фильтры вы используете для очистки воды?&#10;• Как связаться с отделом продаж?&#10;• Расскажите о вашей компании" 
+                    ></textarea>
+                    <button id="send-btn" onclick="sendMessage()">Отправить</button>
+                </div>
+                <div class="status" id="status">
+                    Система инициализируется...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Функция для добавления сообщения в чат
+        function addMessage(text, isUser = false, isSystem = false) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            
+            if (isUser) {
+                messageDiv.className = 'message user-message';
+                messageDiv.innerHTML = `<strong>Вы:</strong><br>${text}`;
+            } else if (isSystem) {
+                messageDiv.className = 'message system-message';
+                messageDiv.innerHTML = text;
+            } else {
+                messageDiv.className = 'message assistant-message';
+                messageDiv.innerHTML = `<strong>Ассистент:</strong><br>${text.replace(/\n/g, '<br>')}`;
+            }
+            
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Функция для отправки сообщения
+        function sendMessage() {
+            const questionInput = document.getElementById('question');
+            const question = questionInput.value.trim();
+            
+            if (!question) {
+                return;
+            }
+
+            // Добавляем вопрос пользователя в чат
+            addMessage(question, true);
+            
+            // Очищаем поле ввода
+            questionInput.value = '';
+            
+            // Показываем индикатор набора текста
+            document.getElementById('typing-indicator').style.display = 'block';
+            
+            // Блокируем кнопку отправки
+            const sendBtn = document.getElementById('send-btn');
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Отправка...';
+
+            // Отправляем запрос на сервер
+            fetch('/ask', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({question: question})
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Скрываем индикатор набора текста
+                document.getElementById('typing-indicator').style.display = 'none';
+                
+                if (data.error) {
+                    addMessage(`❌ Ошибка: ${data.error}`, false, true);
+                } else {
+                    addMessage(data.answer);
+                }
+            })
+            .catch(error => {
+                // Скрываем индикатор набора текста
+                document.getElementById('typing-indicator').style.display = 'none';
+                addMessage(`❌ Ошибка сети: ${error.message}`, false, true);
+            })
+            .finally(() => {
+                // Разблокируем кнопку отправки
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Отправить';
+            });
+        }
+
+        // Функция для проверки статуса системы
+        function checkStatus() {
+            fetch('/status')
+            .then(response => response.json())
+            .then(data => {
+                const statusDiv = document.getElementById('status');
+                if (data.initialized) {
+                    statusDiv.textContent = '✅ Система готова к работе';
+                    statusDiv.style.color = 'green';
+                } else {
+                    statusDiv.textContent = '⏳ Система инициализируется...';
+                    statusDiv.style.color = '#666';
+                    // Проверяем статус снова через 2 секунды
+                    setTimeout(checkStatus, 2000);
+                }
+            })
+            .catch(error => {
+                console.error('Ошибка проверки статуса:', error);
+            });
+        }
+
+        // Обработчик нажатия Enter в поле ввода
+        document.getElementById('question').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Инициализация
+        document.addEventListener('DOMContentLoaded', function() {
+            // Проверяем статус системы при загрузке страницы
+            checkStatus();
+            
+            // Фокус на поле ввода
+            document.getElementById('question').focus();
+        });
+    </script>
+</body>
+</html>

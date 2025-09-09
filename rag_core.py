@@ -663,3 +663,19 @@ if __name__ == "__main__":
     rag = get_rag_system()
     settings_window = SettingsWindow(settings, rag)
     settings_window.show()
+
+
+
+# Запуск веб-интерфейса
+
+def run_web_interface():
+    """Запуск веб-интерфейса"""
+    try:
+        import web_app
+        app = web_app.create_app()
+        print("🚀 Веб-интерфейс запущен на http://localhost:5000")
+        app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    except ImportError:
+        print("❌ Не удалось импортировать web_app.py. Убедитесь, что файл существует.")
+    except Exception as e:
+        print(f"❌ Ошибка запуска веб-интерфейса: {e}")
