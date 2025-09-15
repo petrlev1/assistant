@@ -1,3 +1,7 @@
+Активация/деактивация виртуального окружения
+rag_mod\Scripts\activate
+deactivate
+
 Команды:
 python run_web.py - запуск веб-интерфейса с хостом: http://localhost:5000/
 python telegram_bot.py - запуск телеграм бота
