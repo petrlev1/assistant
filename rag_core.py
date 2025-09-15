@@ -27,8 +27,6 @@ class RAGSettings:
         self.default_settings = {
             "disable_openrouter_models": False,
             "disable_hybrid_search": False,
-            "openrouter_api_key": "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",
-            "openrouter_base_url": "https://openrouter.ai/api/v1",
             # Настройки поиска
             "search_top_k": 10,
             "search_alpha": 0.7,
