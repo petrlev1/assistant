@@ -323,7 +323,7 @@ settings = RAGSettings()
 # === Настройка клиента OpenRouter ===
 client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="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"
+    api_key=os.getenv("OPENROUTER_API_KEY")  # Получаем ключ из переменной окружения
 )
 
 # === Доступные модели ===
