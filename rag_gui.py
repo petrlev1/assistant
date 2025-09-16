@@ -1,6 +1,7 @@
 # rag_gui.py - Графический интерфейс для RAG-системы
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
+import threading
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ class SettingsWindow:
         """Создание окна настроек"""
         self.window = tk.Tk()
         self.window.title("Настройки RAG-системы")
-        self.window.geometry("600x550")
+        self.window.geometry("800x600")
         self.window.resizable(True, True)
         
         # Создание вкладок
@@ -35,6 +36,10 @@ class SettingsWindow:
         # Вкладка API настроек
         api_frame = ttk.Frame(notebook)
         notebook.add(api_frame, text="API")
+        
+        # Новая вкладка Чат
+        chat_frame = ttk.Frame(notebook)
+        notebook.add(chat_frame, text="Чат")
         
         # === Основные настройки ===
         ttk.Label(main_frame, text="Основные настройки системы:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
@@ -110,6 +115,58 @@ class SettingsWindow:
         api_key_entry = ttk.Entry(api_frame, textvariable=self.api_key_var, width=50, show="*")
         api_key_entry.pack(fill="x", padx=20, pady=5)
         
+        # === Вкладка Чат ===
+        # Фрейм для чата
+        chat_frame.columnconfigure(0, weight=1)
+        chat_frame.rowconfigure(0, weight=1)
+        
+        # Фрейм для сообщений
+        messages_frame = ttk.Frame(chat_frame)
+        messages_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 0))
+        messages_frame.columnconfigure(0, weight=1)
+        messages_frame.rowconfigure(0, weight=1)
+        
+        # Текстовое поле для сообщений
+        self.messages_text = scrolledtext.ScrolledText(messages_frame, wrap=tk.WORD, state='disabled')
+        self.messages_text.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.messages_text.tag_config("user", foreground="blue")
+        self.messages_text.tag_config("assistant", foreground="green")
+        self.messages_text.tag_config("system", foreground="orange")
+        
+        # Фрейм для ввода сообщения
+        input_frame = ttk.Frame(chat_frame)
+        input_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        input_frame.columnconfigure(0, weight=1)
+        
+        # Поле ввода с поддержкой копирования/вставки
+        self.question_text = scrolledtext.ScrolledText(input_frame, wrap=tk.WORD, height=4)
+        self.question_text.grid(row=0, column=0, sticky="ew", padx=(0, 5), pady=5)
+        
+        # Привязка клавиш для копирования/вставки
+        self.question_text.bind("<Control-c>", self.copy_text)
+        self.question_text.bind("<Control-v>", self.paste_text)
+        self.question_text.bind("<Control-a>", self.select_all)
+        self.question_text.bind("<Return>", self.send_message)  # Enter для отправки
+        self.question_text.bind("<Control-Return>", self.send_message)  # Ctrl+Enter для отправки
+        
+        # Привязка клавиш для текстового поля сообщений (только копирование)
+        self.messages_text.bind("<Control-c>", self.copy_messages)
+        self.messages_text.bind("<1>", lambda event: self.messages_text.focus_set())
+        
+        # Кнопка отправки
+        self.send_button = ttk.Button(input_frame, text="Отправить", command=self.send_message)
+        self.send_button.grid(row=0, column=1, padx=(0, 5), pady=5)
+        
+        # Статусная строка
+        self.status_var = tk.StringVar()
+        self.status_var.set("Готов к работе")
+        status_label = ttk.Label(chat_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_label.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        
+        # Добавляем приветственное сообщение
+        self.add_message("🤖 Добро пожаловать! Я информационный ассистент компании ГТИ-ОПТ.\n"
+                        "Задайте ваш вопрос о водоочистном оборудовании, и я постараюсь ответить на основе нашей базы знаний.", "system")
+        
         # Кнопки
         button_frame = ttk.Frame(self.window)
         button_frame.pack(fill="x", padx=10, pady=10)
@@ -123,6 +180,79 @@ class SettingsWindow:
         x = (self.window.winfo_screenwidth() // 2) - (self.window.winfo_width() // 2)
         y = (self.window.winfo_screenheight() // 2) - (self.window.winfo_height() // 2)
         self.window.geometry(f"+{x}+{y}")
+    
+    def copy_text(self, event=None):
+        """Копирование текста из поля ввода"""
+        try:
+            self.question_text.event_generate("<<Copy>>")
+        except tk.TclError:
+            pass
+        return "break"
+    
+    def paste_text(self, event=None):
+        """Вставка текста в поле ввода"""
+        try:
+            self.question_text.event_generate("<<Paste>>")
+        except tk.TclError:
+            pass
+        return "break"
+    
+    def select_all(self, event=None):
+        """Выделение всего текста в поле ввода"""
+        try:
+            self.question_text.tag_add("sel", "1.0", "end")
+        except tk.TclError:
+            pass
+        return "break"
+    
+    def copy_messages(self, event=None):
+        """Копирование текста из поля сообщений"""
+        try:
+            self.messages_text.event_generate("<<Copy>>")
+        except tk.TclError:
+            pass
+        return "break"
+    
+    def add_message(self, text, tag=None):
+        """Добавление сообщения в чат"""
+        if hasattr(self.messages_text, 'winfo_exists') and self.messages_text.winfo_exists():
+            try:
+                self.messages_text.config(state='normal')
+                if tag:
+                    self.messages_text.insert(tk.END, text + "\n\n", tag)
+                else:
+                    self.messages_text.insert(tk.END, text + "\n\n")
+                self.messages_text.config(state='disabled')
+                self.messages_text.see(tk.END)
+            except tk.TclError:
+                pass
+    
+    def send_message(self, event=None):
+        """Обработка отправки сообщения"""
+        question = self.question_text.get("1.0", tk.END).strip()
+        if not question:
+            return
+        
+        # Добавление вопроса пользователя в чат
+        self.add_message(f"Вы: {question}", "user")
+        self.question_text.delete("1.0", tk.END)
+        
+        # Обновление статуса
+        self.status_var.set("Обработка запроса...")
+        self.send_button.config(state="disabled")
+        
+        # Выполнение запроса в отдельном потоке
+        def process_question():
+            try:
+                answer = self.rag_system.ask_model(question)
+                self.add_message(f"Ассистент: {answer}", "assistant")
+            except Exception as e:
+                self.add_message(f"Ошибка: {e}", "error")
+            finally:
+                self.window.after(0, lambda: self.status_var.set("Готов к работе"))
+                self.window.after(0, lambda: self.send_button.config(state="normal"))
+        
+        threading.Thread(target=process_question, daemon=True).start()
     
     def save_settings(self):
         """Сохранение настроек"""
