@@ -11,10 +11,7 @@ import torch
 from pathlib import Path
 import PyPDF2
 import logging
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
 import json
-import sys
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +24,8 @@ class RAGSettings:
         self.default_settings = {
             "disable_openrouter_models": False,
             "disable_hybrid_search": False,
+            "openrouter_api_key": "",
+            "openrouter_base_url": "https://openrouter.ai/api/v1",
             # Настройки поиска
             "search_top_k": 10,
             "search_alpha": 0.7,
@@ -69,259 +68,10 @@ class RAGSettings:
         """Установка значения настройки"""
         self.settings[key] = value
 
-class SettingsWindow:
-    """Окно настроек RAG-системы"""
-    def __init__(self, settings, rag_system):
-        self.settings = settings
-        self.rag_system = rag_system
-        self.window = None
-        self.create_window()
-    
-    def create_window(self):
-        """Создание окна настроек"""
-        self.window = tk.Tk()
-        self.window.title("Настройки RAG-системы")
-        self.window.geometry("600x550")
-        self.window.resizable(True, True)
-        
-        # Создание вкладок
-        notebook = ttk.Notebook(self.window)
-        notebook.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Вкладка основных настроек
-        main_frame = ttk.Frame(notebook)
-        notebook.add(main_frame, text="Основные")
-        
-        # Вкладка настроек поиска
-        search_frame = ttk.Frame(notebook)
-        notebook.add(search_frame, text="Поиск")
-        
-        # Вкладка API настроек
-        api_frame = ttk.Frame(notebook)
-        notebook.add(api_frame, text="API")
-        
-        # === Основные настройки ===
-        ttk.Label(main_frame, text="Основные настройки системы:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
-        
-        # Отключение моделей OpenRouter
-        self.disable_openrouter_var = tk.BooleanVar(value=self.settings.get("disable_openrouter_models", False))
-        disable_openrouter_check = ttk.Checkbutton(
-            main_frame, 
-            text="Отключить модели OpenRouter (только поиск без генерации)", 
-            variable=self.disable_openrouter_var
-        )
-        disable_openrouter_check.pack(anchor="w", padx=20, pady=5)
-        
-        # Отключение гибридного поиска
-        self.disable_hybrid_search_var = tk.BooleanVar(value=self.settings.get("disable_hybrid_search", False))
-        disable_hybrid_search_check = ttk.Checkbutton(
-            main_frame, 
-            text="Отключить гибридный поиск (передавать всю базу знаний в модели)", 
-            variable=self.disable_hybrid_search_var
-        )
-        disable_hybrid_search_check.pack(anchor="w", padx=20, pady=5)
-        
-        # Информация о текущем состоянии
-        info_frame = ttk.LabelFrame(main_frame, text="Информация о системе")
-        info_frame.pack(fill="x", padx=20, pady=20)
-        
-        ttk.Label(info_frame, text=f"Фрагментов в базе знаний: {len(self.rag_system.my_knowledge) if self.rag_system.my_knowledge else 0}").pack(anchor="w", padx=5, pady=2)
-        ttk.Label(info_frame, text=f"Загружено файлов: {len(self.rag_system.all_knowledge_dict) if self.rag_system.all_knowledge_dict else 0}").pack(anchor="w", padx=5, pady=2)
-        
-        # === Настройки поиска ===
-        ttk.Label(search_frame, text="Параметры поиска релевантной информации:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
-        
-        # TOP_K - количество релевантных фрагментов
-        ttk.Label(search_frame, text="Количество релевантных фрагментов (TOP_K):").pack(anchor="w", padx=20, pady=(5, 0))
-        self.top_k_var = tk.StringVar(value=str(self.settings.get("search_top_k", 10)))
-        top_k_entry = ttk.Entry(search_frame, textvariable=self.top_k_var, width=10)
-        top_k_entry.pack(anchor="w", padx=20, pady=5)
-        ttk.Label(search_frame, text="Сколько фрагментов из базы знаний передавать в модель (1-50)", foreground="gray").pack(anchor="w", padx=20)
-        
-        # ALPHA - вес семантического поиска
-        ttk.Label(search_frame, text="Вес семантического поиска (ALPHA):").pack(anchor="w", padx=20, pady=(10, 0))
-        self.alpha_var = tk.StringVar(value=str(self.settings.get("search_alpha", 0.7)))
-        alpha_entry = ttk.Entry(search_frame, textvariable=self.alpha_var, width=10)
-        alpha_entry.pack(anchor="w", padx=20, pady=5)
-        ttk.Label(search_frame, text="0.0 - только ключевые слова, 1.0 - только семантика (0.0-1.0)", foreground="gray").pack(anchor="w", padx=20)
-        
-        # Порог релевантности
-        ttk.Label(search_frame, text="Порог релевантности:").pack(anchor="w", padx=20, pady=(10, 0))
-        self.threshold_var = tk.StringVar(value=str(self.settings.get("relevance_threshold", 0.2)))
-        threshold_entry = ttk.Entry(search_frame, textvariable=self.threshold_var, width=10)
-        threshold_entry.pack(anchor="w", padx=20, pady=5)
-        ttk.Label(search_frame, text="Минимальный скор релевантности (0.0-1.0). Рекомендуется 0.1-0.3", foreground="gray").pack(anchor="w", padx=20)
-        
-        # MAX_CONTEXT_FRAGMENTS - максимальное количество фрагментов при отключенном поиске
-        ttk.Label(search_frame, text="Максимум фрагментов при отключенном поиске:").pack(anchor="w", padx=20, pady=(10, 0))
-        self.max_context_var = tk.StringVar(value=str(self.settings.get("max_context_fragments", 100)))
-        max_context_entry = ttk.Entry(search_frame, textvariable=self.max_context_var, width=10)
-        max_context_entry.pack(anchor="w", padx=20, pady=5)
-        ttk.Label(search_frame, text="Количество фрагментов при отключенном гибридном поиске (10-500)", foreground="gray").pack(anchor="w", padx=20)
-        
-        # === API настройки ===
-        ttk.Label(api_frame, text="Настройки OpenRouter API:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
-        
-        # Базовый URL
-        ttk.Label(api_frame, text="Base URL:").pack(anchor="w", padx=20, pady=(5, 0))
-        self.base_url_var = tk.StringVar(value=self.settings.get("openrouter_base_url", "https://openrouter.ai/api/v1"))
-        base_url_entry = ttk.Entry(api_frame, textvariable=self.base_url_var, width=50)
-        base_url_entry.pack(fill="x", padx=20, pady=5)
-        
-        # API ключ
-        ttk.Label(api_frame, text="API ключ:").pack(anchor="w", padx=20, pady=(10, 0))
-        self.api_key_var = tk.StringVar(value=self.settings.get("openrouter_api_key", ""))
-        api_key_entry = ttk.Entry(api_frame, textvariable=self.api_key_var, width=50, show="*")
-        api_key_entry.pack(fill="x", padx=20, pady=5)
-        
-        # Кнопки
-        button_frame = ttk.Frame(self.window)
-        button_frame.pack(fill="x", padx=10, pady=10)
-        
-        ttk.Button(button_frame, text="Сохранить настройки", command=self.save_settings).pack(side="left", padx=5)
-        ttk.Button(button_frame, text="Применить", command=self.apply_settings).pack(side="left", padx=5)
-        ttk.Button(button_frame, text="Отмена", command=self.window.destroy).pack(side="right", padx=5)
-        
-        # Центрирование окна
-        self.window.update_idletasks()
-        x = (self.window.winfo_screenwidth() // 2) - (self.window.winfo_width() // 2)
-        y = (self.window.winfo_screenheight() // 2) - (self.window.winfo_height() // 2)
-        self.window.geometry(f"+{x}+{y}")
-    
-    def save_settings(self):
-        """Сохранение настроек"""
-        try:
-            # Основные настройки
-            self.settings.set("disable_openrouter_models", self.disable_openrouter_var.get())
-            self.settings.set("disable_hybrid_search", self.disable_hybrid_search_var.get())
-            
-            # Настройки поиска с валидацией
-            try:
-                top_k = int(self.top_k_var.get())
-                if 1 <= top_k <= 50:
-                    self.settings.set("search_top_k", top_k)
-                else:
-                    messagebox.showwarning("Предупреждение", "TOP_K должен быть от 1 до 50. Установлено значение по умолчанию (10).")
-                    self.settings.set("search_top_k", 10)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение TOP_K. Установлено значение по умолчанию (10).")
-                self.settings.set("search_top_k", 10)
-            
-            try:
-                alpha = float(self.alpha_var.get())
-                if 0.0 <= alpha <= 1.0:
-                    self.settings.set("search_alpha", alpha)
-                else:
-                    messagebox.showwarning("Предупреждение", "ALPHA должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.7).")
-                    self.settings.set("search_alpha", 0.7)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение ALPHA. Установлено значение по умолчанию (0.7).")
-                self.settings.set("search_alpha", 0.7)
-            
-            try:
-                threshold = float(self.threshold_var.get())
-                if 0.0 <= threshold <= 1.0:
-                    self.settings.set("relevance_threshold", threshold)
-                else:
-                    messagebox.showwarning("Предупреждение", "Порог релевантности должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.2).")
-                    self.settings.set("relevance_threshold", 0.2)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение порога релевантности. Установлено значение по умолчанию (0.2).")
-                self.settings.set("relevance_threshold", 0.2)
-            
-            try:
-                max_context = int(self.max_context_var.get())
-                if 10 <= max_context <= 500:
-                    self.settings.set("max_context_fragments", max_context)
-                else:
-                    messagebox.showwarning("Предупреждение", "Максимум фрагментов должен быть от 10 до 500. Установлено значение по умолчанию (100).")
-                    self.settings.set("max_context_fragments", 100)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение максимума фрагментов. Установлено значение по умолчанию (100).")
-                self.settings.set("max_context_fragments", 100)
-            
-            # API настройки
-            self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
-            self.settings.set("openrouter_api_key", self.api_key_var.get().strip())
-            
-            self.settings.save_settings()
-            messagebox.showinfo("Настройки", "Настройки сохранены!")
-            self.window.destroy()
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка сохранения настроек: {e}")
-    
-    def apply_settings(self):
-        """Применение настроек без закрытия окна"""
-        try:
-            # Основные настройки
-            self.settings.set("disable_openrouter_models", self.disable_openrouter_var.get())
-            self.settings.set("disable_hybrid_search", self.disable_hybrid_search_var.get())
-            
-            # Настройки поиска с валидацией
-            try:
-                top_k = int(self.top_k_var.get())
-                if 1 <= top_k <= 50:
-                    self.settings.set("search_top_k", top_k)
-                else:
-                    messagebox.showwarning("Предупреждение", "TOP_K должен быть от 1 до 50. Установлено значение по умолчанию (10).")
-                    self.settings.set("search_top_k", 10)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение TOP_K. Установлено значение по умолчанию (10).")
-                self.settings.set("search_top_k", 10)
-            
-            try:
-                alpha = float(self.alpha_var.get())
-                if 0.0 <= alpha <= 1.0:
-                    self.settings.set("search_alpha", alpha)
-                else:
-                    messagebox.showwarning("Предупреждение", "ALPHA должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.7).")
-                    self.settings.set("search_alpha", 0.7)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение ALPHA. Установлено значение по умолчанию (0.7).")
-                self.settings.set("search_alpha", 0.7)
-            
-            try:
-                threshold = float(self.threshold_var.get())
-                if 0.0 <= threshold <= 1.0:
-                    self.settings.set("relevance_threshold", threshold)
-                else:
-                    messagebox.showwarning("Предупреждение", "Порог релевантности должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.2).")
-                    self.settings.set("relevance_threshold", 0.2)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение порога релевантности. Установлено значение по умолчанию (0.2).")
-                self.settings.set("relevance_threshold", 0.2)
-            
-            try:
-                max_context = int(self.max_context_var.get())
-                if 10 <= max_context <= 500:
-                    self.settings.set("max_context_fragments", max_context)
-                else:
-                    messagebox.showwarning("Предупреждение", "Максимум фрагментов должен быть от 10 до 500. Установлено значение по умолчанию (100).")
-                    self.settings.set("max_context_fragments", 100)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение максимума фрагментов. Установлено значение по умолчанию (100).")
-                self.settings.set("max_context_fragments", 100)
-            
-            # API настройки
-            self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
-            self.settings.set("openrouter_api_key", self.api_key_var.get().strip())
-            
-            self.settings.save_settings()
-            messagebox.showinfo("Настройки", "Настройки применены!")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка применения настроек: {e}")
-    
-    def show(self):
-        """Отображение окна настроек"""
-        self.window.mainloop()
-
-# === Настройки RAG-системы ===
-settings = RAGSettings()
-
 # === Настройка клиента OpenRouter ===
 client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY")  # Получаем ключ из переменной окружения
+    api_key=os.getenv("OPENROUTER_API_KEY", "")  # Получаем ключ из переменной окружения
 )
 
 # === Доступные модели ===
@@ -339,7 +89,7 @@ class RAGCore:
         self.corpus_embeddings = None
         self.bm25 = None
         self.tokenized_corpus = None
-        self.settings = settings
+        self.settings = RAGSettings()
         
         # Инициализация модели
         self._setup_model()
@@ -645,6 +395,7 @@ class RAGCore:
         
         return "\n---\n".join(answers)  # Разделяем ответы линией для лучшей читаемости
 
+
 # Создание глобального экземпляра RAG-системы
 rag_system = None
 
@@ -657,23 +408,14 @@ def get_rag_system():
 
 # Для тестирования и запуска интерфейса настроек
 if __name__ == "__main__":
-    # Создание и отображение окна настроек
+    # Теперь вместо GUI можно просто показать настройки или запустить тест
     rag = get_rag_system()
-    settings_window = SettingsWindow(settings, rag)
-    settings_window.show()
-
-
-
-# Запуск веб-интерфейса
-
-def run_web_interface():
-    """Запуск веб-интерфейса"""
-    try:
-        import web_app
-        app = web_app.create_app()
-        print("🚀 Веб-интерфейс запущен на http://localhost:5000")
-        app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
-    except ImportError:
-        print("❌ Не удалось импортировать web_app.py. Убедитесь, что файл существует.")
-    except Exception as e:
-        print(f"❌ Ошибка запуска веб-интерфейса: {e}")
+    print("RAG-система инициализирована")
+    print(f"Загружено фрагментов: {len(rag.my_knowledge)}")
+    print(f"Загружено файлов: {len(rag.all_knowledge_dict)}")
+    
+    # Или можно запустить тестовый запрос
+    test_question = "Расскажи о компании ГТИ-ОПТ"
+    print(f"\nТестовый запрос: {test_question}")
+    print("Ответ:")
+    print(rag.ask_model(test_question))
