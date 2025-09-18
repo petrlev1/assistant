@@ -18,7 +18,7 @@ class SettingsWindow:
         """Создание окна настроек"""
         self.window = tk.Tk()
         self.window.title("Настройки RAG-системы")
-        self.window.geometry("800x600")
+        self.window.geometry("800x650")
         self.window.resizable(True, True)
         
         # Создание вкладок
@@ -254,126 +254,94 @@ class SettingsWindow:
         
         threading.Thread(target=process_question, daemon=True).start()
     
+    def validate_and_apply_settings(self):
+        """Валидация и применение настроек"""
+        # Валидация и применение настроек поиска
+        try:
+            top_k = int(self.top_k_var.get())
+            if 1 <= top_k <= 50:
+                self.settings.set("search_top_k", top_k)
+            else:
+                messagebox.showwarning("Предупреждение", "TOP_K должен быть от 1 до 50. Установлено значение по умолчанию (10).")
+                self.settings.set("search_top_k", 10)
+                self.top_k_var.set("10")
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Неверное значение TOP_K. Установлено значение по умолчанию (10).")
+            self.settings.set("search_top_k", 10)
+            self.top_k_var.set("10")
+        
+        try:
+            alpha = float(self.alpha_var.get())
+            if 0.0 <= alpha <= 1.0:
+                self.settings.set("search_alpha", alpha)
+            else:
+                messagebox.showwarning("Предупреждение", "ALPHA должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.7).")
+                self.settings.set("search_alpha", 0.7)
+                self.alpha_var.set("0.7")
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Неверное значение ALPHA. Установлено значение по умолчанию (0.7).")
+            self.settings.set("search_alpha", 0.7)
+            self.alpha_var.set("0.7")
+        
+        try:
+            threshold = float(self.threshold_var.get())
+            if 0.0 <= threshold <= 1.0:
+                self.settings.set("relevance_threshold", threshold)
+            else:
+                messagebox.showwarning("Предупреждение", "Порог релевантности должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.2).")
+                self.settings.set("relevance_threshold", 0.2)
+                self.threshold_var.set("0.2")
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Неверное значение порога релевантности. Установлено значение по умолчанию (0.2).")
+            self.settings.set("relevance_threshold", 0.2)
+            self.threshold_var.set("0.2")
+        
+        try:
+            max_context = int(self.max_context_var.get())
+            if 10 <= max_context <= 500:
+                self.settings.set("max_context_fragments", max_context)
+            else:
+                messagebox.showwarning("Предупреждение", "Максимум фрагментов должен быть от 10 до 500. Установлено значение по умолчанию (100).")
+                self.settings.set("max_context_fragments", 100)
+                self.max_context_var.set("100")
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Неверное значение максимума фрагментов. Установлено значение по умолчанию (100).")
+            self.settings.set("max_context_fragments", 100)
+            self.max_context_var.set("100")
+        
+        # Применение основных настроек
+        self.settings.set("disable_openrouter_models", self.disable_openrouter_var.get())
+        self.settings.set("disable_hybrid_search", self.disable_hybrid_search_var.get())
+        
+        # Применение API настроек
+        self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
+        self.settings.set("openrouter_api_key", self.api_key_var.get().strip())
+        
+        # Сохранение настроек
+        self.settings.save_settings()
+        
+        return True
+    
     def save_settings(self):
         """Сохранение настроек"""
         try:
-            # Основные настройки
-            self.settings.set("disable_openrouter_models", self.disable_openrouter_var.get())
-            self.settings.set("disable_hybrid_search", self.disable_hybrid_search_var.get())
-            
-            # Настройки поиска с валидацией
-            try:
-                top_k = int(self.top_k_var.get())
-                if 1 <= top_k <= 50:
-                    self.settings.set("search_top_k", top_k)
-                else:
-                    messagebox.showwarning("Предупреждение", "TOP_K должен быть от 1 до 50. Установлено значение по умолчанию (10).")
-                    self.settings.set("search_top_k", 10)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение TOP_K. Установлено значение по умолчанию (10).")
-                self.settings.set("search_top_k", 10)
-            
-            try:
-                alpha = float(self.alpha_var.get())
-                if 0.0 <= alpha <= 1.0:
-                    self.settings.set("search_alpha", alpha)
-                else:
-                    messagebox.showwarning("Предупреждение", "ALPHA должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.7).")
-                    self.settings.set("search_alpha", 0.7)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение ALPHA. Установлено значение по умолчанию (0.7).")
-                self.settings.set("search_alpha", 0.7)
-            
-            try:
-                threshold = float(self.threshold_var.get())
-                if 0.0 <= threshold <= 1.0:
-                    self.settings.set("relevance_threshold", threshold)
-                else:
-                    messagebox.showwarning("Предупреждение", "Порог релевантности должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.2).")
-                    self.settings.set("relevance_threshold", 0.2)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение порога релевантности. Установлено значение по умолчанию (0.2).")
-                self.settings.set("relevance_threshold", 0.2)
-            
-            try:
-                max_context = int(self.max_context_var.get())
-                if 10 <= max_context <= 500:
-                    self.settings.set("max_context_fragments", max_context)
-                else:
-                    messagebox.showwarning("Предупреждение", "Максимум фрагментов должен быть от 10 до 500. Установлено значение по умолчанию (100).")
-                    self.settings.set("max_context_fragments", 100)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение максимума фрагментов. Установлено значение по умолчанию (100).")
-                self.settings.set("max_context_fragments", 100)
-            
-            # API настройки
-            self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
-            self.settings.set("openrouter_api_key", self.api_key_var.get().strip())
-            
-            self.settings.save_settings()
-            messagebox.showinfo("Настройки", "Настройки сохранены!")
-            self.window.destroy()
+            if self.validate_and_apply_settings():
+                messagebox.showinfo("Настройки", "Настройки сохранены!")
+                self.window.destroy()
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка сохранения настроек: {e}")
     
     def apply_settings(self):
         """Применение настроек без закрытия окна"""
         try:
-            # Основные настройки
-            self.settings.set("disable_openrouter_models", self.disable_openrouter_var.get())
-            self.settings.set("disable_hybrid_search", self.disable_hybrid_search_var.get())
-            
-            # Настройки поиска с валидацией
-            try:
-                top_k = int(self.top_k_var.get())
-                if 1 <= top_k <= 50:
-                    self.settings.set("search_top_k", top_k)
-                else:
-                    messagebox.showwarning("Предупреждение", "TOP_K должен быть от 1 до 50. Установлено значение по умолчанию (10).")
-                    self.settings.set("search_top_k", 10)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение TOP_K. Установлено значение по умолчанию (10).")
-                self.settings.set("search_top_k", 10)
-            
-            try:
-                alpha = float(self.alpha_var.get())
-                if 0.0 <= alpha <= 1.0:
-                    self.settings.set("search_alpha", alpha)
-                else:
-                    messagebox.showwarning("Предупреждение", "ALPHA должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.7).")
-                    self.settings.set("search_alpha", 0.7)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение ALPHA. Установлено значение по умолчанию (0.7).")
-                self.settings.set("search_alpha", 0.7)
-            
-            try:
-                threshold = float(self.threshold_var.get())
-                if 0.0 <= threshold <= 1.0:
-                    self.settings.set("relevance_threshold", threshold)
-                else:
-                    messagebox.showwarning("Предупреждение", "Порог релевантности должен быть от 0.0 до 1.0. Установлено значение по умолчанию (0.2).")
-                    self.settings.set("relevance_threshold", 0.2)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение порога релевантности. Установлено значение по умолчанию (0.2).")
-                self.settings.set("relevance_threshold", 0.2)
-            
-            try:
-                max_context = int(self.max_context_var.get())
-                if 10 <= max_context <= 500:
-                    self.settings.set("max_context_fragments", max_context)
-                else:
-                    messagebox.showwarning("Предупреждение", "Максимум фрагментов должен быть от 10 до 500. Установлено значение по умолчанию (100).")
-                    self.settings.set("max_context_fragments", 100)
-            except ValueError:
-                messagebox.showwarning("Предупреждение", "Неверное значение максимума фрагментов. Установлено значение по умолчанию (100).")
-                self.settings.set("max_context_fragments", 100)
-            
-            # API настройки
-            self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
-            self.settings.set("openrouter_api_key", self.api_key_var.get().strip())
-            
-            self.settings.save_settings()
-            messagebox.showinfo("Настройки", "Настройки применены!")
+            if self.validate_and_apply_settings():
+                # Обновляем настройки в RAG-системе
+                self.rag_system.settings = self.settings
+                
+                # Если изменились настройки API, обновляем клиент
+                self.rag_system._setup_client()
+                
+                messagebox.showinfo("Настройки", "Настройки применены!")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка применения настроек: {e}")
     
