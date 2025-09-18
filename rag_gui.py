@@ -37,6 +37,10 @@ class SettingsWindow:
         api_frame = ttk.Frame(notebook)
         notebook.add(api_frame, text="API")
         
+        # Вкладка Telegram настроек
+        telegram_frame = ttk.Frame(notebook)
+        notebook.add(telegram_frame, text="Telegram")
+        
         # Новая вкладка Чат
         chat_frame = ttk.Frame(notebook)
         notebook.add(chat_frame, text="Чат")
@@ -114,6 +118,43 @@ class SettingsWindow:
         self.api_key_var = tk.StringVar(value=self.settings.get("openrouter_api_key", ""))
         api_key_entry = ttk.Entry(api_frame, textvariable=self.api_key_var, width=50, show="*")
         api_key_entry.pack(fill="x", padx=20, pady=5)
+        
+        # === Telegram настройки ===
+        ttk.Label(telegram_frame, text="Настройки Telegram бота:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+
+        # Telegram Bot Token
+        ttk.Label(telegram_frame, text="Telegram Bot Token:").pack(anchor="w", padx=20, pady=(5, 0))
+        self.telegram_token_var = tk.StringVar(value=self.settings.get("telegram_bot_token", ""))
+        telegram_token_entry = ttk.Entry(telegram_frame, textvariable=self.telegram_token_var, width=50, show="*")
+        telegram_token_entry.pack(fill="x", padx=20, pady=5)
+        ttk.Label(telegram_frame, text="Токен вашего Telegram бота от @BotFather", foreground="gray").pack(anchor="w", padx=20)
+
+        # Инструкция по получению токена
+        instruction_frame = ttk.LabelFrame(telegram_frame, text="Инструкция")
+        instruction_frame.pack(fill="x", padx=20, pady=20)
+        instruction_text = (
+            "1. Найдите @BotFather в Telegram\n"
+            "2. Отправьте команду /newbot\n"
+            "3. Следуйте инструкциям для создания бота\n"
+            "4. Скопируйте токен и вставьте в поле выше\n"
+            "5. Нажмите 'Применить' для сохранения настроек"
+        )
+        ttk.Label(instruction_frame, text=instruction_text, justify="left").pack(anchor="w", padx=5, pady=5)
+
+        # Кнопка запуска бота
+        self.telegram_status_var = tk.StringVar()
+        self.telegram_status_var.set("Бот не запущен")
+        self.telegram_status_label = ttk.Label(telegram_frame, textvariable=self.telegram_status_var)
+        self.telegram_status_label.pack(anchor="w", padx=20, pady=(10, 5))
+
+        button_frame_telegram = ttk.Frame(telegram_frame)
+        button_frame_telegram.pack(fill="x", padx=20, pady=10)
+
+        self.start_telegram_button = ttk.Button(button_frame_telegram, text="Запустить бота", command=self.start_telegram_bot)
+        self.start_telegram_button.pack(side="left", padx=5)
+
+        self.stop_telegram_button = ttk.Button(button_frame_telegram, text="Остановить бота", command=self.stop_telegram_bot, state="disabled")
+        self.stop_telegram_button.pack(side="left", padx=5)
         
         # === Вкладка Чат ===
         # Фрейм для чата
@@ -254,6 +295,61 @@ class SettingsWindow:
         
         threading.Thread(target=process_question, daemon=True).start()
     
+    def start_telegram_bot(self):
+        """Запуск Telegram бота"""
+        try:
+            # Проверяем токен
+            token = self.telegram_token_var.get().strip()
+            if not token or token == "YOUR_BOT_TOKEN_HERE" or len(token) < 20:
+                messagebox.showerror("Ошибка", "Пожалуйста, введите валидный Telegram Bot Token")
+                return
+                
+            # Сохраняем токен
+            self.settings.set("telegram_bot_token", token)
+            self.settings.save_settings()
+            
+            # Импортируем и запускаем бота
+            from telegram_bot import TelegramRAGBot
+            self.telegram_bot = TelegramRAGBot(token)
+            
+            # Запускаем бота в отдельном потоке с правильной обработкой event loop
+            self.telegram_thread = threading.Thread(target=self._run_telegram_bot, daemon=True)
+            self.telegram_thread.start()
+            
+            self.telegram_status_var.set("Бот запущен")
+            self.start_telegram_button.config(state="disabled")
+            self.stop_telegram_button.config(state="normal")
+            messagebox.showinfo("Telegram бот", "Бот успешно запущен! Проверьте Telegram.")
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка запуска Telegram бота: {e}")
+            logger.error(f"Ошибка запуска Telegram бота: {e}")
+
+    def _run_telegram_bot(self):
+        """Внутренний метод для запуска бота"""
+        try:
+            # Создаем новый event loop для этого потока
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self.telegram_bot.run()
+        except Exception as e:
+            logger.error(f"Ошибка в работе Telegram бота: {e}", exc_info=True)
+            self.window.after(0, lambda e=e: messagebox.showerror("Ошибка", f"Ошибка в работе Telegram бота: {e}"))
+
+    def stop_telegram_bot(self):
+        """Остановка Telegram бота"""
+        try:
+            if hasattr(self, 'telegram_bot') and self.telegram_bot:
+                # Здесь должна быть логика остановки бота
+                self.telegram_bot.stop()
+                self.telegram_status_var.set("Бот остановлен")
+                self.start_telegram_button.config(state="normal")
+                self.stop_telegram_button.config(state="disabled")
+                messagebox.showinfo("Telegram бот", "Бот остановлен")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка остановки Telegram бота: {e}")
+    
     def validate_and_apply_settings(self):
         """Валидация и применение настроек"""
         # Валидация и применение настроек поиска
@@ -316,6 +412,9 @@ class SettingsWindow:
         # Применение API настроек
         self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
         self.settings.set("openrouter_api_key", self.api_key_var.get().strip())
+        
+        # Применение Telegram настроек
+        self.settings.set("telegram_bot_token", self.telegram_token_var.get().strip())
         
         # Сохранение настроек
         self.settings.save_settings()

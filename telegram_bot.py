@@ -1,10 +1,11 @@
 # telegram_bot.py - Telegram бот для RAG-системы
 import asyncio
 import logging
+import threading
+import sys
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from rag_core import get_rag_system
-import os
 
 # Настройка логирования
 logging.basicConfig(
@@ -13,24 +14,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Токен вашего бота (указывайте реальный токен вместо примера)
-BOT_TOKEN = "7502394795:AAFlLzJzlI-ciWxmSQMF6poO4uWZx-p-bK0"
-
-# ID администраторов (добавьте сюда ID пользователей, которые могут использовать команды администратора)
-ADMIN_USER_IDS = set()  # Пример: {123456789, 987654321}
-
 class TelegramRAGBot:
-    def __init__(self):
+    def __init__(self, bot_token=None):
         """Инициализация Telegram-бота"""
+        self.bot_token = bot_token
         self.rag_system = get_rag_system()
         self.application = None
+        self.is_running = False
+        self.stop_event = None
         
+    def set_token(self, token):
+        """Установка токена бота"""
+        self.bot_token = token
+        
+    def is_token_valid(self):
+        """Проверка валидности токена"""
+        return self.bot_token and self.bot_token != "YOUR_BOT_TOKEN_HERE" and len(self.bot_token) > 20
+    
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
         user = update.effective_user
         welcome_message = (
-            f"🌟 Привет, {user.first_name}! Добро пожаловать в RAG-бот компании Аквесегмент!\n\n"
-            f"🤖 Я интеллектуальный помощник, созданный на базе искусственного интеллекта.\n"
+            f"🌟 Привет, {user.first_name}! Добро пожаловать в RAG-бот компании ГТИ-ОПТ!\n\n"
+            f"🤖 Я информационный ассистент, созданный на базе искусственного интеллекта.\n"
             f"💬 Просто задайте мне вопрос, и я постараюсь на него ответить, используя нашу базу знаний.\n\n"
             f"❓ Примеры вопросов:\n"
             f"• Какие услуги вы предоставляете?\n"
@@ -39,8 +45,7 @@ class TelegramRAGBot:
             f"Команды:\n"
             f"/start - Начальное сообщение\n"
             f"/help - Помощь\n"
-            f"/stats - Статистика (только для администраторов)\n"
-            f"/reload - Перезагрузка базы знаний (только для администраторов)"
+            f"/stats - Статистика"
         )
         await update.message.reply_text(welcome_message)
         logger.info(f"Пользователь {user.first_name} (@{user.username}) начал диалог")
@@ -60,72 +65,26 @@ class TelegramRAGBot:
             "🔹 *Команды:*\n"
             "/start - Начальное сообщение\n"
             "/help - Это сообщение помощи\n"
-            "/stats - Статистика (для администраторов)\n"
-            "/reload - Перезагрузка базы знаний (для администраторов)\n\n"
+            "/stats - Статистика\n\n"
             "⚠ *Важно:*\n"
             "• Ответы формируются на основе имеющейся базы знаний\n"
-            "• Если ответа нет в базе, бот сообщит об этом\n"
-            "• Для уточнения вопросов переформулируйте их более конкретно"
+            "• Если ответа нет в базе, бот сообщит об этом"
         )
         await update.message.reply_text(help_text, parse_mode='Markdown')
         logger.info(f"Пользователь {update.effective_user.first_name} запросил помощь")
 
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /stats (только для администраторов)"""
-        user_id = update.effective_user.id
-        user_name = update.effective_user.first_name
-        
-        if ADMIN_USER_IDS and user_id not in ADMIN_USER_IDS:
-            await update.message.reply_text("❌ У вас нет прав для просмотра статистики.")
-            logger.warning(f"Пользователь {user_name} (ID: {user_id}) попытался получить статистику без прав")
-            return
-            
-        # Здесь можно добавить реальную статистику
+        """Обработчик команды /stats"""
+        user = update.effective_user
         stats_text = (
             "📊 *Статистика системы:*\n\n"
             f"📚 Фрагментов в базе знаний: {len(self.rag_system.my_knowledge)}\n"
             f"📁 Загружено файлов: {len(self.rag_system.all_knowledge_dict)}\n"
             f"🧠 Модель поиска: SentenceTransformer\n"
-            f"🔤 Методы поиска: Гибридный (Semantic + BM25)\n"
-            f"🤖 Активные модели ИИ: {len(self.rag_system.__class__.__bases__[0].__dict__.get('AVAILABLE_MODELS', [])) if hasattr(self.rag_system, 'AVAILABLE_MODELS') else 'N/A'}"
+            f"🔤 Методы поиска: Гибридный (Semantic + BM25)"
         )
         await update.message.reply_text(stats_text, parse_mode='Markdown')
-        logger.info(f"Администратор {user_name} (ID: {user_id}) запросил статистику")
-
-    async def reload_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /reload (только для администраторов)"""
-        user_id = update.effective_user.id
-        user_name = update.effective_user.first_name
-        
-        if ADMIN_USER_IDS and user_id not in ADMIN_USER_IDS:
-            await update.message.reply_text("❌ У вас нет прав для перезагрузки базы знаний.")
-            logger.warning(f"Пользователь {user_name} (ID: {user_id}) попытался перезагрузить базу знаний без прав")
-            return
-            
-        try:
-            await update.message.reply_text("🔄 Перезагрузка базы знаний. Пожалуйста, подождите...")
-            logger.info(f"Администратор {user_name} (ID: {user_id}) инициировал перезагрузку базы знаний")
-            
-            # Выполняем перезагрузку в отдельной задаче, чтобы не блокировать Telegram
-            loop = asyncio.get_event_loop()
-            success = await loop.run_in_executor(None, self.rag_system.reload_knowledge_base)
-            
-            if success:
-                reload_message = (
-                    "✅ База знаний успешно перезагружена!\n\n"
-                    f"📚 Загружено фрагментов: {len(self.rag_system.my_knowledge)}\n"
-                    f"📁 Из файлов: {len(self.rag_system.all_knowledge_dict)}"
-                )
-                await update.message.reply_text(reload_message)
-                logger.info(f"База знаний успешно перезагружена администратором {user_name}")
-            else:
-                await update.message.reply_text("❌ Ошибка при перезагрузке базы знаний. Проверьте логи.")
-                logger.error(f"Ошибка перезагрузки базы знаний администратором {user_name}")
-                
-        except Exception as e:
-            error_message = f"❌ Произошла ошибка при перезагрузке базы знаний: {str(e)}"
-            await update.message.reply_text(error_message)
-            logger.error(f"Ошибка при перезагрузке базы знаний администратором {user_name}: {e}")
+        logger.info(f"Пользователь {user.first_name} запросил статистику")
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
@@ -139,9 +98,10 @@ class TelegramRAGBot:
             await update.message.chat.send_action("typing")
             
             # Обработка запроса через RAG-систему
-            # Выполняем в отдельном потоке, чтобы не блокировать Telegram
-            loop = asyncio.get_event_loop()
-            answer = await loop.run_in_executor(None, self.rag_system.ask_model, user_message)
+            # Выполняем в отдельной задаче, чтобы не блокировать Telegram
+            answer = await asyncio.get_event_loop().run_in_executor(
+                None, self.rag_system.ask_model, user_message
+            )
             
             # Форматирование ответа для Telegram
             if len(answer) > 4000:  # Ограничение Telegram на длину сообщения
@@ -163,8 +123,7 @@ class TelegramRAGBot:
                 "❌ Произошла ошибка при обработке вашего запроса.\n\n"
                 "Пожалуйста, попробуйте:\n"
                 "1. Переформулировать вопрос\n"
-                "2. Попробовать позже\n"
-                "3. Обратиться к администратору бота"
+                "2. Попробовать позже"
             )
             await update.message.reply_text(error_text)
 
@@ -184,40 +143,42 @@ class TelegramRAGBot:
         await application.bot.set_my_commands([
             BotCommand("start", "Начальное сообщение"),
             BotCommand("help", "Помощь по использованию"),
-            BotCommand("stats", "Статистика (для администраторов)"),
-            BotCommand("reload", "Перезагрузка базы знаний (для администраторов)")
+            BotCommand("stats", "Статистика")
         ])
         logger.info("Команды бота установлены")
+        self.is_running = True
 
     def run(self):
         """Запуск бота"""
-        # Создание приложения
-        self.application = Application.builder().token(BOT_TOKEN).post_init(self.post_init).build()
+        if not self.is_token_valid():
+            logger.error("❌ Не установлен валидный токен Telegram-бота")
+            raise ValueError("Не установлен валидный токен Telegram-бота")
+            
+        try:
+            # Создание приложения
+            self.application = Application.builder().token(self.bot_token).post_init(self.post_init).build()
 
-        # Регистрация обработчиков
-        self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CommandHandler("stats", self.stats_command))
-        self.application.add_handler(CommandHandler("reload", self.reload_command))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-        self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
+            # Регистрация обработчиков
+            self.application.add_handler(CommandHandler("start", self.start))
+            self.application.add_handler(CommandHandler("help", self.help_command))
+            self.application.add_handler(CommandHandler("stats", self.stats_command))
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+            self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
 
-        # Запуск бота
-        logger.info("Telegram-бот запущен. Ожидание сообщений...")
-        self.application.run_polling()
+            # Запуск бота
+            logger.info("Telegram-бот запущен. Ожидание сообщений...")
+            self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+            
+        except Exception as e:
+            logger.error(f"Критическая ошибка в работе Telegram бота: {e}", exc_info=True)
+            raise
 
-# Запуск бота
-if __name__ == '__main__':
-    # Удалите или закомментируйте этот блок:
-    # if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
-    #     logger.error("❌ Не установлен токен Telegram-бота...")
-    #     exit(1)
-    
-    # Создание и запуск бота
-    try:
-        bot = TelegramRAGBot()
-        bot.run()
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка при запуске бота: {e}", exc_info=True)
-        print(f"\n❌ Критическая ошибка при запуске бота: {e}")
-        exit(1)
+    def stop(self):
+        """Остановка бота"""
+        try:
+            if self.application and self.is_running:
+                logger.info("Остановка Telegram-бота...")
+                # В асинхронной версии это сложнее, просто меняем флаг
+                self.is_running = False
+        except Exception as e:
+            logger.error(f"Ошибка при остановке Telegram бота: {e}")
