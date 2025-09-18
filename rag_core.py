@@ -24,7 +24,7 @@ class RAGSettings:
         self.default_settings = {
             "disable_openrouter_models": False,
             "disable_hybrid_search": False,
-            "openrouter_api_key": "",
+            "openrouter_api_key": "",  # Пустое значение по умолчанию
             "openrouter_base_url": "https://openrouter.ai/api/v1",
             # Настройки поиска
             "search_top_k": 10,
@@ -69,9 +69,11 @@ class RAGSettings:
         self.settings[key] = value
 
 # === Настройка клиента OpenRouter ===
+# Создаем экземпляр настроек для инициализации клиента
+settings = RAGSettings()
 client = openai.OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY", "")  # Получаем ключ из переменной окружения
+    base_url=settings.get("openrouter_base_url", "https://openrouter.ai/api/v1"),
+    api_key=settings.get("openrouter_api_key", "")  # Получаем ключ из файла настроек
 )
 
 # === Доступные модели ===
@@ -91,12 +93,23 @@ class RAGCore:
         self.tokenized_corpus = None
         self.settings = RAGSettings()
         
+        # Переинициализация клиента с актуальными настройками
+        self._setup_client()
+        
         # Инициализация модели
         self._setup_model()
         
         # Загрузка базы знаний
         self.reload_knowledge_base()
         
+    def _setup_client(self):
+        """Инициализация клиента OpenRouter с текущими настройками"""
+        global client
+        client = openai.OpenAI(
+            base_url=self.settings.get("openrouter_base_url", "https://openrouter.ai/api/v1"),
+            api_key=self.settings.get("openrouter_api_key", "")
+        )
+    
     def _setup_model(self):
         """Инициализация модели эмбеддингов"""
         try:
@@ -348,6 +361,9 @@ class RAGCore:
     
     def ask_model(self, question):
         """Отправка запроса ко всем доступным моделям"""
+        # Обновляем клиент с актуальными настройками
+        self._setup_client()
+        
         # Получаем настройки поиска
         search_top_k = self.settings.get("search_top_k", 10)
         search_alpha = self.settings.get("search_alpha", 0.7)
@@ -378,6 +394,8 @@ class RAGCore:
 - Анализируй данные и формулируй ответ самостоятельно.
 - Отвечай на негативные вопросы и отзывы в соответствии с ответами в базе знаний.
 - Отвечай на позитивные вопросы и отзывы своими словами в виде слов благодарности за обращение в компанию.
+
+Загрузки, мультизагрузки и мульти это синонимы.
 
 Информация:
 {context}
