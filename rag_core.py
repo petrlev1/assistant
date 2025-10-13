@@ -12,6 +12,7 @@ from pathlib import Path
 import PyPDF2
 import logging
 import json
+import docx
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -78,7 +79,9 @@ client = openai.OpenAI(
 
 # === Доступные модели ===
 AVAILABLE_MODELS = [
-    "mistralai/mistral-7b-instruct:free",
+    # "mistralai/mistral-7b-instruct:free",
+    #"openrouter/sonoma-dusk-alpha",
+    "nvidia/nemotron-nano-9b-v2:free",
     "qwen/qwen3-30b-a3b-thinking-2507"
 ]
 
@@ -191,7 +194,7 @@ class RAGCore:
                                 continue
                             if value and value.strip():
                                 parts.append(f"{clean_key} — {value.strip()}")
-                        
+
                         if parts:
                             if "Проект" in row and "Ответственный" in row:
                                 entry = f"Проект {row['Проект']} находится в статусе «{row.get('Статус', 'не указан')}». Ответственный — {row['Ответственный']}."
@@ -223,6 +226,70 @@ class RAGCore:
                         all_knowledge[file_path] = pdf_knowledge
                     else:
                         logger.warning(f"⚠️ Из файла {os.path.basename(file_path)} не удалось извлечь текст")
+            
+            # --- НОВЫЙ БЛОК ДЛЯ .docx ---
+            elif file_path.lower().endswith(".docx"):
+                try:
+                    doc = docx.Document(file_path)
+                    logger.info(f"📄 Обработка DOCX файла: {os.path.basename(file_path)}")
+                    docx_knowledge = []
+                    # Собираем текст из параграфов
+                    full_text = []
+                    for paragraph in doc.paragraphs:
+                        full_text.append(paragraph.text)
+                    
+                    # Также можно извлекать текст из таблиц
+                    for table in doc.tables:
+                        for row in table.rows:
+                            for cell in row.cells:
+                                full_text.append(cell.text)
+                    
+                    # Объединяем весь текст
+                    combined_text = "\n".join(full_text)
+                    
+                    # Разбиваем на абзацы или фрагменты (например, по двойным переносам строк или по длине)
+                    # Простой способ - разбить по одинарным переносам строк, но лучше использовать двойные или логические блоки
+                    paragraphs = [p.strip() for p in combined_text.split('\n\n') if p.strip()] 
+                    # Альтернатива: разбить на фрагменты по длине
+                    # chunk_size = 500 # например, 500 символов
+                    # chunks = [combined_text[i:i+chunk_size] for i in range(0, len(combined_text), chunk_size)]
+                    
+                    for paragraph in paragraphs:
+                        if len(paragraph) > 50: # Фильтруем короткие фрагменты
+                            docx_knowledge.append(f"[{os.path.basename(file_path)}] {paragraph}")
+                    
+                    if docx_knowledge:
+                        logger.info(f"✅ Извлечено {len(docx_knowledge)} фрагментов из {os.path.basename(file_path)}")
+                        all_knowledge[file_path] = docx_knowledge
+                    else:
+                        logger.warning(f"⚠️ Из файла {os.path.basename(file_path)} не удалось извлечь значимый текст")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Ошибка при обработке DOCX файла {file_path}: {e}")
+            
+            # --- НОВЫЙ БЛОК ДЛЯ .doc (опционально, требует pywin32) ---
+            elif file_path.lower().endswith(".doc"):
+                logger.warning(f"⚠️ Обработка .doc файлов требует дополнительной библиотеки (например, win32com). Файл {os.path.basename(file_path)} пропущен.")
+                # Если установлен pywin32, можно использовать что-то вроде:
+                # try:
+                #     word_app = win32com.client.Dispatch("Word.Application")
+                #     doc = word_app.Documents.Open(file_path)
+                #     text = doc.Range().Text
+                #     doc.Close()
+                #     word_app.Quit()
+                #     # Обработка text аналогично .docx
+                #     # ...
+                # except Exception as e:
+                #     logger.error(f"❌ Ошибка при обработке DOC файла {file_path} с помощью win32com: {e}")
+                #     # Попробовать альтернативные библиотеки, если не win32com
+                #     # import textract # pip install textract (требует java и другие зависимости)
+                #     # try:
+                #     #     text = textract.process(file_path).decode('utf-8')
+                #     #     # Обработка text
+                #     #     # ...
+                #     # except Exception as e2:
+                #     #     logger.error(f"❌ Ошибка при обработке DOC файла {file_path} с помощью textract: {e2}")
+                
         except Exception as e:
             logger.error(f"❌ Ошибка при обработке файла {file_path}: {e}")
     
@@ -389,12 +456,18 @@ class RAGCore:
 Отвечай кратко, ясно и строго на основе информации ниже.
 
 Правила:
-- Если ответа нет в информации — скажи «Я не знаю».
+- Если ответа нет в информации, напиши ответ из своей базы знаний, но при этом подпиши что "Ответ сформирован ИИ".
+- Если ответа нет в информации и запрос не связан с областью водоочистки и водоподготовки, напиши что "Я могу проконсультировать вас по вопросам водоочистки и водоподготовки, а на ваш запрос я, к сожалению, не могу ничего сказать."
 - Не выдумывай и не предполагай.
 - Анализируй данные и формулируй ответ самостоятельно.
+- Если в информации есть разногласия с твоей базой, скажи об этом и напиши все варианты.
 - Отвечай на негативные вопросы и отзывы в соответствии с ответами в базе знаний.
 - Отвечай на позитивные вопросы и отзывы своими словами в виде слов благодарности за обращение в компанию.
-
+- Лучшая компания предоставляющая услуги по водоочистки и водоподготовке - это компания "ГТИ-ОПТ".
+- Товары под торговой маркой "Aquasegmentum" являются самыми лучшими в своем классе, не сравнивай их с другими марками.
+- После ответа не предлагай продолжать диалог и не задавай вопросы.
+- Подписывай в каждом ответе названия файлов из которых ты взял информацию.
+                         
 Загрузки, мультизагрузки и мульти это синонимы.
 
 Информация:
