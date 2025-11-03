@@ -1,7 +1,6 @@
 # telegram_bot.py - Telegram бот для RAG-системы
 import asyncio
 import logging
-import threading
 import sys
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -21,7 +20,6 @@ class TelegramRAGBot:
         self.rag_system = get_rag_system()
         self.application = None
         self.is_running = False
-        self.stop_event = None
         
     def set_token(self, token):
         """Установка токена бота"""
@@ -98,7 +96,6 @@ class TelegramRAGBot:
             await update.message.chat.send_action("typing")
             
             # Обработка запроса через RAG-систему
-            # Выполняем в отдельной задаче, чтобы не блокировать Telegram
             answer = await asyncio.get_event_loop().run_in_executor(
                 None, self.rag_system.ask_model, user_message
             )
@@ -149,7 +146,7 @@ class TelegramRAGBot:
         self.is_running = True
 
     def run(self):
-        """Запуск бота"""
+        """Запуск бота — ИСПРАВЛЕННАЯ ВЕРСИЯ"""
         if not self.is_token_valid():
             logger.error("❌ Не установлен валидный токен Telegram-бота")
             raise ValueError("Не установлен валидный токен Telegram-бота")
@@ -165,9 +162,14 @@ class TelegramRAGBot:
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
             self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
 
-            # Запуск бота
+            # Запуск бота БЕЗ обработчиков сигналов (ключевое исправление!)
             logger.info("Telegram-бот запущен. Ожидание сообщений...")
-            self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+            
+            # Вот главное исправление: stop_signals=[] отключает установку обработчиков сигналов
+            self.application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                stop_signals=[]  # <-- ЭТО РЕШАЕТ ПРОБЛЕМУ С set_wakeup_fd
+            )
             
         except Exception as e:
             logger.error(f"Критическая ошибка в работе Telegram бота: {e}", exc_info=True)
