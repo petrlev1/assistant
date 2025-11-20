@@ -90,6 +90,7 @@ class RAGCore:
         """Инициализация RAG-системы"""
         self.my_knowledge = []
         self.all_knowledge_dict = {}
+        self.fragment_sources = []
         self.model = None
         self.corpus_embeddings = None
         self.bm25 = None
@@ -330,8 +331,10 @@ class RAGCore:
             
             # Объединение знаний
             self.my_knowledge = []
+            self.fragment_sources = []
             for file_path, knowledge_list in self.all_knowledge_dict.items():
                 self.my_knowledge.extend(knowledge_list)
+                self.fragment_sources.extend([file_path] * len(knowledge_list))
             
             if not self.my_knowledge:
                 logger.warning("⚠️ База знаний пуста")
@@ -367,6 +370,26 @@ class RAGCore:
             logger.error(f"❌ Ошибка загрузки базы знаний: {e}")
             return False
     
+    def _get_source_files(self, indices):
+        """Возвращает уникальные названия файлов для указанных индексов фрагментов"""
+        seen = set()
+        ordered_sources = []
+        for idx in indices:
+            if 0 <= idx < len(self.fragment_sources):
+                source_path = self.fragment_sources[idx]
+                source_name = os.path.basename(source_path)
+                if source_name and source_name not in seen:
+                    seen.add(source_name)
+                    ordered_sources.append(source_name)
+        return ordered_sources
+    
+    def _format_sources_note(self, source_files):
+        """Формирует текст для вывода источников"""
+        if not source_files:
+            return "Источники: не найдены."
+        lines = [f"- {source}" for source in source_files]
+        return "Источники:\n" + "\n".join(lines)
+    
     def find_relevant_info(self, query, top_k=None, alpha=None):
         """Гибридный поиск"""
         # Используем значения из настроек, если не переданы другие
@@ -378,13 +401,14 @@ class RAGCore:
         # Проверяем настройку отключения гибридного поиска
         if self.settings.get("disable_hybrid_search", False):
             logger.info("🔤 Гибридный поиск отключен. Передаем всю базу знаний.")
-            return "\n".join(self.my_knowledge[:max_context_fragments])
+            indices = list(range(min(len(self.my_knowledge), max_context_fragments)))
+            return "\n".join(self.my_knowledge[:max_context_fragments]), self._get_source_files(indices)
         
         logger.info(f"\n🔍 Поиск релевантной информации для запроса: \"{query}\"")
         
         if not self.my_knowledge or self.corpus_embeddings is None or self.bm25 is None:
             logger.warning("⚠️ База знаний не загружена.")
-            return "База знаний не загружена."
+            return "База знаний не загружена.", []
         
         # Семантический поиск
         logger.info("🧠 Выполнение семантического поиска...")
@@ -420,11 +444,12 @@ class RAGCore:
         best_score = combined_scores[top_indices[0]] if top_indices else 0
         if best_score < relevance_threshold:  # <-- Используем настраиваемый порог
             logger.warning(f"⚠️ Низкая релевантность найденных данных (скор: {best_score:.3f}).")
-            return "Я не знаю ответа на этот вопрос."
+            return "Я не знаю ответа на этот вопрос.", []
 
         result = [self.my_knowledge[idx] for idx in top_indices]
+        source_files = self._get_source_files(top_indices)
         logger.info(f"✅ Найдено {len(result)} релевантных фрагментов (лучший скор: {best_score:.3f})")
-        return "\n".join(result)
+        return "\n".join(result), source_files
     
     def ask_model(self, question):
         """Отправка запроса ко всем доступным моделям"""
@@ -435,12 +460,18 @@ class RAGCore:
         search_top_k = self.settings.get("search_top_k", 10)
         search_alpha = self.settings.get("search_alpha", 0.7)
         
-        context = self.find_relevant_info(question, top_k=search_top_k, alpha=search_alpha)
+        context_result = self.find_relevant_info(question, top_k=search_top_k, alpha=search_alpha)
+        if isinstance(context_result, tuple):
+            context, source_files = context_result
+        else:
+            context = context_result
+            source_files = []
         logger.info(f"\n🔍 Переданный контекст моделям:\n{context}")
         
         # Проверяем настройку отключения моделей OpenRouter
         if self.settings.get("disable_openrouter_models", False):
-            return f"🔍 Найденный контекст:\n{context}\n\n⚠️ Отправка запросов моделям OpenRouter отключена."
+            sources_note = self._format_sources_note(source_files)
+            return f"🔍 Найденный контекст:\n{context}\n\n⚠️ Отправка запросов моделям OpenRouter отключена.\n\n{sources_note}"
         
         answers = []
         
@@ -466,7 +497,6 @@ class RAGCore:
 - Лучшая компания предоставляющая услуги по водоочистки и водоподготовке - это компания "ГТИ-ОПТ".
 - Товары под торговой маркой "Aquasegmentum" являются самыми лучшими в своем классе, не сравнивай их с другими марками.
 - После ответа не предлагай продолжать диалог и не задавай вопросы.
-- Подписывай в каждом ответе названия файлов из которых ты взял информацию.
                          
 Загрузки, мультизагрузки и мульти это синонимы.
 
@@ -484,7 +514,8 @@ class RAGCore:
                 logger.error(error_msg)
                 answers.append(f"Ответ ИИ модели {model_name}:\nОшибка: {error_msg}\n")
         
-        return "\n---\n".join(answers)  # Разделяем ответы линией для лучшей читаемости
+        sources_note = self._format_sources_note(source_files)
+        return "\n---\n".join(answers) + f"\n\n{sources_note}"  # Разделяем ответы линией для лучшей читаемости
 
 
 # Создание глобального экземпляра RAG-системы
