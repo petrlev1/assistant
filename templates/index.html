@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RAG-ассистент ГТИ-ОПТ</title>
+    <title>RAG-ассистент</title>
     <style>
         * {
             margin: 0;
@@ -16,7 +16,7 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            padding: 20px;
+            padding: 0;
         }
 
         .container {
@@ -31,13 +31,13 @@
         .header {
             background: linear-gradient(135deg, #2c3e50, #3498db);
             color: white;
-            padding: 30px;
+            padding: 5px;
             text-align: center;
         }
 
         .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
+            font-size: 1.5em;
+            margin-bottom: 2px;
         }
 
         .header p {
@@ -101,7 +101,7 @@
             padding: 15px;
             border: 2px solid #e9ecef;
             border-radius: 10px;
-            font-size: 16px;
+            font-size: 14px;
             resize: vertical;
             min-height: 60px;
             max-height: 200px;
@@ -120,7 +120,7 @@
             border: none;
             border-radius: 10px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 14px;
             font-weight: bold;
             transition: all 0.3s ease;
         }
@@ -207,15 +207,13 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🤖 Информационный ассистент ГТИ-ОПТ</h1>
-            <p>Специалист по оборудованию для водоочистки и водоподготовки</p>
+            <h1>Информационный ассистент</h1>
         </div>
 
         <div class="chat-container">
             <div class="messages" id="messages">
                 <div class="message system-message">
-                    👋 Добро пожаловать! Я информационный ассистент компании ГТИ-ОПТ.<br>
-                    Задайте ваш вопрос о водоочистном оборудовании, и я постараюсь ответить на основе нашей базы знаний.
+                    👋 Добро пожаловать! Я информационный ассистент. Задайте ваш вопрос и я постараюсь ответить на основе базы знаний.
                 </div>
             </div>
 
@@ -230,7 +228,7 @@
                 <div class="input-container">
                     <textarea 
                         id="question" 
-                        placeholder="Введите ваш вопрос здесь... Например:&#10;• Какие фильтры вы используете для очистки воды?&#10;• Как связаться с отделом продаж?&#10;• Расскажите о вашей компании" 
+                        placeholder="Напишите ваш вопрос" 
                     ></textarea>
                     <button id="send-btn" onclick="sendMessage()">Отправить</button>
                 </div>
