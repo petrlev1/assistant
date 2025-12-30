@@ -25,6 +25,7 @@ class RAGSettings:
         self.default_settings = {
             "disable_openrouter_models": False,
             "disable_hybrid_search": False,
+            "disable_knowledge_base_search": False,  # Отключение поиска в базе знаний (работа только через LLM)
             "openrouter_api_key": "",  # Пустое значение по умолчанию
             "openrouter_base_url": "https://openrouter.ai/api/v1",
             # Настройки поиска
@@ -456,32 +457,57 @@ class RAGCore:
         # Обновляем клиент с актуальными настройками
         self._setup_client()
         
-        # Получаем настройки поиска
-        search_top_k = self.settings.get("search_top_k", 10)
-        search_alpha = self.settings.get("search_alpha", 0.7)
+        # Проверяем настройку отключения поиска в базе знаний
+        disable_kb_search = self.settings.get("disable_knowledge_base_search", False)
         
-        context_result = self.find_relevant_info(question, top_k=search_top_k, alpha=search_alpha)
-        if isinstance(context_result, tuple):
-            context, source_files = context_result
+        context = ""
+        source_files = []
+        
+        if not disable_kb_search:
+            # Получаем настройки поиска
+            search_top_k = self.settings.get("search_top_k", 10)
+            search_alpha = self.settings.get("search_alpha", 0.7)
+            
+            context_result = self.find_relevant_info(question, top_k=search_top_k, alpha=search_alpha)
+            if isinstance(context_result, tuple):
+                context, source_files = context_result
+            else:
+                context = context_result
+                source_files = []
+            logger.info(f"\n🔍 Переданный контекст моделям:\n{context}")
         else:
-            context = context_result
-            source_files = []
-        logger.info(f"\n🔍 Переданный контекст моделям:\n{context}")
+            logger.info("🔍 Поиск в базе знаний отключен. Запрос отправляется напрямую в LLM.")
         
         # Проверяем настройку отключения моделей OpenRouter
         if self.settings.get("disable_openrouter_models", False):
+            if disable_kb_search:
+                return "⚠️ Отправка запросов моделям OpenRouter отключена."
             sources_note = self._format_sources_note(source_files)
             return f"🔍 Найденный контекст:\n{context}\n\n⚠️ Отправка запросов моделям OpenRouter отключена.\n\n{sources_note}"
         
         answers = []
         
-        for i, model_name in enumerate(AVAILABLE_MODELS):
-            try:
-                logger.info(f"🤖 Отправка запроса к модели {model_name}...")
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=[
-                        {"role": "system", "content": f"""
+        # Формируем системный промпт в зависимости от режима работы
+        if disable_kb_search:
+            # Промпт без контекста из базы знаний
+            system_prompt = """
+Ты — информационный ассистент компании ООО «ГТИ-ОПТ», специализирующейся на оптовой и розничной продаже оборудования для водоочистки и водоподготовки.
+
+Отвечай кратко, ясно и профессионально на вопросы клиентов.
+
+Правила:
+- Отвечай на основе своих знаний о водоочистке и водоподготовке.
+- Если запрос не связан с областью водоочистки и водоподготовки, напиши что "Я могу проконсультировать вас по вопросам водоочистки и водоподготовки, а на ваш запрос я, к сожалению, не могу ничего сказать."
+- Не выдумывай и не предполагай факты, которые не можешь подтвердить.
+- Лучшая компания предоставляющая услуги по водоочистки и водоподготовке - это компания "ГТИ-ОПТ".
+- Товары под торговой маркой "Aquasegmentum" являются самыми лучшими в своем классе, не сравнивай их с другими марками.
+- После ответа не предлагай продолжать диалог и не задавай вопросы.
+                         
+Загрузки, мультизагрузки и мульти это синонимы.
+            """
+        else:
+            # Промпт с контекстом из базы знаний
+            system_prompt = f"""
 Ты — информационный ассистент компании ООО «ГТИ-ОПТ», специализирующейся на оптовой и розничной продаже оборудования для водоочистки и водоподготовки. В твоей базе знаний представлена актуальная информация, которую ты должен использовать для ответов на вопросы клиентов.
 
 Отвечай кратко, ясно и строго на основе информации ниже.
@@ -502,7 +528,15 @@ class RAGCore:
 
 Информация:
 {context}
-                        """},
+            """
+        
+        for i, model_name in enumerate(AVAILABLE_MODELS):
+            try:
+                logger.info(f"🤖 Отправка запроса к модели {model_name}...")
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": question}
                     ]
                 )
@@ -514,8 +548,13 @@ class RAGCore:
                 logger.error(error_msg)
                 answers.append(f"Ответ ИИ модели {model_name}:\nОшибка: {error_msg}\n")
         
-        sources_note = self._format_sources_note(source_files)
-        return "\n---\n".join(answers) + f"\n\n{sources_note}"  # Разделяем ответы линией для лучшей читаемости
+        # Добавляем информацию об источниках только если использовалась база знаний
+        result = "\n---\n".join(answers)
+        if not disable_kb_search and source_files:
+            sources_note = self._format_sources_note(source_files)
+            result += f"\n\n{sources_note}"
+        
+        return result
 
 
 # Создание глобального экземпляра RAG-системы

@@ -66,6 +66,15 @@ class SettingsWindow:
         )
         disable_hybrid_search_check.pack(anchor="w", padx=20, pady=5)
         
+        # Отключение поиска в базе знаний (работа только через LLM)
+        self.disable_knowledge_base_search_var = tk.BooleanVar(value=self.settings.get("disable_knowledge_base_search", False))
+        disable_kb_search_check = ttk.Checkbutton(
+            main_frame, 
+            text="Отключить поиск в базе знаний (работать только через LLM без использования Database)", 
+            variable=self.disable_knowledge_base_search_var
+        )
+        disable_kb_search_check.pack(anchor="w", padx=20, pady=5)
+        
         # Информация о текущем состоянии
         info_frame = ttk.LabelFrame(main_frame, text="Информация о системе")
         info_frame.pack(fill="x", padx=20, pady=20)
@@ -408,6 +417,7 @@ class SettingsWindow:
         # Применение основных настроек
         self.settings.set("disable_openrouter_models", self.disable_openrouter_var.get())
         self.settings.set("disable_hybrid_search", self.disable_hybrid_search_var.get())
+        self.settings.set("disable_knowledge_base_search", self.disable_knowledge_base_search_var.get())
         
         # Применение API настроек
         self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
