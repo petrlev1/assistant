@@ -13,6 +13,7 @@ import PyPDF2
 import logging
 import json
 import docx
+import openpyxl
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -291,6 +292,65 @@ class RAGCore:
                 #     #     # ...
                 #     # except Exception as e2:
                 #     #     logger.error(f"❌ Ошибка при обработке DOC файла {file_path} с помощью textract: {e2}")
+            
+            # --- НОВЫЙ БЛОК ДЛЯ .xlsx и .xls ---
+            elif file_path.lower().endswith((".xlsx", ".xls")):
+                try:
+                    logger.info(f"📄 Обработка Excel файла: {os.path.basename(file_path)}")
+                    # openpyxl поддерживает только .xlsx формат
+                    # Для .xls файлов будет выброшено исключение, которое будет обработано в блоке except
+                    workbook = openpyxl.load_workbook(file_path, data_only=True)
+                    xlsx_knowledge = []
+                    
+                    # Обрабатываем каждый лист в книге
+                    for sheet_name in workbook.sheetnames:
+                        sheet = workbook[sheet_name]
+                        logger.info(f"📊 Обработка листа: {sheet_name}")
+                        
+                        # Получаем заголовки из первой строки
+                        headers = []
+                        if sheet.max_row > 0:
+                            first_row = sheet[1]
+                            headers = [str(cell.value).strip() if cell.value else "" for cell in first_row]
+                            # Удаляем пустые заголовки
+                            headers = [h for h in headers if h and not h.lower().startswith("unnamed")]
+                        
+                        # Обрабатываем каждую строку данных (начиная со второй)
+                        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=False), start=2):
+                            row_data = {}
+                            for col_idx, cell in enumerate(row):
+                                if col_idx < len(headers) and headers[col_idx]:
+                                    cell_value = cell.value
+                                    if cell_value is not None:
+                                        row_data[headers[col_idx]] = str(cell_value).strip()
+                            
+                            # Формируем запись из данных строки
+                            if row_data:
+                                parts = []
+                                for key, value in row_data.items():
+                                    if value:
+                                        parts.append(f"{key} — {value}")
+                                
+                                if parts:
+                                    # Формируем запись аналогично CSV
+                                    if "Проект" in row_data and "Ответственный" in row_data:
+                                        entry = f"Проект {row_data['Проект']} находится в статусе «{row_data.get('Статус', 'не указан')}». Ответственный — {row_data['Ответственный']}."
+                                    elif "Имя" in row_data and "Должность" in row_data:
+                                        entry = f"{row_data['Имя']} работает {row_data['Должность']}. Контакт: email — {row_data.get('Email', 'не указан')}, телефон — {row_data.get('Телефон', 'не указан')}."
+                                    else:
+                                        entry = f"[{os.path.basename(file_path)}, лист '{sheet_name}'] В компании Аквесегмент: " + ", ".join(parts) + "."
+                                    xlsx_knowledge.append(entry)
+                    
+                    if xlsx_knowledge:
+                        logger.info(f"✅ Загружено {len(xlsx_knowledge)} строк из {os.path.basename(file_path)}")
+                        all_knowledge[file_path] = xlsx_knowledge
+                    else:
+                        logger.warning(f"⚠️ Файл {os.path.basename(file_path)} не содержит данных")
+                    
+                    workbook.close()
+                        
+                except Exception as e:
+                    logger.error(f"❌ Ошибка при обработке Excel файла {file_path}: {e}")
                 
         except Exception as e:
             logger.error(f"❌ Ошибка при обработке файла {file_path}: {e}")
