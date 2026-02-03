@@ -1,4 +1,6 @@
 DataBase.txt
 Database/
 embeddings_cache/
+rag_mod/
+__pycache__/
 rag_settings.json
