@@ -95,32 +95,30 @@ class TelegramRAGBot:
             # Уведомление о том, что сообщение обрабатывается
             await update.message.chat.send_action("typing")
             
-            # Обработка запроса через RAG-систему
-            answer = await asyncio.get_event_loop().run_in_executor(
-                None, self.rag_system.ask_model, user_message
-            )
+            # Обработка запроса через RAG-систему (в пуле потоков, т.к. ask_model блокирующий)
+            loop = asyncio.get_running_loop()
+            answer = await loop.run_in_executor(None, self.rag_system.ask_model, user_message)
             
-            # Форматирование ответа для Telegram
+            # Отправляем ответ без parse_mode, чтобы спецсимволы в тексте (_, *, ` и т.д.) не ломали Telegram API
             if len(answer) > 4000:  # Ограничение Telegram на длину сообщения
-                # Разбиваем длинный ответ на части
                 chunks = [answer[i:i+4000] for i in range(0, len(answer), 4000)]
                 for i, chunk in enumerate(chunks):
-                    if i == 0:
-                        await update.message.reply_text(f"📝 *Ответ (часть {i+1}/{len(chunks)}):*\n\n{chunk}", parse_mode='Markdown')
-                    else:
-                        await update.message.reply_text(f"📝 *Продолжение (часть {i+1}/{len(chunks)}):*\n\n{chunk}", parse_mode='Markdown')
+                    prefix = f"📝 Ответ (часть {i+1}/{len(chunks)}):\n\n" if i == 0 else f"📝 Продолжение (часть {i+1}/{len(chunks)}):\n\n"
+                    await update.message.reply_text(prefix + chunk)
             else:
-                await update.message.reply_text(f"📝 *Ответ:*\n\n{answer}", parse_mode='Markdown')
+                await update.message.reply_text(f"📝 Ответ:\n\n{answer}")
             
             logger.info(f"Ответ отправлен пользователю {user.first_name}")
             
         except Exception as e:
             logger.error(f"Ошибка при обработке сообщения от {user.first_name}: {e}", exc_info=True)
+            err_msg = str(e).replace("_", " ").strip() or "Неизвестная ошибка"
+            if len(err_msg) > 200:
+                err_msg = err_msg[:200] + "..."
             error_text = (
                 "❌ Произошла ошибка при обработке вашего запроса.\n\n"
-                "Пожалуйста, попробуйте:\n"
-                "1. Переформулировать вопрос\n"
-                "2. Попробовать позже"
+                f"Детали: {err_msg}\n\n"
+                "Попробуйте переформулировать вопрос или повторить позже."
             )
             await update.message.reply_text(error_text)
 

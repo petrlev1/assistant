@@ -138,6 +138,54 @@
             box-shadow: none;
         }
 
+        .telegram-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 20px;
+            background: #f0f4f8;
+            border-bottom: 1px solid #e9ecef;
+            flex-wrap: wrap;
+        }
+        .telegram-label { font-weight: 600; color: #2c3e50; }
+        .telegram-status { color: #666; font-size: 0.95em; min-width: 120px; }
+        .telegram-token {
+            flex: 1;
+            min-width: 180px;
+            max-width: 320px;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        .telegram-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .telegram-btn-start {
+            background: linear-gradient(135deg, #27ae60, #219a52);
+            color: white;
+        }
+        .telegram-btn-start:hover:not(:disabled) {
+            background: linear-gradient(135deg, #219a52, #1e8449);
+        }
+        .telegram-btn-stop {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: white;
+        }
+        .telegram-btn-stop:hover:not(:disabled) {
+            background: linear-gradient(135deg, #c0392b, #a93226);
+        }
+        .telegram-btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            opacity: 0.8;
+        }
+
         .status {
             text-align: center;
             padding: 10px;
@@ -208,6 +256,14 @@
     <div class="container">
         <div class="header">
             <h1>Информационный ассистент</h1>
+        </div>
+
+        <div class="telegram-bar">
+            <span class="telegram-label">🤖 Telegram-бот:</span>
+            <span class="telegram-status" id="telegram-status">—</span>
+            <input type="password" id="telegram-token" class="telegram-token" placeholder="Токен бота (если ещё не сохранён)" autocomplete="off">
+            <button type="button" id="telegram-start-btn" class="telegram-btn telegram-btn-start">Запустить бота</button>
+            <button type="button" id="telegram-stop-btn" class="telegram-btn telegram-btn-stop" disabled>Остановить бота</button>
         </div>
 
         <div class="chat-container">
@@ -343,11 +399,81 @@
             }
         });
 
+        // === Telegram-бот (дублирование функционала из run_gui.py) ===
+        function telegramRefreshStatus() {
+            fetch('/telegram/status')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    var statusEl = document.getElementById('telegram-status');
+                    var startBtn = document.getElementById('telegram-start-btn');
+                    var stopBtn = document.getElementById('telegram-stop-btn');
+                    if (data.running) {
+                        statusEl.textContent = 'Бот запущен';
+                        statusEl.style.color = 'green';
+                        startBtn.disabled = true;
+                        stopBtn.disabled = false;
+                    } else {
+                        statusEl.textContent = data.has_token ? 'Бот не запущен' : 'Токен не задан';
+                        statusEl.style.color = data.has_token ? '#666' : '#e74c3c';
+                        startBtn.disabled = false;
+                        stopBtn.disabled = true;
+                    }
+                })
+                .catch(function() {
+                    document.getElementById('telegram-status').textContent = 'Ошибка запроса';
+                });
+        }
+        function telegramStart() {
+            var tokenInput = document.getElementById('telegram-token');
+            var token = tokenInput ? tokenInput.value.trim() : '';
+            var startBtn = document.getElementById('telegram-start-btn');
+            startBtn.disabled = true;
+            fetch('/telegram/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(token ? { token: token } : {})
+            })
+                .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+                .then(function(res) {
+                    if (res.ok && res.data.success) {
+                        telegramRefreshStatus();
+                        if (token) tokenInput.value = '';
+                    } else {
+                        alert(res.data.error || res.data.message || 'Ошибка запуска');
+                        telegramRefreshStatus();
+                    }
+                })
+                .catch(function(e) {
+                    alert('Ошибка сети: ' + e.message);
+                    telegramRefreshStatus();
+                });
+        }
+        function telegramStop() {
+            var stopBtn = document.getElementById('telegram-stop-btn');
+            stopBtn.disabled = true;
+            fetch('/telegram/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    telegramRefreshStatus();
+                    if (!data.success && data.error) alert(data.error);
+                })
+                .catch(function(e) {
+                    alert('Ошибка сети: ' + e.message);
+                    telegramRefreshStatus();
+                });
+        }
+
         // Инициализация
         document.addEventListener('DOMContentLoaded', function() {
             // Проверяем статус системы при загрузке страницы
             checkStatus();
-            
+            // Статус Telegram-бота
+            telegramRefreshStatus();
+            setInterval(telegramRefreshStatus, 5000);
+
+            document.getElementById('telegram-start-btn').addEventListener('click', telegramStart);
+            document.getElementById('telegram-stop-btn').addEventListener('click', telegramStop);
+
             // Фокус на поле ввода
             document.getElementById('question').focus();
         });

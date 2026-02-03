@@ -2,7 +2,8 @@
 from flask import Flask, render_template, request, jsonify
 import threading
 import logging
-from rag_core import get_rag_system
+import asyncio
+from rag_core import get_rag_system, RAGSettings
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -12,6 +13,11 @@ app = Flask(__name__)
 
 # Глобальная переменная для RAG-системы
 rag_system = None
+
+# Состояние Telegram-бота (общее с run_gui.py)
+telegram_bot = None
+telegram_thread = None
+telegram_running = False
 
 def initialize_rag_system():
     """Инициализация RAG-системы в отдельном потоке"""
@@ -61,6 +67,86 @@ def status():
     """Проверка статуса системы"""
     global rag_system
     return jsonify({'initialized': rag_system is not None})
+
+
+def _run_telegram_bot():
+    """Запуск Telegram-бота в отдельном потоке (как в run_gui.py)"""
+    global telegram_bot, telegram_running
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        telegram_bot.run()
+    except Exception as e:
+        logger.error(f"Ошибка в работе Telegram бота: {e}", exc_info=True)
+    finally:
+        telegram_running = False
+
+
+@app.route('/telegram/status')
+def telegram_status():
+    """Статус Telegram-бота: запущен ли, есть ли сохранённый токен"""
+    global telegram_running
+    settings = RAGSettings()
+    token = (settings.get("telegram_bot_token") or "").strip()
+    has_token = bool(token and token != "YOUR_BOT_TOKEN_HERE" and len(token) > 20)
+    return jsonify({
+        'running': telegram_running,
+        'has_token': has_token,
+    })
+
+
+@app.route('/telegram/start', methods=['POST'])
+def telegram_start():
+    """Запуск Telegram-бота. Токен можно передать в body или использовать сохранённый."""
+    global telegram_bot, telegram_thread, telegram_running
+
+    if telegram_running:
+        return jsonify({'success': True, 'message': 'Бот уже запущен'})
+
+    data = request.get_json(silent=True) or {}
+    token = (data.get('token') or "").strip()
+    if not token:
+        settings = RAGSettings()
+        token = (settings.get("telegram_bot_token") or "").strip()
+
+    if not token or token == "YOUR_BOT_TOKEN_HERE" or len(token) < 20:
+        return jsonify({'success': False, 'error': 'Введите валидный Telegram Bot Token'}), 400
+
+    try:
+        settings = RAGSettings()
+        settings.set("telegram_bot_token", token)
+        settings.save_settings()
+
+        from telegram_bot import TelegramRAGBot
+        telegram_bot = TelegramRAGBot(token)
+        telegram_running = True
+        telegram_thread = threading.Thread(target=_run_telegram_bot, daemon=True)
+        telegram_thread.start()
+
+        return jsonify({'success': True, 'message': 'Бот запущен. Проверьте Telegram.'})
+    except Exception as e:
+        telegram_running = False
+        logger.error(f"Ошибка запуска Telegram бота: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/telegram/stop', methods=['POST'])
+def telegram_stop():
+    """Остановка Telegram-бота"""
+    global telegram_bot, telegram_running
+
+    if not telegram_running:
+        return jsonify({'success': True, 'message': 'Бот не был запущен'})
+
+    try:
+        if telegram_bot:
+            telegram_bot.stop()
+        telegram_running = False
+        return jsonify({'success': True, 'message': 'Бот остановлен'})
+    except Exception as e:
+        logger.error(f"Ошибка остановки Telegram бота: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 def create_app():
     """Создание Flask приложения"""
