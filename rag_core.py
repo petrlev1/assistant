@@ -81,10 +81,8 @@ client = openai.OpenAI(
 
 # === Доступные модели ===
 AVAILABLE_MODELS = [
-    # "mistralai/mistral-7b-instruct:free",
-    #"openrouter/sonoma-dusk-alpha",
-    "nvidia/nemotron-nano-9b-v2:free",
-    "qwen/qwen3-30b-a3b-thinking-2507"
+    # "nvidia/nemotron-nano-9b-v2:free",
+    "qwen/qwen-plus"
 ]
 
 class RAGCore:
