@@ -95,8 +95,8 @@ pip (менеджер пакетов Python)
 ~2GB свободного места (для модели эмбеддингов)
 
 ### Шаг 1: Клонирование репозитория
-1. `git clone https://github.com/yourusername/rag-assistant.git`
-2. `cd rag-assistant`
+1. `git clone https://github.com/petrlev1/assistant.git`
+2. `cd assistant`
 
 ### Шаг 2: Создание виртуального окружения
 #### Windows:
@@ -106,7 +106,7 @@ pip (менеджер пакетов Python)
    - powershell: `.\venv\Scripts\Activate.ps1`
 #### Linux/macOS: 
 1. Создание: `python3 -m venv venv`
-2. Активация: `venv/bin/activate`
+2. Активация: `source venv/bin/activate`
 #### Деактивация виртуального окружения
 `deactivate`
 
