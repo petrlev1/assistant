@@ -118,9 +118,9 @@ class RAGCore:
         """Инициализация модели эмбеддингов"""
         try:
             logger.info("🧠 Загрузка модели...")
-            # self.model = SentenceTransformer('intfloat/multilingual-e5-large') #запуск модели эмбеддингов из интернета
+            self.model = SentenceTransformer('intfloat/multilingual-e5-large') #запуск модели эмбеддингов из интернета
             # self.model = SentenceTransformer('/workspaces/codespaces-blank/models/multilingual_e5_large') #запуск с github.com/codespaces
-            self.model = SentenceTransformer('/models/multilingual_e5_large') #запуск модели эмбеддингов локально
+            #self.model = SentenceTransformer('/models/multilingual_e5_large') #запуск модели эмбеддингов локально
             logger.info("✅ Модель загружена")
         except Exception as e:
             logger.error(f"❌ Не удалось загрузить модель: {e}")
