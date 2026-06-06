@@ -355,30 +355,131 @@ class RAGCore:
         except Exception as e:
             logger.error(f"❌ Ошибка при обработке файла {file_path}: {e}")
     
-    def _get_file_embedding_cache_path(self, file_path, knowledge_content):
-        """Генерирует путь к кэш-файлу для конкретного файла знаний"""
-        content_hash = hashlib.md5(str(sorted(knowledge_content)).encode('utf-8')).hexdigest()
+    def _get_file_embedding_cache_path(self, file_path):
+        """Генерирует путь к кэш-файлу для конкретного файла знаний (без хэша в имени)"""
         cache_dir = Path("embeddings_cache")
         cache_dir.mkdir(exist_ok=True)
         filename = Path(file_path).stem
-        cache_path = cache_dir / f"{filename}_{content_hash[:12]}.pkl"
+        # Используем только имя файла без хэша содержимого
+        cache_path = cache_dir / f"{filename}.pkl"
         return cache_path
+
+    def _get_content_hash(self, knowledge_content):
+        """Вычисляет хэш содержимого для проверки актуальности кэша"""
+        return hashlib.md5(str(sorted(knowledge_content)).encode('utf-8')).hexdigest()
+
+    def _migrate_old_cache_files(self, file_path, knowledge_content):
+        """Мигрирует старые кэш-файлы (с хэшем в имени) в новый формат (без хэша)"""
+        cache_dir = Path("embeddings_cache")
+        if not cache_dir.exists():
+            return None
+        
+        filename = Path(file_path).stem
+        current_hash = self._get_content_hash(knowledge_content)
+        
+        # Ищем старые кэш-файлы с этим именем (с хэшем в имени)
+        old_cache_files = list(cache_dir.glob(f"{filename}_*.pkl"))
+        
+        if old_cache_files:
+            # Берем самый свежий файл (по времени изменения)
+            latest_old_cache = max(old_cache_files, key=lambda p: p.stat().st_mtime)
+            logger.info(f"🔄 Найдён старый кэш-файл: {latest_old_cache.name}")
+            
+            try:
+                with open(latest_old_cache, 'rb') as f:
+                    old_embeddings = pickle.load(f)
+                
+                # Проверяем формат
+                if isinstance(old_embeddings, dict) and 'embeddings' in old_embeddings:
+                    embeddings = old_embeddings['embeddings']
+                    old_hash = old_embeddings.get('hash', 'unknown')
+                else:
+                    # Старый формат — просто эмбеддинги
+                    embeddings = old_embeddings
+                    old_hash = 'old_format'
+                
+                logger.info(f"✅ Кэш-файл мигрирован: {latest_old_cache.name} -> {filename}.pkl")
+                
+                # Удаляем старый файл
+                latest_old_cache.unlink()
+                logger.info(f"🗑️ Старый кэш-файл удалён: {latest_old_cache.name}")
+                
+                # Возвращаем эмбеддинги (они будут пересохранены в новом формате)
+                return embeddings, old_hash
+            except Exception as e:
+                logger.error(f"⚠️ Ошибка при миграции кэша {latest_old_cache}: {e}")
+        
+        return None
 
     def _load_or_create_embeddings(self, file_path, knowledge_content):
         """Загружает эмбеддинги из кэша или создает их заново"""
-        cache_path = self._get_file_embedding_cache_path(file_path, knowledge_content)
+        cache_path = self._get_file_embedding_cache_path(file_path)
+        current_hash = self._get_content_hash(knowledge_content)
         
+        # Сначала проверяем миграцию старых файлов
+        migrated_data = self._migrate_old_cache_files(file_path, knowledge_content)
+        if migrated_data:
+            embeddings, old_hash = migrated_data
+            # Проверяем, актуален ли мигрированный кэш
+            if old_hash == current_hash:
+                # Кэш актуален — сохраняем в новом формате
+                cache_data = {
+                    'hash': current_hash,
+                    'embeddings': embeddings
+                }
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(cache_data, f)
+                logger.info(f"✅ Мигрированный кэш сохранён в новом формате: {cache_path}")
+                return embeddings
+            else:
+                # Кэш устарел — пересоздаем
+                logger.info(f"⚠️ Мигрированный кэш устарел (хэш изменился), пересоздаю...")
+        
+        # Проверяем новый кэш
         if cache_path.exists():
-            logger.info(f"💾 Загрузка эмбеддингов из кэша для {os.path.basename(file_path)}...")
-            with open(cache_path, 'rb') as f:
-                embeddings = pickle.load(f)
-            logger.info(f"✅ Эмбеддинги загружены из кэша для {os.path.basename(file_path)}")
+            # Проверяем, актуален ли кэш
+            logger.info(f"💾 Проверка кэша для {os.path.basename(file_path)}...")
+            try:
+                with open(cache_path, 'rb') as f:
+                    cached_data = pickle.load(f)
+                
+                # Проверяем структуру данных (поддержка старых кэшей без хэша)
+                if isinstance(cached_data, dict) and 'hash' in cached_data and 'embeddings' in cached_data:
+                    cached_hash = cached_data['hash']
+                    embeddings = cached_data['embeddings']
+                elif isinstance(cached_data, dict) and 'hash' in cached_data:
+                    # Старый формат с только хэшем и пустыми эмбеддингами
+                    cached_hash = cached_data['hash']
+                    embeddings = None
+                else:
+                    # Очень старый формат без хэша — пересоздаем
+                    logger.info(f"⚠️ Старый формат кэша для {os.path.basename(file_path)}, пересоздаю...")
+                    embeddings = None
+                    cached_hash = None
+            except Exception as e:
+                logger.error(f"⚠️ Ошибка при чтении кэша {cache_path}: {e}")
+                embeddings = None
+                cached_hash = None
         else:
+            cached_hash = None
+            embeddings = None
+        
+        # Если кэш не существует или неактуален — создаем заново
+        if embeddings is None or cached_hash != current_hash:
             logger.info(f"🧠 Создание эмбеддингов для {os.path.basename(file_path)}...")
             embeddings = self.model.encode(knowledge_content, convert_to_tensor=True)
+            
+            # Сохраняем эмбеддинги вместе с хэшем
+            cache_data = {
+                'hash': current_hash,
+                'embeddings': embeddings
+            }
             with open(cache_path, 'wb') as f:
-                pickle.dump(embeddings, f)
-            logger.info(f"✅ Эмбеддинги сохранены в кэш: {cache_path}")
+                pickle.dump(cache_data, f)
+            
+            logger.info(f"✅ Эмбеддинги сохранены в кэш: {cache_path} (хэш: {current_hash[:12]})")
+        else:
+            logger.info(f"✅ Эмбеддинги загружены из кэша для {os.path.basename(file_path)} (хэш совпадает: {current_hash[:12]})")
         
         return embeddings
     
