@@ -5,6 +5,7 @@ import sys
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from rag_core import get_rag_system
+from chat_logger import get_chat_logger
 
 # Настройка логирования
 logging.basicConfig(
@@ -12,6 +13,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Инициализация логгера чата
+chat_logger = get_chat_logger()
 
 class TelegramRAGBot:
     def __init__(self, bot_token=None):
@@ -48,6 +52,11 @@ class TelegramRAGBot:
         await update.message.reply_text(welcome_message)
         logger.info(f"Пользователь {user.first_name} (@{user.username}) начал диалог")
 
+        # Логирование в файл чата
+        chat_logger.log_command(user.first_name, user.id, "start", update.effective_chat.id)
+        chat_logger.log_message(user.first_name, user.id, "/start", is_bot=False, chat_id=update.effective_chat.id)
+        chat_logger.log_message("Бот", 0, welcome_message, is_bot=True, chat_id=update.effective_chat.id)
+
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /help"""
         help_text = (
@@ -71,6 +80,12 @@ class TelegramRAGBot:
         await update.message.reply_text(help_text, parse_mode='Markdown')
         logger.info(f"Пользователь {update.effective_user.first_name} запросил помощь")
 
+        # Логирование в файл чата
+        user = update.effective_user
+        chat_logger.log_command(user.first_name, user.id, "help", update.effective_chat.id)
+        chat_logger.log_message(user.first_name, user.id, "/help", is_bot=False, chat_id=update.effective_chat.id)
+        chat_logger.log_message("Бот", 0, help_text, is_bot=True, chat_id=update.effective_chat.id)
+
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /stats"""
         user = update.effective_user
@@ -84,12 +99,20 @@ class TelegramRAGBot:
         await update.message.reply_text(stats_text, parse_mode='Markdown')
         logger.info(f"Пользователь {user.first_name} запросил статистику")
 
+        # Логирование в файл чата
+        chat_logger.log_command(user.first_name, user.id, "stats", update.effective_chat.id)
+        chat_logger.log_message(user.first_name, user.id, "/stats", is_bot=False, chat_id=update.effective_chat.id)
+        chat_logger.log_message("Бот", 0, stats_text, is_bot=True, chat_id=update.effective_chat.id)
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик текстовых сообщений"""
         user_message = update.message.text
         user = update.effective_user
         
         logger.info(f"Получено сообщение от {user.first_name} (@{user.username}, ID: {user.id}): {user_message}")
+        
+        # Логирование сообщения пользователя в файл чата
+        chat_logger.log_message(user.first_name, user.id, user_message, is_bot=False, chat_id=update.effective_chat.id)
         
         try:
             # Уведомление о том, что сообщение обрабатывается
@@ -104,9 +127,15 @@ class TelegramRAGBot:
                 chunks = [answer[i:i+4000] for i in range(0, len(answer), 4000)]
                 for i, chunk in enumerate(chunks):
                     prefix = f"📝 Ответ (часть {i+1}/{len(chunks)}):\n\n" if i == 0 else f"📝 Продолжение (часть {i+1}/{len(chunks)}):\n\n"
-                    await update.message.reply_text(prefix + chunk)
+                    full_chunk = prefix + chunk
+                    await update.message.reply_text(full_chunk)
+                    # Логирование части ответа
+                    chat_logger.log_message("Бот", 0, full_chunk, is_bot=True, chat_id=update.effective_chat.id)
             else:
-                await update.message.reply_text(f"📝 Ответ:\n\n{answer}")
+                full_answer = f"📝 Ответ:\n\n{answer}"
+                await update.message.reply_text(full_answer)
+                # Логирование ответа бота
+                chat_logger.log_message("Бот", 0, full_answer, is_bot=True, chat_id=update.effective_chat.id)
             
             logger.info(f"Ответ отправлен пользователю {user.first_name}")
             
@@ -122,15 +151,24 @@ class TelegramRAGBot:
             )
             await update.message.reply_text(error_text)
 
+            # Логирование ошибки
+            chat_logger.log_error(user.first_name, user.id, str(e), user_message)
+            chat_logger.log_message("Бот", 0, error_text, is_bot=True, chat_id=update.effective_chat.id)
+
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик документов (временно не реализован)"""
         user = update.effective_user
-        await update.message.reply_text(
+        response_text = (
             "📄 Спасибо за отправленный документ!\n\n"
             "⚠ *Внимание:* В текущей версии бот не может обрабатывать загруженные документы.\n"
             "Для добавления информации в базу знаний обратитесь к администратору системы."
         )
+        await update.message.reply_text(response_text)
         logger.info(f"Пользователь {user.first_name} отправил документ (не обработан)")
+
+        # Логирование в файл чата
+        chat_logger.log_message(user.first_name, user.id, "[Документ]", is_bot=False, chat_id=update.effective_chat.id)
+        chat_logger.log_message("Бот", 0, response_text, is_bot=True, chat_id=update.effective_chat.id)
 
     async def post_init(self, application: Application) -> None:
         """Инициализация бота после запуска"""

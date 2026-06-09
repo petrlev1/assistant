@@ -4,10 +4,14 @@ import threading
 import logging
 import asyncio
 from rag_core import get_rag_system, RAGSettings
+from chat_logger import get_chat_logger
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Инициализация логгера чата
+chat_logger = get_chat_logger()
 
 app = Flask(__name__)
 
@@ -43,6 +47,7 @@ def ask_question():
         # Получаем вопрос из запроса
         data = request.get_json()
         question = data.get('question', '').strip()
+        user_name = data.get('user_name', 'Пользователь')
         
         if not question:
             return jsonify({'error': 'Пустой вопрос'}), 400
@@ -53,8 +58,15 @@ def ask_question():
         
         # Получаем ответ от RAG-системы
         logger.info(f"Получен вопрос: {question}")
+        
+        # Логирование вопроса в файл чата
+        chat_logger.log_message(user_name, 0, question, is_bot=False)
+        
         answer = rag_system.ask_model(question)
         logger.info("Ответ сгенерирован успешно")
+        
+        # Логирование ответа в файл чата
+        chat_logger.log_message("Бот", 0, answer, is_bot=True)
         
         return jsonify({'answer': answer})
         
