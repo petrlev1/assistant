@@ -491,6 +491,14 @@ class RAGCore:
             # Загрузка знаний
             self.all_knowledge_dict = self.load_knowledge_from_txt()
             
+            # Получаем список текущих файлов (по имени без пути)
+            current_file_names = set()
+            for file_path in self.all_knowledge_dict.keys():
+                current_file_names.add(Path(file_path).stem)
+            
+            # Удаляем кэш-файлы для удалённых файлов
+            self._cleanup_orphaned_cache(current_file_names)
+            
             # Объединение знаний
             self.my_knowledge = []
             self.fragment_sources = []
@@ -531,6 +539,27 @@ class RAGCore:
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки базы знаний: {e}")
             return False
+    
+    def _cleanup_orphaned_cache(self, current_file_names):
+        """Удаляет кэш-файлы для файлов, которых больше нет в базе знаний"""
+        cache_dir = Path("embeddings_cache")
+        if not cache_dir.exists():
+            return
+        
+        # Получаем список всех кэш-файлов
+        cache_files = list(cache_dir.glob("*.pkl"))
+        
+        for cache_file in cache_files:
+            # Извлекаем имя файла без расширения
+            cache_filename = cache_file.stem
+            
+            # Если файла нет в текущей базе знаний — удаляем кэш
+            if cache_filename not in current_file_names:
+                try:
+                    cache_file.unlink()
+                    logger.info(f"🗑️ Удалён orphaned кэш-файл: {cache_file.name}")
+                except Exception as e:
+                    logger.error(f"⚠️ Ошибка при удалении кэш-файла {cache_file.name}: {e}")
     
     def _get_source_files(self, indices):
         """Возвращает уникальные названия файлов для указанных индексов фрагментов"""
