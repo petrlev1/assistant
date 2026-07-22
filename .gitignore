@@ -5,3 +5,4 @@ rag_mod/
 __pycache__/
 chat_logs/
 rag_settings.json
+venv/
