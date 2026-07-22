@@ -24,11 +24,13 @@ class RAGSettings:
     def __init__(self):
         self.settings_file = "rag_settings.json"
         self.default_settings = {
-            "disable_openrouter_models": False,
+            "disable_llm_models": False,
             "disable_hybrid_search": False,
             "disable_knowledge_base_search": False,  # Отключение поиска в базе знаний (работа только через LLM)
-            "openrouter_api_key": "",  # Пустое значение по умолчанию
-            "openrouter_base_url": "https://openrouter.ai/api/v1",
+            "llm_api_key": "",  # Пустое значение по умолчанию
+            "llm_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            "llm_provider": "DashScope",
+            "llm_model": "deepseek-v4-flash",
             # Настройки поиска
             "search_top_k": 10,
             "search_alpha": 0.7,
@@ -71,18 +73,17 @@ class RAGSettings:
         """Установка значения настройки"""
         self.settings[key] = value
 
-# === Настройка клиента OpenRouter ===
+# === Настройка клиента LLM ===
 # Создаем экземпляр настроек для инициализации клиента
 settings = RAGSettings()
 client = openai.OpenAI(
-    base_url=settings.get("openrouter_base_url", "https://openrouter.ai/api/v1"),
-    api_key=settings.get("openrouter_api_key", "")  # Получаем ключ из файла настроек
+    base_url=settings.get("llm_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+    api_key=settings.get("llm_api_key", "")  # Получаем ключ из файла настроек
 )
 
 # === Доступные модели ===
 AVAILABLE_MODELS = [
-    # "nvidia/nemotron-nano-9b-v2:free",
-    "qwen/qwen-plus"
+    "deepseek-v4-flash"
 ]
 
 class RAGCore:
@@ -107,11 +108,11 @@ class RAGCore:
         self.reload_knowledge_base()
         
     def _setup_client(self):
-        """Инициализация клиента OpenRouter с текущими настройками"""
+        """Инициализация клиента LLM с текущими настройками"""
         global client
         client = openai.OpenAI(
-            base_url=self.settings.get("openrouter_base_url", "https://openrouter.ai/api/v1"),
-            api_key=self.settings.get("openrouter_api_key", "")
+            base_url=self.settings.get("llm_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+            api_key=self.settings.get("llm_api_key", "")
         )
     
     def _setup_model(self):
@@ -668,12 +669,12 @@ class RAGCore:
         else:
             logger.info("🔍 Поиск в базе знаний отключен. Запрос отправляется напрямую в LLM.")
         
-        # Проверяем настройку отключения моделей OpenRouter
-        if self.settings.get("disable_openrouter_models", False):
+        # Проверяем настройку отключения моделей LLM
+        if self.settings.get("disable_llm_models", False):
             if disable_kb_search:
-                return "⚠️ Отправка запросов моделям OpenRouter отключена."
+                return "⚠️ Отправка запросов к LLM моделям отключена."
             sources_note = self._format_sources_note(source_files)
-            return f"🔍 Найденный контекст:\n{context}\n\n⚠️ Отправка запросов моделям OpenRouter отключена.\n\n{sources_note}"
+            return f"🔍 Найденный контекст:\n{context}\n\n⚠️ Отправка запросов к LLM моделям отключена.\n\n{sources_note}"
         
         answers = []
         
@@ -707,22 +708,24 @@ class RAGCore:
         system_prompt = base_prompt + context_section
         
         for i, model_name in enumerate(AVAILABLE_MODELS):
+            # Используем модель из настроек если она задана
+            active_model = self.settings.get("llm_model", model_name)
             try:
-                logger.info(f"🤖 Отправка запроса к модели {model_name}...")
+                logger.info(f"🤖 Отправка запроса к модели {active_model}...")
                 response = client.chat.completions.create(
-                    model=model_name,
+                    model=active_model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": question}
                     ]
                 )
                 answer = response.choices[0].message.content.strip()
-                answers.append(f"Ответ ИИ модели {model_name}:\n{answer}\n")
-                logger.info(f"✅ Ответ получен от модели {model_name}")
+                answers.append(f"Ответ ИИ модели {active_model}:\n{answer}\n")
+                logger.info(f"✅ Ответ получен от модели {active_model}")
             except Exception as e:
-                error_msg = f"❌ Ошибка при обращении к модели {model_name}: {e}"
+                error_msg = f"❌ Ошибка при обращении к модели {active_model}: {e}"
                 logger.error(error_msg)
-                answers.append(f"Ответ ИИ модели {model_name}:\nОшибка: {error_msg}\n")
+                answers.append(f"Ответ ИИ модели {active_model}:\nОшибка: {error_msg}\n")
         
         # Добавляем информацию об источниках только если использовалась база знаний
         result = "\n---\n".join(answers)

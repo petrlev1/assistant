@@ -48,14 +48,14 @@ class SettingsWindow:
         # === Основные настройки ===
         ttk.Label(main_frame, text="Основные настройки системы:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
         
-        # Отключение моделей OpenRouter
-        self.disable_openrouter_var = tk.BooleanVar(value=self.settings.get("disable_openrouter_models", False))
-        disable_openrouter_check = ttk.Checkbutton(
+        # Отключение моделей LLM
+        self.disable_llm_var = tk.BooleanVar(value=self.settings.get("disable_llm_models", False))
+        disable_llm_check = ttk.Checkbutton(
             main_frame, 
-            text="Отключить модели OpenRouter (только поиск без генерации)", 
-            variable=self.disable_openrouter_var
+            text="Отключить LLM модели (только поиск без генерации)", 
+            variable=self.disable_llm_var
         )
-        disable_openrouter_check.pack(anchor="w", padx=20, pady=5)
+        disable_llm_check.pack(anchor="w", padx=20, pady=5)
         
         # Отключение гибридного поиска
         self.disable_hybrid_search_var = tk.BooleanVar(value=self.settings.get("disable_hybrid_search", False))
@@ -114,17 +114,29 @@ class SettingsWindow:
         ttk.Label(search_frame, text="Количество фрагментов при отключенном гибридном поиске (10-500)", foreground="gray").pack(anchor="w", padx=20)
         
         # === API настройки ===
-        ttk.Label(api_frame, text="Настройки OpenRouter API:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+        ttk.Label(api_frame, text="Настройки LLM API:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+        
+        # Провайдер
+        ttk.Label(api_frame, text="Провайдер:").pack(anchor="w", padx=20, pady=(5, 0))
+        self.provider_var = tk.StringVar(value=self.settings.get("llm_provider", "DashScope"))
+        provider_combo = ttk.Combobox(api_frame, textvariable=self.provider_var, values=["DashScope", "OpenRouter"], state="readonly", width=47)
+        provider_combo.pack(fill="x", padx=20, pady=5)
+        
+        # Модель
+        ttk.Label(api_frame, text="Модель:").pack(anchor="w", padx=20, pady=(5, 0))
+        self.model_var = tk.StringVar(value=self.settings.get("llm_model", "deepseek-v4-flash"))
+        model_combo = ttk.Combobox(api_frame, textvariable=self.model_var, values=["deepseek-v4-flash", "qwen-plus", "qwen-turbo"], state="readonly", width=47)
+        model_combo.pack(fill="x", padx=20, pady=5)
         
         # Базовый URL
         ttk.Label(api_frame, text="Base URL:").pack(anchor="w", padx=20, pady=(5, 0))
-        self.base_url_var = tk.StringVar(value=self.settings.get("openrouter_base_url", "https://openrouter.ai/api/v1"))
+        self.base_url_var = tk.StringVar(value=self.settings.get("llm_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"))
         base_url_entry = ttk.Entry(api_frame, textvariable=self.base_url_var, width=50)
         base_url_entry.pack(fill="x", padx=20, pady=5)
         
         # API ключ
         ttk.Label(api_frame, text="API ключ:").pack(anchor="w", padx=20, pady=(10, 0))
-        self.api_key_var = tk.StringVar(value=self.settings.get("openrouter_api_key", ""))
+        self.api_key_var = tk.StringVar(value=self.settings.get("llm_api_key", ""))
         api_key_entry = ttk.Entry(api_frame, textvariable=self.api_key_var, width=50, show="*")
         api_key_entry.pack(fill="x", padx=20, pady=5)
         
@@ -415,13 +427,15 @@ class SettingsWindow:
             self.max_context_var.set("100")
         
         # Применение основных настроек
-        self.settings.set("disable_openrouter_models", self.disable_openrouter_var.get())
+        self.settings.set("disable_llm_models", self.disable_llm_var.get())
         self.settings.set("disable_hybrid_search", self.disable_hybrid_search_var.get())
         self.settings.set("disable_knowledge_base_search", self.disable_knowledge_base_search_var.get())
         
         # Применение API настроек
-        self.settings.set("openrouter_base_url", self.base_url_var.get().strip())
-        self.settings.set("openrouter_api_key", self.api_key_var.get().strip())
+        self.settings.set("llm_provider", self.provider_var.get().strip())
+        self.settings.set("llm_model", self.model_var.get().strip())
+        self.settings.set("llm_base_url", self.base_url_var.get().strip())
+        self.settings.set("llm_api_key", self.api_key_var.get().strip())
         
         # Применение Telegram настроек
         self.settings.set("telegram_bot_token", self.telegram_token_var.get().strip())
