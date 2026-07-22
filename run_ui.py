@@ -22,6 +22,10 @@ PROVIDERS = {
     }
 }
 
+# Путь к Caddy
+CADDY_PATH = r"C:\Users\Petrlev\AppData\Local\Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe"
+CADDY_DIR = r"C:\all\proaibro_runway\proaibro_runway"
+
 class LauncherUI:
     def __init__(self, root):
         self.root = root
@@ -35,6 +39,7 @@ class LauncherUI:
         # Хранилище запущенных процессов
         self.web_process = None
         self.gui_process = None
+        self.caddy_process = None
         
         # Загрузка текущих настроек
         self.settings = self.load_settings()
@@ -186,6 +191,31 @@ class LauncherUI:
         model = self.model_var.get()
         self.save_settings(provider, model)
         self.status_label.config(text=f"✅ {provider} / {model}", fg="green")
+    
+    def start_caddy(self):
+        """Запуск Caddy reverse proxy"""
+        if self.caddy_process and self.caddy_process.poll() is None:
+            return  # Уже запущен
+        
+        try:
+            self.caddy_process = subprocess.Popen(
+                [CADDY_PATH, "run"],
+                cwd=CADDY_DIR,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception as e:
+            messagebox.showwarning("Предупреждение", f"Не удалось запустить Caddy:\n{e}")
+    
+    def stop_caddy(self):
+        """Остановка Caddy"""
+        if self.caddy_process and self.caddy_process.poll() is None:
+            self.caddy_process.terminate()
+            try:
+                self.caddy_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.caddy_process.kill()
+            self.caddy_process = None
         
     def launch_web(self):
         """Запуск веб-интерфейса"""
@@ -197,6 +227,9 @@ class LauncherUI:
             # Сохраняем выбранные настройки перед запуском
             self.apply_llm_settings()
             
+            # Запускаем Caddy
+            self.start_caddy()
+            
             python_exe = sys.executable
             script_path = os.path.join(self.project_dir, "run_web.py")
             
@@ -206,7 +239,7 @@ class LauncherUI:
             )
             
             self.status_label.config(
-                text=f"✅ Веб-интерфейс запущен (порт 8077) | {self.provider_var.get()} / {self.model_var.get()}", 
+                text=f"✅ Веб + Caddy запущены | {self.provider_var.get()} / {self.model_var.get()}", 
                 fg="green"
             )
             
@@ -214,7 +247,7 @@ class LauncherUI:
             def open_browser():
                 import time
                 time.sleep(2)
-                webbrowser.open("http://localhost:8077")
+                webbrowser.open("https://assistant.proaibro.ru")
             
             threading.Thread(target=open_browser, daemon=True).start()
             
@@ -270,6 +303,10 @@ class LauncherUI:
                 self.gui_process.kill()
             self.gui_process = None
             stopped.append("GUI настроек")
+        
+        if self.caddy_process and self.caddy_process.poll() is None:
+            self.stop_caddy()
+            stopped.append("Caddy")
             
         if stopped:
             self.status_label.config(
@@ -285,6 +322,7 @@ class LauncherUI:
             self.web_process.terminate()
         if self.gui_process and self.gui_process.poll() is None:
             self.gui_process.terminate()
+        self.stop_caddy()
         self.root.destroy()
 
 def main():
