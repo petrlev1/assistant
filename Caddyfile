@@ -1,0 +1,4 @@
+assistant.proaibro.ru {
+    # ИИ-ассистент (RAG-система) — порт 8077
+    reverse_proxy localhost:8077
+}

@@ -24,7 +24,7 @@ PROVIDERS = {
 
 # Путь к Caddy
 CADDY_PATH = r"C:\Users\Petrlev\AppData\Local\Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe"
-CADDY_DIR = r"C:\all\proaibro_runway\proaibro_runway"
+CADDY_DIR = r"C:\peter\ai_bot\automation\assistant"
 
 class LauncherUI:
     def __init__(self, root):
