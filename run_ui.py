@@ -128,7 +128,6 @@ class LauncherUI:
         self._create_search_tab()
         self._create_api_tab()
         self._create_telegram_tab()
-        self._create_chat_tab()
 
         # === Блок выбора режима запуска веб-интерфейса ===
         web_mode_frame = ttk.LabelFrame(self.root, text="🌐 Режим запуска веб-интерфейса", padding=5)
@@ -477,90 +476,7 @@ class LauncherUI:
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка остановки Telegram бота: {e}")
 
-    # =====================================================================
-    # Вкладка: Чат
-    # =====================================================================
-    def _create_chat_tab(self):
-        """Вкладка чата для тестирования RAG"""
-        frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text="Чат")
-
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(0, weight=1)
-
-        # Фрейм для сообщений
-        messages_frame = ttk.Frame(frame)
-        messages_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 0))
-        messages_frame.columnconfigure(0, weight=1)
-        messages_frame.rowconfigure(0, weight=1)
-
-        self.messages_text = scrolledtext.ScrolledText(messages_frame, wrap=tk.WORD, state='disabled')
-        self.messages_text.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        self.messages_text.tag_config("user", foreground="blue")
-        self.messages_text.tag_config("assistant", foreground="green")
-        self.messages_text.tag_config("system", foreground="orange")
-
-        # Фрейм для ввода
-        input_frame = ttk.Frame(frame)
-        input_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
-        input_frame.columnconfigure(0, weight=1)
-
-        self.question_text = scrolledtext.ScrolledText(input_frame, wrap=tk.WORD, height=4)
-        self.question_text.grid(row=0, column=0, sticky="ew", padx=(0, 5), pady=5)
-        self.question_text.bind("<Return>", self.send_message)
-        self.question_text.bind("<Control-Return>", self.send_message)
-
-        self.send_button = ttk.Button(input_frame, text="Отправить", command=self.send_message)
-        self.send_button.grid(row=0, column=1, padx=(0, 5), pady=5)
-
-        # Статусная строка чата
-        self.chat_status_var = tk.StringVar(value="Готов к работе")
-        status_label = ttk.Label(frame, textvariable=self.chat_status_var, relief=tk.SUNKEN, anchor=tk.W)
-        status_label.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
-
-        self.add_message(
-            "🤖 Добро пожаловать! Я информационный ассистент компании ГТИ-ОПТ.\n"
-            "Задайте ваш вопрос о водоочистном оборудовании.",
-            "system"
-        )
-
-    def add_message(self, text, tag=None):
-        """Добавление сообщения в чат"""
-        if hasattr(self.messages_text, 'winfo_exists') and self.messages_text.winfo_exists():
-            try:
-                self.messages_text.config(state='normal')
-                if tag:
-                    self.messages_text.insert(tk.END, text + "\n\n", tag)
-                else:
-                    self.messages_text.insert(tk.END, text + "\n\n")
-                self.messages_text.config(state='disabled')
-                self.messages_text.see(tk.END)
-            except tk.TclError:
-                pass
-
-    def send_message(self, event=None):
-        """Отправка сообщения в чат"""
-        question = self.question_text.get("1.0", tk.END).strip()
-        if not question:
-            return
-
-        self.add_message(f"Вы: {question}", "user")
-        self.question_text.delete("1.0", tk.END)
-        self.chat_status_var.set("Обработка запроса...")
-        self.send_button.config(state="disabled")
-
-        def process_question():
-            try:
-                rag = self.get_rag_system()
-                answer = rag.ask_model(question)
-                self.root.after(0, lambda: self.add_message(f"Ассистент: {answer}", "assistant"))
-            except Exception as e:
-                self.root.after(0, lambda: self.add_message(f"Ошибка: {e}", "system"))
-            finally:
-                self.root.after(0, lambda: self.chat_status_var.set("Готов к работе"))
-                self.root.after(0, lambda: self.send_button.config(state="normal"))
-
-        threading.Thread(target=process_question, daemon=True).start()
+    
 
     # =====================================================================
     # Валидация и сохранение настроек
