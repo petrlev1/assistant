@@ -1,14 +1,17 @@
-# run_ui.py - Стартовая панель для запуска компонентов RAG-системы
-"""Стартовая панель с выбором LLM провайдера/модели и кнопками запуска"""
+# run_ui.py - Стартовая панель RAG-системы (все настройки + запуск)
+"""Стартовая панель с выбором LLM провайдера/модели, настройками RAG и кнопками запуска"""
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
 import subprocess
 import sys
 import os
+import json
 import webbrowser
 import threading
-import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Маппинг провайдеров: base_url и доступные модели
 PROVIDERS = {
@@ -26,177 +29,612 @@ PROVIDERS = {
 CADDY_PATH = r"C:\Users\Petrlev\AppData\Local\Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe"
 CADDY_DIR = r"C:\peter\ai_bot\automation\assistant"
 
+
 class LauncherUI:
     def __init__(self, root):
         self.root = root
         self.root.title("RAG-система - Стартовая панель")
-        self.root.geometry("420x480")
-        self.root.resizable(False, False)
-        
+        self.root.geometry("800x700")
+        self.root.resizable(True, True)
+
         # Путь к директории проекта
         self.project_dir = os.path.dirname(os.path.abspath(__file__))
-        
+
         # Хранилище запущенных процессов
         self.web_process = None
-        self.gui_process = None
         self.caddy_process = None
-        
+        self.telegram_bot = None
+        self.telegram_thread = None
+
+        # RAG-система (ленивая инициализация)
+        self.rag_system = None
+
         # Загрузка текущих настроек
         self.settings = self.load_settings()
-        
+
         self.setup_ui()
-        
+
     def load_settings(self):
         """Загрузка настроек из rag_settings.json"""
         settings_file = os.path.join(self.project_dir, "rag_settings.json")
+        defaults = {
+            "disable_llm_models": False,
+            "disable_hybrid_search": False,
+            "disable_knowledge_base_search": False,
+            "llm_api_key": "",
+            "llm_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            "llm_provider": "DashScope",
+            "llm_model": "deepseek-v4-flash",
+            "search_top_k": 30,
+            "search_alpha": 0.7,
+            "relevance_threshold": 0.1,
+            "max_context_fragments": 100,
+            "telegram_bot_token": ""
+        }
         try:
             with open(settings_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                loaded = json.load(f)
+                # Объединяем с дефолтами (недостающие ключи)
+                for key, value in defaults.items():
+                    if key not in loaded:
+                        loaded[key] = value
+                return loaded
         except Exception:
-            return {}
-    
-    def save_settings(self, provider, model):
-        """Сохранение выбранного провайдера и модели в настройки"""
+            return defaults.copy()
+
+    def save_settings_to_file(self):
+        """Сохранение настроек в rag_settings.json"""
         settings_file = os.path.join(self.project_dir, "rag_settings.json")
-        provider_config = PROVIDERS.get(provider, PROVIDERS["DashScope"])
-        
-        self.settings["llm_provider"] = provider
-        self.settings["llm_model"] = model
-        self.settings["llm_base_url"] = provider_config["base_url"]
-        
         try:
             with open(settings_file, 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, indent=4, ensure_ascii=False)
+            return True
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить настройки:\n{e}")
-        
+            return False
+
+    def get_rag_system(self):
+        """Ленивая инициализация RAG-системы"""
+        if self.rag_system is None:
+            from rag_core import get_rag_system
+            self.rag_system = get_rag_system()
+            # Обновляем настройки в RAG-системе из текущих
+            for key, value in self.settings.items():
+                self.rag_system.settings.set(key, value)
+            self.rag_system._setup_client()
+        return self.rag_system
+
     def setup_ui(self):
-        """Настройка интерфейса"""
         # Заголовок
         title_label = tk.Label(
-            self.root, 
-            text="🚀 RAG-система", 
-            font=("Arial", 18, "bold")
+            self.root,
+            text="🚀 RAG-система — Стартовая панель",
+            font=("Arial", 16, "bold")
         )
-        title_label.pack(pady=10)
-        
+        title_label.pack(pady=(10, 2))
+
         subtitle_label = tk.Label(
             self.root,
-            text="Выберите провайдера, модель и запустите компонент",
-            font=("Arial", 10)
+            text="Настройки • Поиск • Запуск компонентов",
+            font=("Arial", 9)
         )
-        subtitle_label.pack(pady=3)
-        
-        # === Блок выбора провайдера и модели ===
-        config_frame = ttk.LabelFrame(self.root, text="🤖 Настройки LLM", padding=10)
-        config_frame.pack(fill="x", padx=20, pady=10)
-        
-        # Провайдер
-        ttk.Label(config_frame, text="Провайдер:").grid(row=0, column=0, sticky="w", pady=3)
-        current_provider = self.settings.get("llm_provider", "DashScope")
-        self.provider_var = tk.StringVar(value=current_provider)
-        self.provider_combo = ttk.Combobox(
-            config_frame, 
-            textvariable=self.provider_var, 
-            values=list(PROVIDERS.keys()), 
-            state="readonly", 
-            width=30
-        )
-        self.provider_combo.grid(row=0, column=1, sticky="ew", pady=3, padx=(5, 0))
-        self.provider_combo.bind("<<ComboboxSelected>>", self.on_provider_change)
-        
-        # Модель
-        ttk.Label(config_frame, text="Модель:").grid(row=1, column=0, sticky="w", pady=3)
-        current_model = self.settings.get("llm_model", "deepseek-v4-flash")
-        self.model_var = tk.StringVar(value=current_model)
-        self.model_combo = ttk.Combobox(
-            config_frame, 
-            textvariable=self.model_var, 
-            values=PROVIDERS.get(current_provider, PROVIDERS["DashScope"])["models"],
-            state="readonly",
-            width=30
-        )
-        self.model_combo.grid(row=1, column=1, sticky="ew", pady=3, padx=(5, 0))
-        
-        config_frame.columnconfigure(1, weight=1)
-        
-        # Разделитель
-        separator = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
-        separator.pack(fill=tk.X, padx=20, pady=8)
-        
-        # Кнопка запуска веб-интерфейса
+        subtitle_label.pack(pady=(0, 8))
+
+        # === Notebook с вкладками настроек ===
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=(0, 5))
+
+        self._create_main_tab()
+        self._create_search_tab()
+        self._create_api_tab()
+        self._create_telegram_tab()
+        self._create_chat_tab()
+
+        # === Кнопки управления ===
+        button_frame = ttk.Frame(self.root)
+        button_frame.pack(fill="x", padx=10, pady=(5, 5))
+
+        # Левая группа: кнопки настроек
+        settings_btn_frame = ttk.Frame(button_frame)
+        settings_btn_frame.pack(side="left")
+
+        self.save_btn = ttk.Button(settings_btn_frame, text="💾 Сохранить настройки", command=self.save_settings)
+        self.save_btn.pack(side="left", padx=3)
+
+        self.apply_btn = ttk.Button(settings_btn_frame, text="✅ Применить", command=self.apply_settings)
+        self.apply_btn.pack(side="left", padx=3)
+
+        # Правая группа: кнопки запуска
+        launch_btn_frame = ttk.Frame(button_frame)
+        launch_btn_frame.pack(side="right")
+
         self.web_button = tk.Button(
-            self.root,
+            launch_btn_frame,
             text="🌐 Веб-интерфейс",
-            font=("Arial", 12),
+            font=("Arial", 10),
             command=self.launch_web,
-            width=25,
-            height=2,
             bg="#4CAF50",
             fg="white",
             relief=tk.RAISED,
             cursor="hand2"
         )
-        self.web_button.pack(pady=6)
-        
-        # Кнопка запуска GUI настроек
-        self.gui_button = tk.Button(
-            self.root,
-            text="⚙️ Настройки (GUI)",
-            font=("Arial", 12),
-            command=self.launch_gui,
-            width=25,
-            height=2,
-            bg="#2196F3",
+        self.web_button.pack(side="left", padx=3)
+
+        self.restart_btn = tk.Button(
+            launch_btn_frame,
+            text="🔄 Перезапустить RAG",
+            font=("Arial", 10),
+            command=self.restart_rag,
+            bg="#FF9800",
             fg="white",
             relief=tk.RAISED,
             cursor="hand2"
         )
-        self.gui_button.pack(pady=6)
-        
-        # Кнопка остановки всех процессов
+        self.restart_btn.pack(side="left", padx=3)
+
         self.stop_button = tk.Button(
-            self.root,
+            launch_btn_frame,
             text="🛑 Остановить всё",
-            font=("Arial", 12),
+            font=("Arial", 10),
             command=self.stop_all,
-            width=25,
-            height=2,
             bg="#f44336",
             fg="white",
             relief=tk.RAISED,
             cursor="hand2"
         )
-        self.stop_button.pack(pady=6)
-        
+        self.stop_button.pack(side="left", padx=3)
+
         # Статус бар
         self.status_label = tk.Label(
             self.root,
-            text=f"Готов к запуску | {current_provider} / {current_model}",
+            text=f"Готов | {self.settings.get('llm_provider', '?')} / {self.settings.get('llm_model', '?')}",
             font=("Arial", 9),
-            fg="gray"
+            fg="gray",
+            anchor="w"
         )
-        self.status_label.pack(side=tk.BOTTOM, pady=8)
-    
+        self.status_label.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
+
+    # =====================================================================
+    # Вкладка: Основные
+    # =====================================================================
+    def _create_main_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Основные")
+
+        ttk.Label(frame, text="Основные настройки системы:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+
+        # Отключение моделей LLM
+        self.disable_llm_var = tk.BooleanVar(value=self.settings.get("disable_llm_models", False))
+        disable_llm_check = ttk.Checkbutton(
+            frame,
+            text="Отключить LLM модели (только поиск без генерации)",
+            variable=self.disable_llm_var
+        )
+        disable_llm_check.pack(anchor="w", padx=20, pady=5)
+
+        # Отключение гибридного поиска
+        self.disable_hybrid_search_var = tk.BooleanVar(value=self.settings.get("disable_hybrid_search", False))
+        disable_hybrid_search_check = ttk.Checkbutton(
+            frame,
+            text="Отключить гибридный поиск (передавать всю базу знаний в модели)",
+            variable=self.disable_hybrid_search_var
+        )
+        disable_hybrid_search_check.pack(anchor="w", padx=20, pady=5)
+
+        # Отключение поиска в базе знаний
+        self.disable_knowledge_base_search_var = tk.BooleanVar(
+            value=self.settings.get("disable_knowledge_base_search", False)
+        )
+        disable_kb_search_check = ttk.Checkbutton(
+            frame,
+            text="Отключить поиск в базе знаний (работать только через LLM без Database)",
+            variable=self.disable_knowledge_base_search_var
+        )
+        disable_kb_search_check.pack(anchor="w", padx=20, pady=5)
+
+        # Информация о системе
+        info_frame = ttk.LabelFrame(frame, text="Информация о системе")
+        info_frame.pack(fill="x", padx=20, pady=20)
+
+        self.info_label = ttk.Label(info_frame, text="RAG не инициализирована. Нажмите «Применить» для загрузки.")
+        self.info_label.pack(anchor="w", padx=5, pady=5)
+
+        # Кнопка обновления информации
+        ttk.Button(info_frame, text="🔄 Обновить информацию", command=self.refresh_info).pack(anchor="w", padx=5, pady=5)
+
+    def refresh_info(self):
+        """Обновление информации о системе"""
+        try:
+            rag = self.get_rag_system()
+            knowledge_count = len(rag.my_knowledge) if rag.my_knowledge else 0
+            files_count = len(rag.all_knowledge_dict) if rag.all_knowledge_dict else 0
+            self.info_label.config(
+                text=f"Фрагментов в базе знаний: {knowledge_count}\n"
+                     f"Загружено файлов: {files_count}"
+            )
+        except Exception as e:
+            self.info_label.config(text=f"Ошибка: {e}")
+
+    # =====================================================================
+    # Вкладка: Поиск
+    # =====================================================================
+    def _create_search_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Поиск")
+
+        ttk.Label(frame, text="Параметры поиска релевантной информации:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+
+        # TOP_K
+        ttk.Label(frame, text="Количество релевантных фрагментов (TOP_K):").pack(anchor="w", padx=20, pady=(5, 0))
+        self.top_k_var = tk.StringVar(value=str(self.settings.get("search_top_k", 10)))
+        top_k_entry = ttk.Entry(frame, textvariable=self.top_k_var, width=10)
+        top_k_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Label(frame, text="Сколько фрагментов из базы знаний передавать в модель (1-50)", foreground="gray").pack(anchor="w", padx=20)
+
+        # ALPHA
+        ttk.Label(frame, text="Вес семантического поиска (ALPHA):").pack(anchor="w", padx=20, pady=(10, 0))
+        self.alpha_var = tk.StringVar(value=str(self.settings.get("search_alpha", 0.7)))
+        alpha_entry = ttk.Entry(frame, textvariable=self.alpha_var, width=10)
+        alpha_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Label(frame, text="0.0 — только ключевые слова, 1.0 — только семантика (0.0-1.0)", foreground="gray").pack(anchor="w", padx=20)
+
+        # Порог релевантности
+        ttk.Label(frame, text="Порог релевантности:").pack(anchor="w", padx=20, pady=(10, 0))
+        self.threshold_var = tk.StringVar(value=str(self.settings.get("relevance_threshold", 0.2)))
+        threshold_entry = ttk.Entry(frame, textvariable=self.threshold_var, width=10)
+        threshold_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Label(frame, text="Минимальный скор релевантности (0.0-1.0). Рекомендуется 0.1-0.3", foreground="gray").pack(anchor="w", padx=20)
+
+        # MAX_CONTEXT_FRAGMENTS
+        ttk.Label(frame, text="Максимум фрагментов при отключенном поиске:").pack(anchor="w", padx=20, pady=(10, 0))
+        self.max_context_var = tk.StringVar(value=str(self.settings.get("max_context_fragments", 100)))
+        max_context_entry = ttk.Entry(frame, textvariable=self.max_context_var, width=10)
+        max_context_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Label(frame, text="Количество фрагментов при отключенном гибридном поиске (10-500)", foreground="gray").pack(anchor="w", padx=20)
+
+    # =====================================================================
+    # Вкладка: API
+    # =====================================================================
+    def _create_api_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="API")
+
+        ttk.Label(frame, text="Настройки LLM API:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+
+        # Провайдер
+        ttk.Label(frame, text="Провайдер:").pack(anchor="w", padx=20, pady=(5, 0))
+        current_provider = self.settings.get("llm_provider", "DashScope")
+        self.provider_var = tk.StringVar(value=current_provider)
+        self.provider_combo = ttk.Combobox(
+            frame, textvariable=self.provider_var,
+            values=list(PROVIDERS.keys()), state="readonly", width=47
+        )
+        self.provider_combo.pack(fill="x", padx=20, pady=5)
+        self.provider_combo.bind("<<ComboboxSelected>>", self.on_provider_change)
+
+        # Модель
+        ttk.Label(frame, text="Модель:").pack(anchor="w", padx=20, pady=(5, 0))
+        provider_models = PROVIDERS.get(current_provider, PROVIDERS["DashScope"])["models"]
+        self.model_var = tk.StringVar(value=self.settings.get("llm_model", provider_models[0]))
+        self.model_combo = ttk.Combobox(
+            frame, textvariable=self.model_var,
+            values=provider_models, state="readonly", width=47
+        )
+        self.model_combo.pack(fill="x", padx=20, pady=5)
+
+        # Base URL
+        ttk.Label(frame, text="Base URL:").pack(anchor="w", padx=20, pady=(10, 0))
+        self.base_url_var = tk.StringVar(value=self.settings.get("llm_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"))
+        base_url_entry = ttk.Entry(frame, textvariable=self.base_url_var, width=50)
+        base_url_entry.pack(fill="x", padx=20, pady=5)
+
+        # API ключ
+        ttk.Label(frame, text="API ключ:").pack(anchor="w", padx=20, pady=(10, 0))
+        self.api_key_var = tk.StringVar(value=self.settings.get("llm_api_key", ""))
+        api_key_entry = ttk.Entry(frame, textvariable=self.api_key_var, width=50, show="*")
+        api_key_entry.pack(fill="x", padx=20, pady=5)
+        ttk.Label(frame, text="Ключ API для доступа к LLM провайдеру", foreground="gray").pack(anchor="w", padx=20)
+
     def on_provider_change(self, event=None):
         """Обновление списка моделей при смене провайдера"""
         provider = self.provider_var.get()
         models = PROVIDERS.get(provider, PROVIDERS["DashScope"])["models"]
         self.model_combo['values'] = models
-        self.model_var.set(models[0])
-        
-    def apply_llm_settings(self):
-        """Сохранить выбранные настройки провайдера/модели"""
-        provider = self.provider_var.get()
-        model = self.model_var.get()
-        self.save_settings(provider, model)
-        self.status_label.config(text=f"✅ {provider} / {model}", fg="green")
-    
+        self.model_combo.set(models[0])
+        # Автоматически подставляем base_url
+        self.base_url_var.set(PROVIDERS.get(provider, PROVIDERS["DashScope"])["base_url"])
+
+    # =====================================================================
+    # Вкладка: Telegram
+    # =====================================================================
+    def _create_telegram_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Telegram")
+
+        ttk.Label(frame, text="Настройки Telegram бота:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+
+        # Telegram Bot Token
+        ttk.Label(frame, text="Telegram Bot Token:").pack(anchor="w", padx=20, pady=(5, 0))
+        self.telegram_token_var = tk.StringVar(value=self.settings.get("telegram_bot_token", ""))
+        telegram_token_entry = ttk.Entry(frame, textvariable=self.telegram_token_var, width=50, show="*")
+        telegram_token_entry.pack(fill="x", padx=20, pady=5)
+        ttk.Label(frame, text="Токен вашего Telegram бота от @BotFather", foreground="gray").pack(anchor="w", padx=20)
+
+        # Инструкция
+        instruction_frame = ttk.LabelFrame(frame, text="Инструкция")
+        instruction_frame.pack(fill="x", padx=20, pady=10)
+        instruction_text = (
+            "1. Найдите @BotFather в Telegram\n"
+            "2. Отправьте команду /newbot\n"
+            "3. Следуйте инструкциям для создания бота\n"
+            "4. Скопируйте токен и вставьте в поле выше\n"
+            "5. Нажмите «Сохранить настройки» для сохранения"
+        )
+        ttk.Label(instruction_frame, text=instruction_text, justify="left").pack(anchor="w", padx=5, pady=5)
+
+        # Статус и кнопки управления ботом
+        self.telegram_status_var = tk.StringVar(value="Бот не запущен")
+        self.telegram_status_label = ttk.Label(frame, textvariable=self.telegram_status_var, font=("Arial", 10, "bold"))
+        self.telegram_status_label.pack(anchor="w", padx=20, pady=(10, 5))
+
+        tg_btn_frame = ttk.Frame(frame)
+        tg_btn_frame.pack(fill="x", padx=20, pady=10)
+
+        self.start_telegram_button = ttk.Button(tg_btn_frame, text="▶️ Запустить бота", command=self.start_telegram_bot)
+        self.start_telegram_button.pack(side="left", padx=5)
+
+        self.stop_telegram_button = ttk.Button(tg_btn_frame, text="⏹ Остановить бота", command=self.stop_telegram_bot, state="disabled")
+        self.stop_telegram_button.pack(side="left", padx=5)
+
+    def start_telegram_bot(self):
+        """Запуск Telegram бота"""
+        try:
+            token = self.telegram_token_var.get().strip()
+            if not token or len(token) < 20:
+                messagebox.showerror("Ошибка", "Пожалуйста, введите валидный Telegram Bot Token")
+                return
+
+            # Сохраняем токен в настройки
+            self.settings["telegram_bot_token"] = token
+            self.save_settings_to_file()
+
+            from telegram_bot import TelegramRAGBot
+            self.telegram_bot = TelegramRAGBot(token)
+
+            self.telegram_thread = threading.Thread(target=self._run_telegram_bot, daemon=True)
+            self.telegram_thread.start()
+
+            self.telegram_status_var.set("✅ Бот запущен")
+            self.start_telegram_button.config(state="disabled")
+            self.stop_telegram_button.config(state="normal")
+            messagebox.showinfo("Telegram бот", "Бот успешно запущен! Проверьте Telegram.")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка запуска Telegram бота: {e}")
+
+    def _run_telegram_bot(self):
+        """Внутренний метод для запуска бота"""
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self.telegram_bot.run()
+        except Exception as e:
+            logger.error(f"Ошибка в работе Telegram бота: {e}", exc_info=True)
+            self.root.after(0, lambda e=e: messagebox.showerror("Ошибка", f"Ошибка в работе Telegram бота: {e}"))
+
+    def stop_telegram_bot(self):
+        """Остановка Telegram бота"""
+        try:
+            if hasattr(self, 'telegram_bot') and self.telegram_bot:
+                self.telegram_bot.stop()
+                self.telegram_status_var.set("⏹ Бот остановлен")
+                self.start_telegram_button.config(state="normal")
+                self.stop_telegram_button.config(state="disabled")
+                messagebox.showinfo("Telegram бот", "Бот остановлен")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка остановки Telegram бота: {e}")
+
+    # =====================================================================
+    # Вкладка: Чат
+    # =====================================================================
+    def _create_chat_tab(self):
+        """Вкладка чата для тестирования RAG"""
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Чат")
+
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+
+        # Фрейм для сообщений
+        messages_frame = ttk.Frame(frame)
+        messages_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 0))
+        messages_frame.columnconfigure(0, weight=1)
+        messages_frame.rowconfigure(0, weight=1)
+
+        self.messages_text = scrolledtext.ScrolledText(messages_frame, wrap=tk.WORD, state='disabled')
+        self.messages_text.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.messages_text.tag_config("user", foreground="blue")
+        self.messages_text.tag_config("assistant", foreground="green")
+        self.messages_text.tag_config("system", foreground="orange")
+
+        # Фрейм для ввода
+        input_frame = ttk.Frame(frame)
+        input_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        input_frame.columnconfigure(0, weight=1)
+
+        self.question_text = scrolledtext.ScrolledText(input_frame, wrap=tk.WORD, height=4)
+        self.question_text.grid(row=0, column=0, sticky="ew", padx=(0, 5), pady=5)
+        self.question_text.bind("<Return>", self.send_message)
+        self.question_text.bind("<Control-Return>", self.send_message)
+
+        self.send_button = ttk.Button(input_frame, text="Отправить", command=self.send_message)
+        self.send_button.grid(row=0, column=1, padx=(0, 5), pady=5)
+
+        # Статусная строка чата
+        self.chat_status_var = tk.StringVar(value="Готов к работе")
+        status_label = ttk.Label(frame, textvariable=self.chat_status_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_label.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+
+        self.add_message(
+            "🤖 Добро пожаловать! Я информационный ассистент компании ГТИ-ОПТ.\n"
+            "Задайте ваш вопрос о водоочистном оборудовании.",
+            "system"
+        )
+
+    def add_message(self, text, tag=None):
+        """Добавление сообщения в чат"""
+        if hasattr(self.messages_text, 'winfo_exists') and self.messages_text.winfo_exists():
+            try:
+                self.messages_text.config(state='normal')
+                if tag:
+                    self.messages_text.insert(tk.END, text + "\n\n", tag)
+                else:
+                    self.messages_text.insert(tk.END, text + "\n\n")
+                self.messages_text.config(state='disabled')
+                self.messages_text.see(tk.END)
+            except tk.TclError:
+                pass
+
+    def send_message(self, event=None):
+        """Отправка сообщения в чат"""
+        question = self.question_text.get("1.0", tk.END).strip()
+        if not question:
+            return
+
+        self.add_message(f"Вы: {question}", "user")
+        self.question_text.delete("1.0", tk.END)
+        self.chat_status_var.set("Обработка запроса...")
+        self.send_button.config(state="disabled")
+
+        def process_question():
+            try:
+                rag = self.get_rag_system()
+                answer = rag.ask_model(question)
+                self.root.after(0, lambda: self.add_message(f"Ассистент: {answer}", "assistant"))
+            except Exception as e:
+                self.root.after(0, lambda: self.add_message(f"Ошибка: {e}", "system"))
+            finally:
+                self.root.after(0, lambda: self.chat_status_var.set("Готов к работе"))
+                self.root.after(0, lambda: self.send_button.config(state="normal"))
+
+        threading.Thread(target=process_question, daemon=True).start()
+
+    # =====================================================================
+    # Валидация и сохранение настроек
+    # =====================================================================
+    def validate_and_apply_settings(self):
+        """Валидация и применение настроек"""
+        # Валидация TOP_K
+        try:
+            top_k = int(self.top_k_var.get())
+            if 1 <= top_k <= 50:
+                self.settings["search_top_k"] = top_k
+            else:
+                messagebox.showwarning("Предупреждение", "TOP_K должен быть от 1 до 50. Установлено 10.")
+                self.settings["search_top_k"] = 10
+                self.top_k_var.set("10")
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Неверное значение TOP_K. Установлено 10.")
+            self.settings["search_top_k"] = 10
+            self.top_k_var.set("10")
+
+        # Валидация ALPHA
+        try:
+            alpha = float(self.alpha_var.get())
+            if 0.0 <= alpha <= 1.0:
+                self.settings["search_alpha"] = alpha
+            else:
+                messagebox.showwarning("Предупреждение", "ALPHA должен быть от 0.0 до 1.0. Установлено 0.7.")
+                self.settings["search_alpha"] = 0.7
+                self.alpha_var.set("0.7")
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Неверное значение ALPHA. Установлено 0.7.")
+            self.settings["search_alpha"] = 0.7
+            self.alpha_var.set("0.7")
+
+        # Валидация порога релевантности
+        try:
+            threshold = float(self.threshold_var.get())
+            if 0.0 <= threshold <= 1.0:
+                self.settings["relevance_threshold"] = threshold
+            else:
+                messagebox.showwarning("Предупреждение", "Порог релевантности должен быть от 0.0 до 1.0. Установлено 0.2.")
+                self.settings["relevance_threshold"] = 0.2
+                self.threshold_var.set("0.2")
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Неверное значение порога релевантности. Установлено 0.2.")
+            self.settings["relevance_threshold"] = 0.2
+            self.threshold_var.set("0.2")
+
+        # Валидация MAX_CONTEXT_FRAGMENTS
+        try:
+            max_context = int(self.max_context_var.get())
+            if 10 <= max_context <= 500:
+                self.settings["max_context_fragments"] = max_context
+            else:
+                messagebox.showwarning("Предупреждение", "Максимум фрагментов должен быть от 10 до 500. Установлено 100.")
+                self.settings["max_context_fragments"] = 100
+                self.max_context_var.set("100")
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Неверное значение максимума фрагментов. Установлено 100.")
+            self.settings["max_context_fragments"] = 100
+            self.max_context_var.set("100")
+
+        # Основные настройки
+        self.settings["disable_llm_models"] = self.disable_llm_var.get()
+        self.settings["disable_hybrid_search"] = self.disable_hybrid_search_var.get()
+        self.settings["disable_knowledge_base_search"] = self.disable_knowledge_base_search_var.get()
+
+        # API настройки
+        self.settings["llm_provider"] = self.provider_var.get().strip()
+        self.settings["llm_model"] = self.model_var.get().strip()
+        self.settings["llm_base_url"] = self.base_url_var.get().strip()
+        self.settings["llm_api_key"] = self.api_key_var.get().strip()
+
+        # Telegram настройки
+        self.settings["telegram_bot_token"] = self.telegram_token_var.get().strip()
+
+        return True
+
+    def save_settings(self):
+        """Сохранить настройки (валидация + запись в файл)"""
+        try:
+            if self.validate_and_apply_settings():
+                if self.save_settings_to_file():
+                    messagebox.showinfo("Настройки", "Настройки сохранены!")
+                    self.status_label.config(
+                        text=f"✅ Настройки сохранены | {self.settings['llm_provider']} / {self.settings['llm_model']}",
+                        fg="green"
+                    )
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка сохранения настроек: {e}")
+
+    def apply_settings(self):
+        """Применить настройки (сохранить + обновить RAG-систему)"""
+        try:
+            if self.validate_and_apply_settings():
+                if self.save_settings_to_file():
+                    # Обновляем настройки в RAG-системе, если она уже инициализирована
+                    if self.rag_system is not None:
+                        for key, value in self.settings.items():
+                            self.rag_system.settings.set(key, value)
+                        self.rag_system._setup_client()
+                        self.refresh_info()
+                    messagebox.showinfo("Настройки", "Настройки применены!")
+                    self.status_label.config(
+                        text=f"✅ Настройки применены | {self.settings['llm_provider']} / {self.settings['llm_model']}",
+                        fg="green"
+                    )
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка применения настроек: {e}")
+
+    # =====================================================================
+    # Запуск компонентов
+    # =====================================================================
     def start_caddy(self):
         """Запуск Caddy reverse proxy"""
         if self.caddy_process and self.caddy_process.poll() is None:
-            return  # Уже запущен
-        
+            return
         try:
             self.caddy_process = subprocess.Popen(
                 [CADDY_PATH, "run"],
@@ -206,7 +644,7 @@ class LauncherUI:
             )
         except Exception as e:
             messagebox.showwarning("Предупреждение", f"Не удалось запустить Caddy:\n{e}")
-    
+
     def stop_caddy(self):
         """Остановка Caddy"""
         if self.caddy_process and self.caddy_process.poll() is None:
@@ -216,76 +654,66 @@ class LauncherUI:
             except subprocess.TimeoutExpired:
                 self.caddy_process.kill()
             self.caddy_process = None
-        
+
     def launch_web(self):
         """Запуск веб-интерфейса"""
         if self.web_process and self.web_process.poll() is None:
             messagebox.showinfo("Информация", "Веб-интерфейс уже запущен!")
             return
-            
+
         try:
-            # Сохраняем выбранные настройки перед запуском
-            self.apply_llm_settings()
-            
+            # Сначала сохраняем настройки
+            self.validate_and_apply_settings()
+            self.save_settings_to_file()
+
             # Запускаем Caddy
             self.start_caddy()
-            
+
             python_exe = sys.executable
             script_path = os.path.join(self.project_dir, "run_web.py")
-            
+
             self.web_process = subprocess.Popen(
                 [python_exe, script_path],
                 cwd=self.project_dir
             )
-            
+
             self.status_label.config(
-                text=f"✅ Веб + Caddy запущены | {self.provider_var.get()} / {self.model_var.get()}", 
+                text=f"✅ Веб + Caddy запущены | {self.settings['llm_provider']} / {self.settings['llm_model']}",
                 fg="green"
             )
-            
-            # Автоматическое открытие браузера через задержку
+
             def open_browser():
                 import time
                 time.sleep(2)
                 webbrowser.open("https://assistant.proaibro.ru")
-            
+
             threading.Thread(target=open_browser, daemon=True).start()
-            
+
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось запустить веб-интерфейс:\n{str(e)}")
             self.status_label.config(text="❌ Ошибка запуска", fg="red")
-            
-    def launch_gui(self):
-        """Запуск GUI настроек"""
-        if self.gui_process and self.gui_process.poll() is None:
-            messagebox.showinfo("Информация", "GUI настроек уже запущен!")
-            return
-            
+
+    def restart_rag(self):
+        """Перезапуск RAG-системы (перезагрузка базы знаний)"""
         try:
-            # Сохраняем выбранные настройки перед запуском
-            self.apply_llm_settings()
-            
-            python_exe = sys.executable
-            script_path = os.path.join(self.project_dir, "run_gui.py")
-            
-            self.gui_process = subprocess.Popen(
-                [python_exe, script_path],
-                cwd=self.project_dir
-            )
-            
+            self.status_label.config(text="🔄 Перезагрузка RAG...", fg="orange")
+            self.root.update()
+            rag = self.get_rag_system()
+            rag.reload_knowledge_base()
+            self.refresh_info()
             self.status_label.config(
-                text=f"✅ GUI настроек запущен | {self.provider_var.get()} / {self.model_var.get()}", 
-                fg="blue"
+                text=f"✅ RAG перезагружена | {self.settings['llm_provider']} / {self.settings['llm_model']}",
+                fg="green"
             )
-            
+            messagebox.showinfo("RAG", "База знаний перезагружена!")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось запустить GUI настроек:\n{str(e)}")
-            self.status_label.config(text="❌ Ошибка запуска", fg="red")
-            
+            messagebox.showerror("Ошибка", f"Ошибка перезагрузки RAG: {e}")
+            self.status_label.config(text="❌ Ошибка перезагрузки RAG", fg="red")
+
     def stop_all(self):
         """Остановка всех запущенных процессов"""
         stopped = []
-        
+
         if self.web_process and self.web_process.poll() is None:
             self.web_process.terminate()
             try:
@@ -294,36 +722,31 @@ class LauncherUI:
                 self.web_process.kill()
             self.web_process = None
             stopped.append("Веб-интерфейс")
-            
-        if self.gui_process and self.gui_process.poll() is None:
-            self.gui_process.terminate()
-            try:
-                self.gui_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.gui_process.kill()
-            self.gui_process = None
-            stopped.append("GUI настроек")
-        
+
         if self.caddy_process and self.caddy_process.poll() is None:
             self.stop_caddy()
             stopped.append("Caddy")
-            
+
+        if hasattr(self, 'telegram_bot') and self.telegram_bot:
+            try:
+                self.telegram_bot.stop()
+                self.telegram_status_var.set("⏹ Бот остановлен")
+                self.start_telegram_button.config(state="normal")
+                self.stop_telegram_button.config(state="disabled")
+            except Exception:
+                pass
+            stopped.append("Telegram бот")
+
         if stopped:
-            self.status_label.config(
-                text=f"🛑 Остановлено: {', '.join(stopped)}", 
-                fg="red"
-            )
+            self.status_label.config(text=f"🛑 Остановлено: {', '.join(stopped)}", fg="red")
         else:
             self.status_label.config(text="Ничего не запущено", fg="gray")
-            
+
     def on_closing(self):
         """Обработка закрытия окна"""
-        if self.web_process and self.web_process.poll() is None:
-            self.web_process.terminate()
-        if self.gui_process and self.gui_process.poll() is None:
-            self.gui_process.terminate()
-        self.stop_caddy()
+        self.stop_all()
         self.root.destroy()
+
 
 def main():
     """Запуск стартовой панели"""
@@ -331,6 +754,7 @@ def main():
     app = LauncherUI(root)
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
