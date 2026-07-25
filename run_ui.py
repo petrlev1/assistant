@@ -130,6 +130,40 @@ class LauncherUI:
         self._create_telegram_tab()
         self._create_chat_tab()
 
+        # === Блок выбора режима запуска веб-интерфейса ===
+        web_mode_frame = ttk.LabelFrame(self.root, text="🌐 Режим запуска веб-интерфейса", padding=5)
+        web_mode_frame.pack(fill="x", padx=10, pady=(0, 3))
+
+        self.web_mode_var = tk.StringVar(value="domain")
+        domain_radio = ttk.Radiobutton(
+            web_mode_frame, text="Внешний домен (assistant.proaibro.ru) — Caddy + веб-сервер",
+            variable=self.web_mode_var, value="domain"
+        )
+        domain_radio.pack(anchor="w", padx=5, pady=1)
+
+        external_radio = ttk.Radiobutton(
+            web_mode_frame, text="Внешний адрес (85.234.31.16:8077) — веб-сервер без Caddy",
+            variable=self.web_mode_var, value="external_ip"
+        )
+        external_radio.pack(anchor="w", padx=5, pady=1)
+
+        local_radio = ttk.Radiobutton(
+            web_mode_frame, text="Локальный (localhost:8077) — веб-сервер без Caddy",
+            variable=self.web_mode_var, value="local"
+        )
+        local_radio.pack(anchor="w", padx=5, pady=1)
+
+        # Подсказка
+        self.web_mode_hint = tk.Label(
+            web_mode_frame, text="",
+            font=("Arial", 8), fg="gray", anchor="w"
+        )
+        self.web_mode_hint.pack(anchor="w", padx=5, pady=(0, 2))
+        self._update_web_mode_hint()
+
+        # Привязка обновления подсказки
+        self.web_mode_var.trace_add("write", lambda *_: self._update_web_mode_hint())
+
         # === Кнопки управления ===
         button_frame = ttk.Frame(self.root)
         button_frame.pack(fill="x", padx=10, pady=(5, 5))
@@ -193,6 +227,15 @@ class LauncherUI:
             anchor="w"
         )
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
+
+    def _update_web_mode_hint(self):
+        """Обновление подсказки под радио-кнопками"""
+        hints = {
+            "domain": "🔒 Caddy (TLS) → assistant.proaibro.ru → localhost:8077. Требуются открытые порты 80/443 на роутере.",
+            "external_ip": "🌍 Прямой доступ по IP. Требуется проброс порта 8077 на роутере (192.168.0.1 → 85.234.31.16:8077).",
+            "local": "💻 Доступ только с этого компьютера. Caddy не запускается."
+        }
+        self.web_mode_hint.config(text=hints.get(self.web_mode_var.get(), ""))
 
     # =====================================================================
     # Вкладка: Основные
@@ -656,19 +699,26 @@ class LauncherUI:
             self.caddy_process = None
 
     def launch_web(self):
-        """Запуск веб-интерфейса"""
+        """Запуск веб-интерфейса в выбранном режиме"""
         if self.web_process and self.web_process.poll() is None:
             messagebox.showinfo("Информация", "Веб-интерфейс уже запущен!")
             return
+
+        mode = self.web_mode_var.get()
+        domain_url = "https://assistant.proaibro.ru"
+        external_url = "http://85.234.31.16:8077"
+        local_url = "http://localhost:8077"
 
         try:
             # Сначала сохраняем настройки
             self.validate_and_apply_settings()
             self.save_settings_to_file()
 
-            # Запускаем Caddy
-            self.start_caddy()
+            # Запускаем Caddy только для режима "домен"
+            if mode == "domain":
+                self.start_caddy()
 
+            # Запускаем веб-сервер
             python_exe = sys.executable
             script_path = os.path.join(self.project_dir, "run_web.py")
 
@@ -677,15 +727,26 @@ class LauncherUI:
                 cwd=self.project_dir
             )
 
+            # Определяем URL для открытия
+            if mode == "domain":
+                open_url = domain_url
+                mode_label = "Внешний домен"
+            elif mode == "external_ip":
+                open_url = external_url
+                mode_label = "Внешний IP"
+            else:
+                open_url = local_url
+                mode_label = "Локальный"
+
             self.status_label.config(
-                text=f"✅ Веб + Caddy запущены | {self.settings['llm_provider']} / {self.settings['llm_model']}",
+                text=f"✅ Веб запущен: {mode_label} | {self.settings['llm_provider']} / {self.settings['llm_model']}",
                 fg="green"
             )
 
             def open_browser():
                 import time
                 time.sleep(2)
-                webbrowser.open("https://assistant.proaibro.ru")
+                webbrowser.open(open_url)
 
             threading.Thread(target=open_browser, daemon=True).start()
 
