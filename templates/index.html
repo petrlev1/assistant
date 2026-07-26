@@ -1,481 +1,324 @@
-<!-- templates/index.html -->
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RAG-ассистент</title>
+    <title>RAG-система — Чат</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 0;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-
-        .header {
-            background: linear-gradient(135deg, #2c3e50, #3498db);
-            color: white;
-            padding: 5px;
-            text-align: center;
-        }
-
-        .header h1 {
-            font-size: 0.9em;
-            margin-bottom: 2px;
-        }
-
-        .header p {
-            font-size: 1.2em;
-            opacity: 0.9;
-        }
-
-        .chat-container {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f0f2f5;
+            height: 100vh;
             display: flex;
             flex-direction: column;
-            height: 70vh;
         }
-
-        .messages {
-            flex: 1;
-            padding: 30px;
-            overflow-y: auto;
-            background: #f8f9fa;
-            border-bottom: 1px solid #e9ecef;
-        }
-
-        .message {
-            margin-bottom: 20px;
-            padding: 15px;
-            border-radius: 10px;
-            max-width: 80%;
-            word-wrap: break-word;
-        }
-
-        .user-message {
-            background: #3498db;
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
             color: white;
-            margin-left: auto;
-            text-align: right;
-        }
-
-        .assistant-message {
-            background: #e9ecef;
-            color: #333;
-        }
-
-        .system-message {
-            background: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeaa7;
-        }
-
-        .input-area {
-            padding: 20px;
-            background: white;
-            border-top: 1px solid #e9ecef;
-        }
-
-        .input-container {
-            display: flex;
-            gap: 10px;
-        }
-
-        #question {
-            flex: 1;
-            padding: 15px;
-            border: 2px solid #e9ecef;
-            border-radius: 10px;
-            font-size: 14px;
-            resize: vertical;
-            min-height: 60px;
-            max-height: 200px;
-        }
-
-        #question:focus {
-            outline: none;
-            border-color: #3498db;
-            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
-        }
-
-        #send-btn {
-            padding: 15px 30px;
-            background: linear-gradient(135deg, #3498db, #2980b9);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: bold;
-            transition: all 0.3s ease;
-        }
-
-        #send-btn:hover {
-            background: linear-gradient(135deg, #2980b9, #2573a7);
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.3);
-        }
-
-        #send-btn:disabled {
-            background: #bdc3c7;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-
-        .telegram-bar {
+            padding: 14px 30px;
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 10px 20px;
-            background: #f0f4f8;
-            border-bottom: 1px solid #e9ecef;
-            flex-wrap: wrap;
+            justify-content: space-between;
+            flex-shrink: 0;
         }
-        .telegram-label { font-weight: 600; color: #2c3e50; }
-        .telegram-status { color: #666; font-size: 0.95em; min-width: 120px; }
-        .telegram-token {
-            flex: 1;
-            min-width: 180px;
-            max-width: 320px;
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            font-size: 13px;
-        }
-        .telegram-btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 13px;
+        .header h1 {
+            font-size: 18px;
             font-weight: 600;
         }
-        .telegram-btn-start {
-            background: linear-gradient(135deg, #27ae60, #219a52);
+        .header .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 14px;
+        }
+        .header .user-info .username {
+            background: rgba(255,255,255,0.2);
+            padding: 4px 12px;
+            border-radius: 20px;
+        }
+        .btn-logout {
+            background: rgba(255,255,255,0.2);
             color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 6px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.2s;
         }
-        .telegram-btn-start:hover:not(:disabled) {
-            background: linear-gradient(135deg, #219a52, #1e8449);
+        .btn-logout:hover {
+            background: rgba(255,255,255,0.3);
         }
-        .telegram-btn-stop {
-            background: linear-gradient(135deg, #e74c3c, #c0392b);
+        /* Chat container */
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 30px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .message {
+            max-width: 75%;
+            padding: 12px 18px;
+            border-radius: 16px;
+            line-height: 1.5;
+            font-size: 15px;
+            animation: fadeIn 0.3s ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #667eea, #764ba2);
             color: white;
+            border-bottom-right-radius: 4px;
         }
-        .telegram-btn-stop:hover:not(:disabled) {
-            background: linear-gradient(135deg, #c0392b, #a93226);
+        .message.bot {
+            align-self: flex-start;
+            background: white;
+            color: #333;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         }
-        .telegram-btn:disabled {
-            background: #bdc3c7;
+        .message .label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            opacity: 0.7;
+            margin-bottom: 4px;
+        }
+        .message.bot .label { color: #764ba2; }
+        .message.user .label { color: rgba(255,255,255,0.8); }
+        .message .content {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .message .content p { margin-bottom: 8px; }
+        .message .content p:last-child { margin-bottom: 0; }
+        /* Input area */
+        .input-area {
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            padding: 16px 30px;
+            display: flex;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+        .input-area textarea {
+            flex: 1;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 12px 16px;
+            font-size: 15px;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            transition: border-color 0.2s;
+            min-height: 48px;
+            max-height: 120px;
+        }
+        .input-area textarea:focus {
+            border-color: #667eea;
+        }
+        .btn-send {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            padding: 0 24px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+        }
+        .btn-send:hover { opacity: 0.9; }
+        .btn-send:active { transform: scale(0.97); }
+        .btn-send:disabled {
+            opacity: 0.5;
             cursor: not-allowed;
-            opacity: 0.8;
         }
-
-        .status {
-            text-align: center;
-            padding: 10px;
-            color: #666;
-            font-style: italic;
+        /* Status indicator */
+        .status-bar {
+            padding: 8px 30px;
+            font-size: 12px;
+            color: #888;
+            background: #fafafa;
+            border-top: 1px solid #eee;
+            flex-shrink: 0;
         }
-
-        .typing-indicator {
-            display: none;
-            padding: 15px;
-            background: #e9ecef;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-
-        .typing-indicator span {
+        .status-bar .dot {
             display: inline-block;
             width: 8px;
             height: 8px;
-            background: #666;
             border-radius: 50%;
-            margin: 0 2px;
-            animation: bounce 1.3s linear infinite;
+            margin-right: 6px;
         }
-
-        .typing-indicator span:nth-child(2) {
-            animation-delay: 0.15s;
+        .status-bar .dot.green { background: #4caf50; }
+        .status-bar .dot.red { background: #f44336; }
+        .status-bar .dot.yellow { background: #ff9800; }
+        /* Typing indicator */
+        .typing {
+            align-self: flex-start;
+            background: white;
+            padding: 12px 18px;
+            border-radius: 16px;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            display: none;
         }
-
-        .typing-indicator span:nth-child(3) {
-            animation-delay: 0.3s;
+        .typing .dots {
+            display: flex;
+            gap: 4px;
         }
-
+        .typing .dot-anim {
+            width: 8px;
+            height: 8px;
+            background: #764ba2;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        .typing .dot-anim:nth-child(1) { animation-delay: -0.32s; }
+        .typing .dot-anim:nth-child(2) { animation-delay: -0.16s; }
+        .typing .dot-anim:nth-child(3) { animation-delay: 0s; }
         @keyframes bounce {
-            0%, 60%, 100% { transform: translateY(0); }
-            30% { transform: translateY(-5px); }
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
         }
-
-        @media (max-width: 768px) {
-            .container {
-                margin: 10px;
-                border-radius: 10px;
-            }
-
-            .header h1 {
-                font-size: 1em;
-            }
-
-            .header p {
-                font-size: 1em;
-            }
-
-            .messages {
-                padding: 15px;
-            }
-
-            .input-container {
-                flex-direction: column;
-            }
-
-            #send-btn {
-                width: 100%;
-            }
-        }
+        /* Scrollbar */
+        .chat-container::-webkit-scrollbar { width: 6px; }
+        .chat-container::-webkit-scrollbar-track { background: transparent; }
+        .chat-container::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>ИИ ассистент</h1>
+    <div class="header">
+        <h1>🤖 RAG-система</h1>
+        <div class="user-info">
+            <span class="username">👤 {{ session.username }}</span>
+            <a href="{{ url_for('logout') }}" class="btn-logout">Выйти</a>
         </div>
+    </div>
 
-        <div class="telegram-bar">
-            <span class="telegram-label">🤖 Telegram-бот:</span>
-            <span class="telegram-status" id="telegram-status">—</span>
-            <input type="password" id="telegram-token" class="telegram-token" placeholder="Токен бота (если ещё не сохранён)" autocomplete="off">
-            <button type="button" id="telegram-start-btn" class="telegram-btn telegram-btn-start">Запустить бота</button>
-            <button type="button" id="telegram-stop-btn" class="telegram-btn telegram-btn-stop" disabled>Остановить бота</button>
+    <div class="chat-container" id="chatContainer">
+        <div class="message bot">
+            <div class="label">Система</div>
+            <div class="content">Привет, {{ session.username }}! Задай мне вопрос по базе знаний.</div>
         </div>
-
-        <div class="chat-container">
-            <div class="messages" id="messages">
-                <div class="message system-message">
-                    👋 Добро пожаловать! Я информационный ассистент. Задайте ваш вопрос и я постараюсь ответить на основе базы знаний.
-                </div>
-            </div>
-
-            <div class="typing-indicator" id="typing-indicator">
-                <span></span>
-                <span></span>
-                <span></span>
-                Обработка запроса...
-            </div>
-
-            <div class="input-area">
-                <div class="input-container">
-                    <textarea 
-                        id="question" 
-                        placeholder="Напишите ваш вопрос" 
-                    ></textarea>
-                    <button id="send-btn" onclick="sendMessage()">Отправить</button>
-                </div>
-                <div class="status" id="status">
-                    Система инициализируется...
-                </div>
+        <div class="typing" id="typingIndicator">
+            <div class="dots">
+                <div class="dot-anim"></div>
+                <div class="dot-anim"></div>
+                <div class="dot-anim"></div>
             </div>
         </div>
     </div>
 
+    <div class="input-area">
+        <textarea id="questionInput" placeholder="Введите ваш вопрос..." rows="1" onkeydown="if(event.key=='Enter'&&!event.shiftKey){event.preventDefault();sendQuestion()}"></textarea>
+        <button class="btn-send" id="sendBtn" onclick="sendQuestion()">Отправить</button>
+    </div>
+
+    <div class="status-bar" id="statusBar">
+        <span class="dot yellow" id="statusDot"></span>
+        <span id="statusText">Проверка соединения...</span>
+    </div>
+
     <script>
-        // Функция для добавления сообщения в чат
-        function addMessage(text, isUser = false, isSystem = false) {
-            const messagesDiv = document.getElementById('messages');
-            const messageDiv = document.createElement('div');
-            
-            if (isUser) {
-                messageDiv.className = 'message user-message';
-                messageDiv.innerHTML = `<strong>Вы:</strong><br>${text}`;
-            } else if (isSystem) {
-                messageDiv.className = 'message system-message';
-                messageDiv.innerHTML = text;
-            } else {
-                messageDiv.className = 'message assistant-message';
-                messageDiv.innerHTML = `<strong>Ассистент:</strong><br>${text.replace(/\n/g, '<br>')}`;
-            }
-            
-            messagesDiv.appendChild(messageDiv);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        }
+        const chatContainer = document.getElementById('chatContainer');
+        const questionInput = document.getElementById('questionInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
 
-        // Функция для отправки сообщения
-        function sendMessage() {
-            const questionInput = document.getElementById('question');
-            const question = questionInput.value.trim();
-            
-            if (!question) {
-                return;
-            }
+        // Проверка статуса при загрузке
+        checkStatus();
 
-            // Добавляем вопрос пользователя в чат
-            addMessage(question, true);
-            
-            // Очищаем поле ввода
-            questionInput.value = '';
-            
-            // Показываем индикатор набора текста
-            document.getElementById('typing-indicator').style.display = 'block';
-            
-            // Блокируем кнопку отправки
-            const sendBtn = document.getElementById('send-btn');
-            sendBtn.disabled = true;
-            sendBtn.textContent = 'Отправка...';
-
-            // Отправляем запрос на сервер
-            fetch('/ask', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({question: question})
-            })
-            .then(response => response.json())
-            .then(data => {
-                // Скрываем индикатор набора текста
-                document.getElementById('typing-indicator').style.display = 'none';
-                
-                if (data.error) {
-                    addMessage(`❌ Ошибка: ${data.error}`, false, true);
-                } else {
-                    addMessage(data.answer);
-                }
-            })
-            .catch(error => {
-                // Скрываем индикатор набора текста
-                document.getElementById('typing-indicator').style.display = 'none';
-                addMessage(`❌ Ошибка сети: ${error.message}`, false, true);
-            })
-            .finally(() => {
-                // Разблокируем кнопку отправки
-                sendBtn.disabled = false;
-                sendBtn.textContent = 'Отправить';
-            });
-        }
-
-        // Функция для проверки статуса системы
         function checkStatus() {
             fetch('/status')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.initialized) {
+                        statusDot.className = 'dot green';
+                        statusText.textContent = 'Система готова';
+                    } else {
+                        statusDot.className = 'dot yellow';
+                        statusText.textContent = 'Инициализация...';
+                        setTimeout(checkStatus, 2000);
+                    }
+                })
+                .catch(() => {
+                    statusDot.className = 'dot red';
+                    statusText.textContent = 'Ошибка соединения';
+                });
+        }
+
+        function addMessage(text, isUser) {
+            const div = document.createElement('div');
+            div.className = `message ${isUser ? 'user' : 'bot'}`;
+            div.innerHTML = `
+                <div class="label">${isUser ? 'Вы' : 'Бот'}</div>
+                <div class="content">${escapeHtml(text).replace(/\\n/g, '<br>')}</div>
+            `;
+            chatContainer.insertBefore(div, typingIndicator);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function setLoading(loading) {
+            sendBtn.disabled = loading;
+            sendBtn.textContent = loading ? '...' : 'Отправить';
+            questionInput.disabled = loading;
+            typingIndicator.style.display = loading ? 'block' : 'none';
+            if (loading) {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        }
+
+        function sendQuestion() {
+            const question = questionInput.value.trim();
+            if (!question) return;
+
+            addMessage(question, true);
+            questionInput.value = '';
+            questionInput.style.height = 'auto';
+            setLoading(true);
+
+            fetch('/ask', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: question })
+            })
             .then(response => response.json())
             .then(data => {
-                const statusDiv = document.getElementById('status');
-                if (data.initialized) {
-                    statusDiv.textContent = '✅ Система готова к работе';
-                    statusDiv.style.color = 'green';
-                } else {
-                    statusDiv.textContent = '⏳ Система инициализируется...';
-                    statusDiv.style.color = '#666';
-                    // Проверяем статус снова через 2 секунды
-                    setTimeout(checkStatus, 2000);
+                setLoading(false);
+                if (data.answer) {
+                    addMessage(data.answer, false);
+                } else if (data.error) {
+                    addMessage('❌ Ошибка: ' + data.error, false);
                 }
             })
             .catch(error => {
-                console.error('Ошибка проверки статуса:', error);
+                setLoading(false);
+                addMessage('❌ Ошибка соединения с сервером', false);
             });
         }
 
-        // Обработчик нажатия Enter в поле ввода
-        document.getElementById('question').addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-
-        // === Telegram-бот (дублирование функционала из run_gui.py) ===
-        function telegramRefreshStatus() {
-            fetch('/telegram/status')
-                .then(function(r) { return r.json(); })
-                .then(function(data) {
-                    var statusEl = document.getElementById('telegram-status');
-                    var startBtn = document.getElementById('telegram-start-btn');
-                    var stopBtn = document.getElementById('telegram-stop-btn');
-                    if (data.running) {
-                        statusEl.textContent = 'Бот запущен';
-                        statusEl.style.color = 'green';
-                        startBtn.disabled = true;
-                        stopBtn.disabled = false;
-                    } else {
-                        statusEl.textContent = data.has_token ? 'Бот не запущен' : 'Токен не задан';
-                        statusEl.style.color = data.has_token ? '#666' : '#e74c3c';
-                        startBtn.disabled = false;
-                        stopBtn.disabled = true;
-                    }
-                })
-                .catch(function() {
-                    document.getElementById('telegram-status').textContent = 'Ошибка запроса';
-                });
-        }
-        function telegramStart() {
-            var tokenInput = document.getElementById('telegram-token');
-            var token = tokenInput ? tokenInput.value.trim() : '';
-            var startBtn = document.getElementById('telegram-start-btn');
-            startBtn.disabled = true;
-            fetch('/telegram/start', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(token ? { token: token } : {})
-            })
-                .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
-                .then(function(res) {
-                    if (res.ok && res.data.success) {
-                        telegramRefreshStatus();
-                        if (token) tokenInput.value = '';
-                    } else {
-                        alert(res.data.error || res.data.message || 'Ошибка запуска');
-                        telegramRefreshStatus();
-                    }
-                })
-                .catch(function(e) {
-                    alert('Ошибка сети: ' + e.message);
-                    telegramRefreshStatus();
-                });
-        }
-        function telegramStop() {
-            var stopBtn = document.getElementById('telegram-stop-btn');
-            stopBtn.disabled = true;
-            fetch('/telegram/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
-                .then(function(r) { return r.json(); })
-                .then(function(data) {
-                    telegramRefreshStatus();
-                    if (!data.success && data.error) alert(data.error);
-                })
-                .catch(function(e) {
-                    alert('Ошибка сети: ' + e.message);
-                    telegramRefreshStatus();
-                });
-        }
-
-        // Инициализация
-        document.addEventListener('DOMContentLoaded', function() {
-            // Проверяем статус системы при загрузке страницы
-            checkStatus();
-            // Статус Telegram-бота
-            telegramRefreshStatus();
-            setInterval(telegramRefreshStatus, 5000);
-
-            document.getElementById('telegram-start-btn').addEventListener('click', telegramStart);
-            document.getElementById('telegram-stop-btn').addEventListener('click', telegramStop);
-
-            // Фокус на поле ввода
-            document.getElementById('question').focus();
+        // Auto-resize textarea
+        questionInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
         });
     </script>
 </body>

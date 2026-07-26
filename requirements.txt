@@ -20,3 +20,7 @@ flask>=3.0.0
 
 # Telegram-бот
 python-telegram-bot>=20.0.0
+
+# База данных (PostgreSQL + аутентификация)
+psycopg2-binary>=2.9.0
+werkzeug>=3.0.0
