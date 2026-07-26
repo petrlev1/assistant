@@ -25,9 +25,8 @@ PROVIDERS = {
     }
 }
 
-# Путь к Caddy
-CADDY_PATH = r"C:\Users\Petrlev\AppData\Local\Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe"
-CADDY_DIR = r"C:\peter\ai_bot\automation\assistant"
+# Значения по умолчанию для Caddy (хранятся в rag_settings.json)
+# CADDY_PATH и CADDY_DIR читаются из self.settings["caddy_path"] / self.settings["caddy_dir"]
 
 
 class LauncherUI:
@@ -69,7 +68,9 @@ class LauncherUI:
             "search_alpha": 0.7,
             "relevance_threshold": 0.1,
             "max_context_fragments": 100,
-            "telegram_bot_token": ""
+            "telegram_bot_token": "",
+            "caddy_path": r"C:\Users\Petrlev\AppData\Local\Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe",
+            "caddy_dir": r"C:\peter\ai_bot\automation\assistant"
         }
         try:
             with open(settings_file, 'r', encoding='utf-8') as f:
@@ -596,8 +597,8 @@ class LauncherUI:
             return
         try:
             self.caddy_process = subprocess.Popen(
-                [CADDY_PATH, "run"],
-                cwd=CADDY_DIR,
+                [self.settings["caddy_path"], "run"],
+                cwd=self.settings["caddy_dir"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
