@@ -129,3 +129,73 @@ def login_user(username, password):
     except Exception as e:
         logger.error(f"Ошибка входа: {e}")
         return False, f"Ошибка входа: {str(e)}"
+
+
+# === История чата ===
+
+def init_chat_history():
+    """Создание таблицы истории чата"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role VARCHAR(10) NOT NULL,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Индекс для быстрой загрузки истории по пользователю
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chat_history_user
+            ON chat_history (user_id, created_at)
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("Таблица chat_history инициализирована")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка инициализации chat_history: {e}")
+        return False
+
+
+def save_message(user_id, role, message):
+    """Сохранение сообщения в историю чата"""
+    if not user_id or not message:
+        return False
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO chat_history (user_id, role, message) VALUES (%s, %s, %s)",
+            (user_id, role, message),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения сообщения: {e}")
+        return False
+
+
+def get_history(user_id, limit=50):
+    """Загрузка истории чата пользователя"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT role, message, created_at FROM chat_history "
+            "WHERE user_id = %s ORDER BY created_at ASC LIMIT %s",
+            (user_id, limit),
+        )
+        messages = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [dict(m) for m in messages]
+    except Exception as e:
+        logger.error(f"Ошибка загрузки истории: {e}")
+        return []

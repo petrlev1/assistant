@@ -6,3 +6,4 @@ __pycache__/
 chat_logs/
 rag_settings.json
 venv/
+start_web.bat

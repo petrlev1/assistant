@@ -14,6 +14,7 @@ import logging
 import json
 import docx
 import openpyxl
+import requests
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -107,6 +108,21 @@ class RAGCore:
         # Загрузка базы знаний
         self.reload_knowledge_base()
         
+    def _sanitize_text(self, text):
+            """Очистка текста от символов, которые могут вызвать проблемы с кодировкой на Windows"""
+            if not text:
+                return text
+            # Заменяем только проблемные символы, не входящие в latin-1
+            # (httpx/openai на Windows может падать на них)
+            replacements = {
+                '\u2026': '...',  # горизонтальное многоточие …
+                '\u2013': '-',    # короткое тире –
+                '\u2014': '--',   # длинное тире —
+            }
+            for old, new in replacements.items():
+                text = text.replace(old, new)
+            return text
+
     def _setup_client(self):
         """Инициализация клиента LLM с текущими настройками"""
         global client
@@ -706,28 +722,46 @@ class RAGCore:
 """
         
         system_prompt = base_prompt + context_section
+        # Очищаем текст от символов, не поддерживаемых ascii (проблема Windows)
+        if '\u2026' in system_prompt:
+            logger.info("⚠️ Найден символ \\u2026 в system_prompt, заменяю...")
+        system_prompt = self._sanitize_text(system_prompt)
+        if '\u2026' in question:
+            logger.info("⚠️ Найден символ \\u2026 в question, заменяю...")
+        question = self._sanitize_text(question)
         
         for i, model_name in enumerate(AVAILABLE_MODELS):
             # Используем модель из настроек если она задана
             active_model = self.settings.get("llm_model", model_name)
             try:
                 logger.info(f"🤖 Отправка запроса к модели {active_model}...")
-                response = client.chat.completions.create(
-                    model=active_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": question}
-                    ]
+                # Используем requests напрямую (httpx на Windows может падать на Unicode)
+                response = requests.post(
+                f"{self.settings.get('llm_base_url', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1')}/chat/completions",
+                    headers={
+                "Authorization": f"Bearer {self.settings.get('llm_api_key', '')}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                "model": active_model,
+                    "messages": [
+                {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": question}
+                ]
+                    },
+                timeout=60
                 )
-                answer = response.choices[0].message.content.strip()
+                response.raise_for_status()
+                answer = response.json()["choices"][0]["message"]["content"].strip()
                 answers.append(f"Ответ ИИ модели {active_model}:\n{answer}\n")
                 logger.info(f"✅ Ответ получен от модели {active_model}")
             except Exception as e:
                 error_msg = f"❌ Ошибка при обращении к модели {active_model}: {e}"
-                logger.error(error_msg)
-                answers.append(f"Ответ ИИ модели {active_model}:\nОшибка: {error_msg}\n")
-        
-        # Добавляем информацию об источниках только если использовалась база знаний
+                # На Windows str(e) может содержать символы, ломающие ascii-кодировку
+                error_msg_safe = error_msg.encode('utf-8', errors='replace').decode('utf-8')
+                logger.error(error_msg_safe)
+                answers.append(f"Ответ ИИ модели {active_model}:\nОшибка: {error_msg_safe}\n")
+                        # Добавляем информацию об источниках только если использовалась база знаний
         result = "\n---\n".join(answers)
         if not disable_kb_search and source_files:
             sources_note = self._format_sources_note(source_files)

@@ -6,7 +6,7 @@ import asyncio
 import os
 from rag_core import get_rag_system, RAGSettings
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -39,9 +39,10 @@ def initialize_rag_system():
 
 
 def init_auth():
-    """Инициализация БД аутентификации"""
+    """Инициализация БД аутентификации и истории чата"""
     try:
         init_db()
+        init_chat_history()
         logger.info("База данных аутентификации инициализирована")
     except Exception as e:
         logger.error(f"Ошибка инициализации БД аутентификации: {e}")
@@ -122,6 +123,7 @@ def ask_question():
     try:
         data = request.get_json()
         question = data.get('question', '').strip()
+        user_id = session['user_id']
         user_name = session.get('username', 'Пользователь')
 
         if not question:
@@ -132,11 +134,17 @@ def ask_question():
 
         logger.info(f"Вопрос от {user_name}: {question}")
 
+        # Сохраняем вопрос в историю
+        save_message(user_id, 'user', question)
+
         # Логирование вопроса в файл чата
         chat_logger.log_message(user_name, 0, question, is_bot=False)
 
         answer = rag_system.ask_model(question)
         logger.info("Ответ сгенерирован успешно")
+
+        # Сохраняем ответ в историю
+        save_message(user_id, 'assistant', answer)
 
         # Логирование ответа
         chat_logger.log_message("Бот", 0, answer, is_bot=True)
@@ -146,6 +154,16 @@ def ask_question():
     except Exception as e:
         logger.error(f"Ошибка обработки вопроса: {e}")
         return jsonify({'error': f'Ошибка обработки вопроса: {str(e)}'}), 500
+
+
+@app.route('/history')
+def get_chat_history():
+    """Получение истории чата текущего пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    messages = get_history(session['user_id'])
+    return jsonify({'messages': messages})
 
 
 @app.route('/status')

@@ -1,6 +1,19 @@
 # run_web.py - Файл для запуска веб-интерфейса
 """Скрипт для запуска веб-интерфейса RAG-системы"""
 
+import sys
+import io
+import os
+
+# Принудительно ставим UTF-8 для stdout/stderr (особенно важно на Windows)
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
+# На Windows проверяем PYTHONUTF8 (иначе httpx/openai падают на Unicode)
+if sys.platform == 'win32' and not os.environ.get('PYTHONUTF8'):
+    print("⚠️ Внимание: для корректной работы на Windows установите PYTHONUTF8=1")
+    print("   Используйте start_web.bat или запустите: set PYTHONUTF8=1 && python run_web.py")
+
 import socket
 
 # Функция для определения IP-адреса
