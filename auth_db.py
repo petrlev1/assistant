@@ -291,3 +291,22 @@ def get_history(user_id, limit=50):
     except Exception as e:
         logger.error(f"Ошибка загрузки истории: {e}")
         return []
+
+
+def clear_chat_history(user_id):
+    """Очистка истории чата пользователя"""
+    if not user_id:
+        return False
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM chat_history WHERE user_id = %s", (user_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"🗑️ История чата пользователя #{user_id} очищена (удалено {deleted} записей)")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка очистки истории чата: {e}")
+        return False

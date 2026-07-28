@@ -310,6 +310,7 @@
         <div class="user-info">
             <span class="username">👤 {{ session.username }}</span>
             <button class="btn-logout" onclick="toggleDocsPanel()" style="margin-right:8px;">📄 Документы</button>
+            <button class="btn-logout" onclick="clearChat()" style="margin-right:8px;background:rgba(244,67,54,0.25);">🗑️ Чат</button>
             <a href="{{ url_for('logout') }}" class="btn-logout">Выйти</a>
         </div>
     </div>
@@ -569,6 +570,29 @@
             .catch(() => {
                 list.innerHTML = '<div class="docs-empty">❌ Ошибка соединения с сервером</div>';
             });
+        }
+
+        function clearChat() {
+            if (!confirm('Очистить всю историю чата?')) return;
+
+            fetch('/api/chat/clear', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        // Удаляем все сообщения, кроме typing индикатора
+                        const container = document.getElementById('chatContainer');
+                        const messages = container.querySelectorAll('.message');
+                        messages.forEach(m => m.remove());
+                        // Показываем приветствие как при первом входе
+                        const div = document.createElement('div');
+                        div.className = 'message bot';
+                        div.innerHTML = '<div class="label">Система</div><div class="content">Привет, {{ session.username }}! Задай мне вопрос по базе знаний.</div>';
+                        container.insertBefore(div, document.getElementById('typingIndicator'));
+                    } else {
+                        alert('Ошибка: ' + (data.error || 'Не удалось очистить историю'));
+                    }
+                })
+                .catch(() => alert('Ошибка соединения с сервером'));
         }
     </script>
 </body>

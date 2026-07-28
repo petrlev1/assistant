@@ -6,7 +6,7 @@ import asyncio
 import os
 from rag_core import get_rag_system, RAGSettings
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -168,6 +168,20 @@ def get_chat_history():
 
     messages = get_history(session['user_id'])
     return jsonify({'messages': messages})
+
+
+@app.route('/api/chat/clear', methods=['POST'])
+def clear_chat():
+    """Очистка истории чата текущего пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    success = clear_chat_history(session['user_id'])
+    if success:
+        logger.info(f"🗑️ Пользователь {session.get('username')} очистил историю чата")
+        return jsonify({'success': True, 'message': 'История чата очищена'})
+    else:
+        return jsonify({'error': 'Ошибка при очистке истории'}), 500
 
 
 @app.route('/status')
