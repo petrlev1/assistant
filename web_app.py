@@ -200,7 +200,29 @@ def get_documents():
     """Список документов текущего пользователя"""
     if 'user_id' not in session:
         return jsonify({'error': 'Необходима авторизация'}), 401
-    docs = get_user_documents(session['user_id'])
+
+    user_id = session['user_id']
+    user_db_folder = os.path.join('Database', f'user_{user_id}')
+
+    # Синхронизируем файлы на диске с записями в БД
+    if os.path.exists(user_db_folder):
+        files_on_disk = set(os.listdir(user_db_folder))
+        db_docs = get_user_documents(user_id)
+        db_filenames = {d['filename'] for d in db_docs}
+
+        # Файлы, которые есть на диске, но нет в БД — добавляем
+        for fname in files_on_disk:
+            file_path = os.path.join(user_db_folder, fname)
+            if os.path.isfile(file_path) and fname not in db_filenames:
+                add_document(user_id, fname, fname)
+
+        # Файлы, которые есть в БД, но нет на диске — удаляем записи
+        for doc in db_docs:
+            if doc['filename'] not in files_on_disk:
+                delete_document(doc['id'], user_id)
+
+    # Возвращаем актуальный список
+    docs = get_user_documents(user_id)
     return jsonify({'documents': docs})
 
 
