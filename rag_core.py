@@ -88,7 +88,7 @@ AVAILABLE_MODELS = [
 ]
 
 class RAGCore:
-    def __init__(self):
+    def __init__(self, user_id=None):
         """Инициализация RAG-системы"""
         self.my_knowledge = []
         self.all_knowledge_dict = {}
@@ -98,6 +98,7 @@ class RAGCore:
         self.bm25 = None
         self.tokenized_corpus = None
         self.settings = RAGSettings()
+        self.current_user_id = user_id  # None = общая база знаний
         
         # Переинициализация клиента с актуальными настройками
         self._setup_client()
@@ -106,22 +107,22 @@ class RAGCore:
         self._setup_model()
         
         # Загрузка базы знаний
-        self.reload_knowledge_base()
+        self.reload_knowledge_base(user_id)
         
     def _sanitize_text(self, text):
-            """Очистка текста от символов, которые могут вызвать проблемы с кодировкой на Windows"""
-            if not text:
-                return text
-            # Заменяем только проблемные символы, не входящие в latin-1
-            # (httpx/openai на Windows может падать на них)
-            replacements = {
-                '\u2026': '...',  # горизонтальное многоточие …
-                '\u2013': '-',    # короткое тире –
-                '\u2014': '--',   # длинное тире —
-            }
-            for old, new in replacements.items():
-                text = text.replace(old, new)
+        """Очистка текста от символов, которые могут вызвать проблемы с кодировкой на Windows"""
+        if not text:
             return text
+        # Заменяем только проблемные символы, не входящие в latin-1
+        # (httpx/openai на Windows может падать на них)
+        replacements = {
+            '\u2026': '...',  # горизонтальное многоточие …
+            '\u2013': '-',    # короткое тире –
+            '\u2014': '--',   # длинное тире —
+        }
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        return text
 
     def _setup_client(self):
         """Инициализация клиента LLM с текущими настройками"""
@@ -143,43 +144,34 @@ class RAGCore:
             logger.error(f"❌ Не удалось загрузить модель: {e}")
             raise
     
-    def load_knowledge_from_txt(self, file_paths=None):
+    def load_for_user(self, user_id):
+        """Переключение на базу знаний конкретного пользователя"""
+        self.current_user_id = user_id
+        self.reload_knowledge_base(user_id)
+        logger.info(f"👤 RAG переключён на пользователя #{user_id}")
+    
+    def load_knowledge_from_txt(self, file_paths=None, user_id=None):
         """Загрузка знаний из файлов"""
         all_knowledge = {}
         
         # Если файлы не указаны, загружаем из стандартных мест
         if not file_paths:
             logger.info("📂 Загрузка базы знаний из стандартных источников...")
-            # Загрузка из DataBase.txt
-            txt_file = "DataBase.txt"
-            if os.path.exists(txt_file):
-                logger.info(f"📄 Обработка файла: {txt_file}")
-                txt_knowledge = []
-                try:
-                    with open(txt_file, "r", encoding="utf-8") as file:
-                        for i, line in enumerate(file, 1):
-                            line = line.strip()
-                            if line:
-                                txt_knowledge.append(line)
-                    if txt_knowledge:
-                        logger.info(f"✅ Загружено {len(txt_knowledge)} строк из {txt_file}")
-                        all_knowledge[txt_file] = txt_knowledge
-                    else:
-                        logger.warning(f"⚠️ Файл {txt_file} пуст")
-                except Exception as e:
-                    logger.error(f"❌ Ошибка при чтении {txt_file}: {e}")
-            else:
-                logger.warning(f"⚠️ Файл {txt_file} не найден")
             
-            # Загрузка из папки Database
-            database_folder = "Database"
-            if os.path.exists(database_folder):
-                logger.info(f"📁 Обработка папки: {database_folder}")
-                for file_name in os.listdir(database_folder):
-                    file_path = os.path.join(database_folder, file_name)
-                    self._process_file(file_path, all_knowledge)
+            if user_id is not None:
+                # Загрузка базы знаний конкретного пользователя
+                user_db_folder = os.path.join("Database", f"user_{user_id}")
+                if os.path.exists(user_db_folder):
+                    logger.info(f"📁 Загрузка базы знаний пользователя #{user_id} из {user_db_folder}")
+                    for file_name in os.listdir(user_db_folder):
+                        file_path = os.path.join(user_db_folder, file_name)
+                        self._process_file(file_path, all_knowledge)
+                else:
+                    logger.info(f"📁 Папка пользователя #{user_id} не найдена, создаю пустую базу")
+                    os.makedirs(user_db_folder, exist_ok=True)
             else:
-                logger.warning(f"⚠️ Папка {database_folder} не найдена")
+                # Загрузка общей базы знаний (стандартное поведение)
+                self._load_common_knowledge(all_knowledge)
         else:
             # Загрузка указанных файлов
             logger.info(f"📂 Загрузка {len(file_paths)} выбранных файлов...")
@@ -188,6 +180,42 @@ class RAGCore:
                 self._process_file(file_path, all_knowledge)
         
         return all_knowledge
+    
+    def _load_common_knowledge(self, all_knowledge):
+        """Загрузка общей базы знаний (DataBase.txt + Database/)"""
+        # Загрузка из DataBase.txt
+        txt_file = "DataBase.txt"
+        if os.path.exists(txt_file):
+            logger.info(f"📄 Обработка файла: {txt_file}")
+            txt_knowledge = []
+            try:
+                with open(txt_file, "r", encoding="utf-8") as file:
+                    for i, line in enumerate(file, 1):
+                        line = line.strip()
+                        if line:
+                            txt_knowledge.append(line)
+                if txt_knowledge:
+                    logger.info(f"✅ Загружено {len(txt_knowledge)} строк из {txt_file}")
+                    all_knowledge[txt_file] = txt_knowledge
+                else:
+                    logger.warning(f"⚠️ Файл {txt_file} пуст")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при чтении {txt_file}: {e}")
+        else:
+            logger.warning(f"⚠️ Файл {txt_file} не найден")
+        
+        # Загрузка из папки Database
+        database_folder = "Database"
+        if os.path.exists(database_folder):
+            logger.info(f"📁 Обработка папки: {database_folder}")
+            for file_name in os.listdir(database_folder):
+                file_path = os.path.join(database_folder, file_name)
+                # Пропускаем папки пользователей (user_{id})
+                if os.path.isdir(file_path) and file_name.startswith("user_"):
+                    continue
+                self._process_file(file_path, all_knowledge)
+        else:
+            logger.warning(f"⚠️ Папка {database_folder} не найдена")
     
     def _process_file(self, file_path, all_knowledge):
         """Обработка одного файла"""
@@ -373,11 +401,13 @@ class RAGCore:
             logger.error(f"❌ Ошибка при обработке файла {file_path}: {e}")
     
     def _get_file_embedding_cache_path(self, file_path):
-        """Генерирует путь к кэш-файлу для конкретного файла знаний (без хэша в имени)"""
-        cache_dir = Path("embeddings_cache")
-        cache_dir.mkdir(exist_ok=True)
+        """Генерирует путь к кэш-файлу для конкретного файла знаний (с учётом пользователя)"""
+        if self.current_user_id is not None:
+            cache_dir = Path("embeddings_cache") / f"user_{self.current_user_id}"
+        else:
+            cache_dir = Path("embeddings_cache")
+        cache_dir.mkdir(exist_ok=True, parents=True)
         filename = Path(file_path).stem
-        # Используем только имя файла без хэша содержимого
         cache_path = cache_dir / f"{filename}.pkl"
         return cache_path
 
@@ -387,7 +417,10 @@ class RAGCore:
 
     def _migrate_old_cache_files(self, file_path, knowledge_content):
         """Мигрирует старые кэш-файлы (с хэшем в имени) в новый формат (без хэша)"""
-        cache_dir = Path("embeddings_cache")
+        if self.current_user_id is not None:
+            cache_dir = Path("embeddings_cache") / f"user_{self.current_user_id}"
+        else:
+            cache_dir = Path("embeddings_cache")
         if not cache_dir.exists():
             return None
         
@@ -500,13 +533,13 @@ class RAGCore:
         
         return embeddings
     
-    def reload_knowledge_base(self):
+    def reload_knowledge_base(self, user_id=None):
         """Перезагрузка базы знаний"""
         try:
             logger.info("\n🔄 Перезагрузка базы знаний...")
             
             # Загрузка знаний
-            self.all_knowledge_dict = self.load_knowledge_from_txt()
+            self.all_knowledge_dict = self.load_knowledge_from_txt(user_id=user_id)
             
             # Получаем список текущих файлов (по имени без пути)
             current_file_names = set()
@@ -525,6 +558,10 @@ class RAGCore:
             
             if not self.my_knowledge:
                 logger.warning("⚠️ База знаний пуста")
+                # Сбрасываем эмбеддинги и BM25
+                self.corpus_embeddings = None
+                self.bm25 = None
+                self.tokenized_corpus = None
                 return False
             
             logger.info(f"📊 Всего загружено {len(self.my_knowledge)} фрагментов знаний из {len(self.all_knowledge_dict)} файлов.")
@@ -557,9 +594,15 @@ class RAGCore:
             logger.error(f"❌ Ошибка загрузки базы знаний: {e}")
             return False
     
+    def _get_cache_dir(self):
+        """Возвращает директорию кэша с учётом текущего пользователя"""
+        if self.current_user_id is not None:
+            return Path("embeddings_cache") / f"user_{self.current_user_id}"
+        return Path("embeddings_cache")
+    
     def _cleanup_orphaned_cache(self, current_file_names):
         """Удаляет кэш-файлы для файлов, которых больше нет в базе знаний"""
-        cache_dir = Path("embeddings_cache")
+        cache_dir = self._get_cache_dir()
         if not cache_dir.exists():
             return
         

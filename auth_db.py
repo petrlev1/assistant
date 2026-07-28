@@ -64,6 +64,10 @@ def init_db():
         cur.close()
         conn.close()
         logger.info("Таблица users инициализирована")
+
+        # Инициализация таблицы документов пользователей
+        init_user_documents()
+
         return True
     except Exception as e:
         logger.error(f"Ошибка инициализации БД: {e}")
@@ -129,6 +133,94 @@ def login_user(username, password):
     except Exception as e:
         logger.error(f"Ошибка входа: {e}")
         return False, f"Ошибка входа: {str(e)}"
+
+
+# === Управление документами пользователей ===
+
+def init_user_documents():
+    """Создание таблицы документов пользователей"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_documents (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                filename VARCHAR(255) NOT NULL,
+                original_name VARCHAR(255) NOT NULL,
+                file_hash VARCHAR(64),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_documents_user
+            ON user_documents (user_id)
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("Таблица user_documents инициализирована")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка инициализации user_documents: {e}")
+        return False
+
+
+def add_document(user_id, filename, original_name, file_hash=None):
+    """Добавление записи о документе пользователя"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO user_documents (user_id, filename, original_name, file_hash) VALUES (%s, %s, %s, %s) RETURNING id",
+            (user_id, filename, original_name, file_hash),
+        )
+        doc_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"Документ {original_name} добавлен пользователю {user_id}")
+        return True, doc_id
+    except Exception as e:
+        logger.error(f"Ошибка добавления документа: {e}")
+        return False, None
+
+
+def delete_document(doc_id, user_id):
+    """Удаление записи о документе (только для своего user_id)"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM user_documents WHERE id = %s AND user_id = %s",
+            (doc_id, user_id),
+        )
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        return deleted > 0
+    except Exception as e:
+        logger.error(f"Ошибка удаления документа: {e}")
+        return False
+
+
+def get_user_documents(user_id):
+    """Получение списка документов пользователя"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT id, filename, original_name, created_at FROM user_documents WHERE user_id = %s ORDER BY created_at DESC",
+            (user_id,),
+        )
+        docs = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [dict(d) for d in docs]
+    except Exception as e:
+        logger.error(f"Ошибка получения документов: {e}")
+        return []
 
 
 # === История чата ===

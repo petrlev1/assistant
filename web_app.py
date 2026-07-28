@@ -6,7 +6,7 @@ import asyncio
 import os
 from rag_core import get_rag_system, RAGSettings
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -64,6 +64,10 @@ def login():
         session['user_id'] = result['id']
         session['username'] = result['username']
         logger.info(f"Пользователь {username} вошёл в систему")
+        # Загружаем базу знаний пользователя
+        global rag_system
+        if rag_system is not None:
+            rag_system.load_for_user(session['user_id'])
         return redirect(url_for('index'))
     else:
         flash(result, 'error')
@@ -173,6 +177,93 @@ def status():
         return jsonify({'initialized': False}), 401
     global rag_system
     return jsonify({'initialized': rag_system is not None})
+
+
+# === Управление документами пользователя ===
+
+@app.route('/api/documents')
+def get_documents():
+    """Список документов текущего пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    docs = get_user_documents(session['user_id'])
+    return jsonify({'documents': docs})
+
+
+@app.route('/api/documents/upload', methods=['POST'])
+def upload_document():
+    """Загрузка документа в базу знаний пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'Файл не выбран'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'Пустое имя файла'}), 400
+
+    # Проверка расширения
+    allowed_ext = ('.txt', '.pdf', '.docx', '.csv', '.xlsx', '.xls')
+    if not file.filename.lower().endswith(allowed_ext):
+        return jsonify({'error': f'Неподдерживаемый формат. Разрешены: {", ".join(allowed_ext)}'}), 400
+
+    user_id = session['user_id']
+    user_db_folder = os.path.join('Database', f'user_{user_id}')
+    os.makedirs(user_db_folder, exist_ok=True)
+
+    # Сохраняем файл
+    filename = file.filename
+    file_path = os.path.join(user_db_folder, filename)
+    file.save(file_path)
+
+    # Добавляем запись в БД
+    success, doc_id = add_document(user_id, filename, filename)
+    if not success:
+        # Если не удалось записать в БД — удаляем файл
+        os.remove(file_path)
+        return jsonify({'error': 'Ошибка при сохранении в БД'}), 500
+
+    # Перезагружаем базу знаний пользователя
+    global rag_system
+    if rag_system is not None:
+        rag_system.load_for_user(user_id)
+
+    logger.info(f"📄 Пользователь {session.get('username')} загрузил документ: {filename}")
+    return jsonify({'success': True, 'message': f'Документ {filename} загружен'})
+
+
+@app.route('/api/documents/delete/<int:doc_id>', methods=['POST'])
+def delete_document_route(doc_id):
+    """Удаление документа пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    user_id = session['user_id']
+
+    # Получаем информацию о документе
+    docs = get_user_documents(user_id)
+    doc_info = next((d for d in docs if d['id'] == doc_id), None)
+
+    if not doc_info:
+        return jsonify({'error': 'Документ не найден'}), 404
+
+    # Удаляем файл
+    file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        logger.info(f"🗑️ Удалён файл: {file_path}")
+
+    # Удаляем запись из БД
+    delete_document(doc_id, user_id)
+
+    # Перезагружаем базу знаний пользователя
+    global rag_system
+    if rag_system is not None:
+        rag_system.load_for_user(user_id)
+
+    logger.info(f"🗑️ Пользователь {session.get('username')} удалил документ: {doc_info['filename']}")
+    return jsonify({'success': True, 'message': 'Документ удалён'})
 
 
 # === Telegram-бот ===
