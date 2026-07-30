@@ -796,7 +796,7 @@ class RAGCore:
                 )
                 response.raise_for_status()
                 answer = response.json()["choices"][0]["message"]["content"].strip()
-                answers.append(f"Ответ ИИ модели {active_model}:\n{answer}\n")
+                answers.append(f"{answer}")
                 logger.info(f"✅ Ответ получен от модели {active_model}")
             except Exception as e:
                 error_msg = f"❌ Ошибка при обращении к модели {active_model}: {e}"
