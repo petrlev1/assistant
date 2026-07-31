@@ -731,10 +731,13 @@ class RAGCore:
         # Проверяем настройку отключения моделей LLM
         if self.settings.get("disable_llm_models", False):
             if disable_kb_search:
-                return "⚠️ Отправка запросов к LLM моделям отключена."
-            sources_note = self._format_sources_note(source_files)
-            return f"🔍 Найденный контекст:\n{context}\n\n⚠️ Отправка запросов к LLM моделям отключена.\n\n{sources_note}"
-        
+                output = "🔍 Поиск в базе знаний отключен.\nКонтекст не загружен."
+            elif context == "База знаний не загружена." or not context:
+                output = f"🔍 Контекст: {context}"
+            else:
+                output = f"🔍 Найденный контекст:\n{context}"
+            sources_note = self._format_sources_note(source_files) if not disable_kb_search else "Источники: не найдены (поиск в БЗ отключен)."
+            return f"{output}\n\n⚠️ Отправка запросов к LLM моделям отключена.\n\n{sources_note}"
         answers = []
         
         # Единый универсальный системный промпт, работающий с контекстом и без него
