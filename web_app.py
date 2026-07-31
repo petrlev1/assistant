@@ -1,5 +1,5 @@
 # web_app.py - Веб-интерфейс для RAG-системы (с авторизацией)
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file
 import threading
 import logging
 import asyncio
@@ -328,6 +328,33 @@ def delete_document_route(doc_id):
 
     logger.info(f"🗑️ Пользователь {session.get('username')} удалил документ: {doc_info['filename']}")
     return jsonify({'success': True, 'message': 'Документ удалён'})
+
+
+@app.route('/api/documents/download/<int:doc_id>')
+def download_document(doc_id):
+    """Скачивание документа пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    user_id = session['user_id']
+
+    # Получаем информацию о документе
+    docs = get_user_documents(user_id)
+    doc_info = next((d for d in docs if d['id'] == doc_id), None)
+
+    if not doc_info:
+        return jsonify({'error': 'Документ не найден'}), 404
+
+    file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
+    if not os.path.exists(file_path):
+        return jsonify({'error': 'Файл не найден на диске'}), 404
+
+    logger.info(f"⬇️ Пользователь {session.get('username')} скачал документ: {doc_info['filename']}")
+    return send_file(
+        file_path,
+        as_attachment=True,
+        download_name=doc_info['original_name']
+    )
 
 
 # === Telegram-бот ===
