@@ -255,23 +255,24 @@ def init_chat_history():
 
 
 def save_message(user_id, role, message):
-    """Сохранение сообщения в историю чата"""
+    """Сохранение сообщения в историю чата, возвращает id сообщения"""
     if not user_id or not message:
-        return False
+        return None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO chat_history (user_id, role, message) VALUES (%s, %s, %s)",
+            "INSERT INTO chat_history (user_id, role, message) VALUES (%s, %s, %s) RETURNING id",
             (user_id, role, message),
         )
+        msg_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
         conn.close()
-        return True
+        return msg_id
     except Exception as e:
         logger.error(f"Ошибка сохранения сообщения: {e}")
-        return False
+        return None
 
 
 def get_history(user_id, limit=50):
@@ -280,7 +281,7 @@ def get_history(user_id, limit=50):
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            "SELECT role, message, created_at FROM chat_history "
+            "SELECT id, role, message, created_at FROM chat_history "
             "WHERE user_id = %s ORDER BY created_at ASC LIMIT %s",
             (user_id, limit),
         )
@@ -310,3 +311,74 @@ def clear_chat_history(user_id):
     except Exception as e:
         logger.error(f"Ошибка очистки истории чата: {e}")
         return False
+
+
+def delete_message(message_id, user_id):
+    """Удаление одного сообщения из истории чата"""
+    if not message_id or not user_id:
+        return False
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM chat_history WHERE id = %s AND user_id = %s",
+            (message_id, user_id),
+        )
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        if deleted > 0:
+            logger.info(f"🗑️ Удалено сообщение #{message_id} пользователя #{user_id}")
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Ошибка удаления сообщения: {e}")
+        return False
+
+
+def delete_message_pair(assistant_id, user_id):
+    """Удаление пары сообщений: ответ бота и предыдущий вопрос пользователя"""
+    if not assistant_id or not user_id:
+        return False
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Получаем сообщение бота
+        cur.execute(
+            "SELECT id, role, created_at FROM chat_history WHERE id = %s AND user_id = %s",
+            (assistant_id, user_id),
+        )
+        assistant_msg = cur.fetchone()
+        if not assistant_msg or assistant_msg['role'] != 'assistant':
+            cur.close()
+            conn.close()
+            return False
+
+        # Ищем предыдущее сообщение пользователя
+        cur.execute(
+            "SELECT id FROM chat_history WHERE user_id = %s AND role = 'user' "
+            "AND created_at < %s ORDER BY created_at DESC LIMIT 1",
+            (user_id, assistant_msg['created_at']),
+        )
+        user_msg = cur.fetchone()
+
+        # Удаляем оба сообщения
+        ids_to_delete = [assistant_id]
+        if user_msg:
+            ids_to_delete.append(user_msg['id'])
+
+        cur.execute(
+            "DELETE FROM chat_history WHERE id = ANY(%s) AND user_id = %s",
+            (ids_to_delete, user_id),
+        )
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"🗑️ Удалена пара сообщений #{ids_to_delete} пользователя #{user_id} (удалено {deleted})")
+        return True, ids_to_delete
+    except Exception as e:
+        logger.error(f"Ошибка удаления пары сообщений: {e}")
+        return False, []

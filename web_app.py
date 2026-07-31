@@ -6,7 +6,7 @@ import asyncio
 import os
 from rag_core import get_rag_system, RAGSettings
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -139,7 +139,7 @@ def ask_question():
         logger.info(f"Вопрос от {user_name}: {question}")
 
         # Сохраняем вопрос в историю
-        save_message(user_id, 'user', question)
+        user_msg_id = save_message(user_id, 'user', question)
 
         # Логирование вопроса в файл чата
         chat_logger.log_message(user_name, 0, question, is_bot=False)
@@ -148,12 +148,12 @@ def ask_question():
         logger.info("Ответ сгенерирован успешно")
 
         # Сохраняем ответ в историю
-        save_message(user_id, 'assistant', answer)
+        assistant_msg_id = save_message(user_id, 'assistant', answer)
 
         # Логирование ответа
         chat_logger.log_message("Бот", 0, answer, is_bot=True)
 
-        return jsonify({'answer': answer})
+        return jsonify({'answer': answer, 'user_msg_id': user_msg_id, 'assistant_msg_id': assistant_msg_id})
 
     except Exception as e:
         logger.error(f"Ошибка обработки вопроса: {e}")
@@ -182,6 +182,34 @@ def clear_chat():
         return jsonify({'success': True, 'message': 'История чата очищена'})
     else:
         return jsonify({'error': 'Ошибка при очистке истории'}), 500
+
+
+@app.route('/api/chat/delete/<int:message_id>', methods=['POST'])
+def delete_chat_message(message_id):
+    """Удаление одного сообщения из истории чата"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    success = delete_message(message_id, session['user_id'])
+    if success:
+        logger.info(f"🗑️ Пользователь {session.get('username')} удалил сообщение #{message_id}")
+        return jsonify({'success': True, 'message': 'Сообщение удалено'})
+    else:
+        return jsonify({'error': 'Сообщение не найдено'}), 404
+
+
+@app.route('/api/chat/delete-pair/<int:message_id>', methods=['POST'])
+def delete_chat_message_pair(message_id):
+    """Удаление пары: ответ бота + предыдущий вопрос пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    success, deleted_ids = delete_message_pair(message_id, session['user_id'])
+    if success:
+        logger.info(f"🗑️ Пользователь {session.get('username')} удалил пару #{deleted_ids}")
+        return jsonify({'success': True, 'deleted_ids': deleted_ids})
+    else:
+        return jsonify({'error': 'Сообщение не найдено'}), 404
 
 
 @app.route('/status')

@@ -101,6 +101,32 @@
         }
         .message .content p { margin-bottom: 8px; }
         .message .content p:last-child { margin-bottom: 0; }
+        /* Delete button on messages */
+        .message {
+            position: relative;
+        }
+        .message .btn-msg-delete {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            background: rgba(0,0,0,0.05);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 2px 6px;
+            opacity: 0;
+            transition: opacity 0.2s;
+            color: #999;
+            line-height: 1;
+        }
+        .message.bot:hover .btn-msg-delete {
+            opacity: 1;
+        }
+        .message .btn-msg-delete:hover {
+            background: #ffebee;
+            color: #f44336;
+        }
         /* Input area */
         .input-area {
             background: white;
@@ -388,12 +414,14 @@
                 });
         }
 
-        function addMessage(text, isUser) {
+        function addMessage(text, isUser, msgId) {
             const div = document.createElement('div');
             div.className = `message ${isUser ? 'user' : 'bot'}`;
+            div.dataset.msgId = msgId || '';
             div.innerHTML = `
                 <div class="label">${isUser ? 'Вы' : 'Бот'}</div>
                 <div class="content">${escapeHtml(text).replace(/\\n/g, '<br>')}</div>
+                ${(!isUser && msgId) ? `<button class="btn-msg-delete" onclick="deleteMessagePair(${msgId}, this)" title="Удалить вопрос + ответ">✕</button>` : ''}
             `;
             chatContainer.insertBefore(div, typingIndicator);
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -417,11 +445,14 @@
                         }
                         data.messages.forEach(msg => {
                             const label = msg.role === 'user' ? 'Вы' : 'Бот';
+                            const isUser = msg.role === 'user';
                             const div = document.createElement('div');
-                            div.className = `message ${msg.role === 'user' ? 'user' : 'bot'}`;
+                            div.className = `message ${isUser ? 'user' : 'bot'}`;
+                            div.dataset.msgId = msg.id;
                             div.innerHTML = `
                                 <div class="label">${label}</div>
                                 <div class="content">${escapeHtml(msg.message).replace(/\\n/g, '<br>')}</div>
+                                ${(!isUser) ? `<button class="btn-msg-delete" onclick="deleteMessagePair(${msg.id}, this)" title="Удалить вопрос + ответ">✕</button>` : ''}
                             `;
                             chatContainer.insertBefore(div, typingIndicator);
                         });
@@ -445,7 +476,7 @@
             const question = questionInput.value.trim();
             if (!question) return;
 
-            addMessage(question, true);
+            addMessage(question, true, null);
             questionInput.value = '';
             questionInput.style.height = 'auto';
             setLoading(true);
@@ -459,14 +490,19 @@
             .then(data => {
                 setLoading(false);
                 if (data.answer) {
-                    addMessage(data.answer, false);
+                    addMessage(data.answer, false, data.assistant_msg_id);
+                    // Сохраняем ID вопроса на сообщении пользователя
+                    const userMsg = chatContainer.querySelector('.message.user:last-child');
+                    if (userMsg && data.user_msg_id) {
+                        userMsg.dataset.msgId = data.user_msg_id;
+                    }
                 } else if (data.error) {
-                    addMessage('❌ Ошибка: ' + data.error, false);
+                    addMessage('❌ Ошибка: ' + data.error, false, null);
                 }
             })
             .catch(error => {
                 setLoading(false);
-                addMessage('❌ Ошибка соединения с сервером', false);
+                addMessage('❌ Ошибка соединения с сервером', false, null);
             });
         }
 
@@ -593,6 +629,37 @@
                     }
                 })
                 .catch(() => alert('Ошибка соединения с сервером'));
+        }
+
+        function deleteMessagePair(msgId, btn) {
+            if (!confirm('Удалить вопрос + ответ?')) return;
+
+            const botMsg = btn.closest('.message');
+            // Находим предыдущее сообщение пользователя
+            const userMsg = botMsg.previousElementSibling;
+            const hasUserMsg = userMsg && userMsg.classList.contains('message') && userMsg.classList.contains('user');
+
+            // Показываем, что удаляется
+            botMsg.style.opacity = '0.4';
+            if (hasUserMsg) userMsg.style.opacity = '0.4';
+
+            fetch(`/api/chat/delete-pair/${msgId}`, { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        botMsg.remove();
+                        if (hasUserMsg) userMsg.remove();
+                    } else {
+                        botMsg.style.opacity = '1';
+                        if (hasUserMsg) userMsg.style.opacity = '1';
+                        alert('Ошибка: ' + (data.error || 'Не удалось удалить'));
+                    }
+                })
+                .catch(() => {
+                    botMsg.style.opacity = '1';
+                    if (hasUserMsg) userMsg.style.opacity = '1';
+                    alert('Ошибка соединения с сервером');
+                });
         }
     </script>
 </body>
