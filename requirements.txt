@@ -12,6 +12,7 @@ torch>=2.0.0
 
 # Обработка документов
 PyPDF2>=3.0.0
+PyMuPDF>=1.23.0
 python-docx>=1.0.0
 openpyxl>=3.1.0
 

@@ -15,6 +15,8 @@ import json
 import docx
 import openpyxl
 import requests
+import re
+import base64
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +38,12 @@ class RAGSettings:
             "search_top_k": 10,
             "search_alpha": 0.7,
             "relevance_threshold": 0.2,
-            "max_context_fragments": 100
+            "max_context_fragments": 100,
+            # Настройки OCR для сканированных PDF (fal.ai / OpenRouter vision)
+            "ocr_enabled": False,
+            "fal_api_key": "",
+            "ocr_model": "google/gemini-2.5-flash-lite",
+            "ocr_dpi": 150
         }
         self.settings = self.load_settings()
     
@@ -217,6 +224,164 @@ class RAGCore:
         else:
             logger.warning(f"⚠️ Папка {database_folder} не найдена")
     
+    def _is_garbage_text(self, text, min_cyrillic_ratio=0.1, max_garbage_ratio=0.2):
+        """Проверка, что фрагмент текста — не «каракули» (сломанная кодировка PDF).
+        Возвращает True, если текст мусорный и его НЕ нужно добавлять в базу знаний."""
+        if not text:
+            return True
+        text = text.strip()
+        if len(text) < 10:
+            return True
+
+        # 1) Признак битой кодировки: токены вида /uniXXXX (PyPDF2 часто выдаёт это)
+        uni_tokens = re.findall(r'/uni[0-9A-Fa-f]{4}', text)
+        if len(uni_tokens) >= 3:
+            return True
+
+        # 2) Доля «мусорных» символов: всё, что не буквы/цифры/пробел/базовая пунктуация
+        letters = sum(1 for ch in text if ch.isalpha())
+        digits = sum(1 for ch in text if ch.isdigit())
+        spaces = sum(1 for ch in text if ch.isspace())
+        basic_punct = sum(1 for ch in text if ch in '.,;:!?()[]«»"\'—-–%№/+*=<>')
+        meaningful = letters + digits + spaces + basic_punct
+        garbage_ratio = 1.0 - meaningful / max(len(text), 1)
+        if garbage_ratio > max_garbage_ratio:
+            return True
+
+        # 3) Кириллица: если в тексте вообще нет русских букв — подозрительно
+        #    (в базе знаний компании документы в основном на русском).
+        #    Но не отбрасываем чисто технические/латинские фрагменты полностью,
+        #    если они выглядят осмысленно (много букв).
+        cyrillic = sum(1 for ch in text if 'А' <= ch <= 'я' or ch in 'Ёё')
+        if letters > 0 and cyrillic / letters < min_cyrillic_ratio:
+            # Если текст короткий и без кириллицы — скорее всего артефакт.
+            # Если длинный и читаемый на латинице (например, инструкция на английском) — пропускаем.
+            if len(text) < 200:
+                return True
+
+        # 4) Много подряд идущих несмысловых символов (например, ######## или /////)
+        if re.search(r'([^\w\sА-Яа-яЁё]{5,})', text):
+            return True
+
+        return False
+
+    def _get_ocr_cache_path(self, file_path, page_num):
+        """Путь к кэшу OCR-текста страницы (по хэшу PDF-файла), чтобы не жечь деньги
+        на повторных переиндексациях."""
+        if self.current_user_id is not None:
+            cache_dir = Path("embeddings_cache") / f"user_{self.current_user_id}" / "ocr_cache"
+        else:
+            cache_dir = Path("embeddings_cache") / "ocr_cache"
+        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()[:12]
+        page_dir = cache_dir / file_hash
+        page_dir.mkdir(exist_ok=True, parents=True)
+        return page_dir / f"page_{page_num+1}.txt"
+
+    def _ocr_page_with_fal(self, page, base_name, page_num, cache_path):
+        """OCR страницы через fal.ai (OpenRouter vision). Возвращает распознанный текст
+        или None, если OCR отключён / не удался."""
+        fal_key = self.settings.get("fal_api_key", "")
+        if not fal_key:
+            logger.info(f"⚠️ OCR отключён (fal_api_key не задан) — страница {page_num+1} файла {base_name} пропущена")
+            return None
+
+        # Кэш: не вызываем API повторно для той же страницы
+        if cache_path.exists():
+            logger.info(f"💾 OCR из кэша: {cache_path.name} ({base_name})")
+            return cache_path.read_text(encoding='utf-8')
+
+        ocr_model = self.settings.get("ocr_model", "google/gemini-2.5-flash-lite")
+        ocr_dpi = int(self.settings.get("ocr_dpi", 150))
+
+        try:
+            # Рендерим страницу в PNG
+            pix = page.get_pixmap(dpi=ocr_dpi)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode()
+            logger.info(f"🔍 OCR страницы {page_num+1} файла {base_name} через {ocr_model}...")
+
+            payload = {
+                "model": ocr_model,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Распознай весь текст на изображении дословно, без комментариев, префиксов и markdown. Сохрани структуру абзацев."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                    ]
+                }],
+                "temperature": 0.1,
+            }
+            resp = requests.post(
+                "https://fal.run/openrouter/router/openai/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Key {fal_key}", "Content-Type": "application/json"},
+                timeout=180,
+            )
+            if resp.status_code != 200:
+                logger.error(f"❌ OCR ошибка ({resp.status_code}): {resp.text[:200]}")
+                return None
+            text = resp.json()["choices"][0]["message"]["content"]
+            if text:
+                cache_path.write_text(text, encoding='utf-8')
+            return text
+        except Exception as e:
+            logger.error(f"❌ Ошибка OCR страницы {page_num+1} ({base_name}): {e}")
+            return None
+
+    def _extract_pdf_text(self, file_path):
+        """Извлечение текста из PDF: PyMuPDF (качественный) с фолбэком на PyPDF2.
+        Пустые/мусорные страницы (сканы) распознаются через OCR (fal.ai), если он включён.
+        Возвращает список фрагментов с префиксом источника."""
+        base_name = os.path.basename(file_path)
+        pdf_knowledge = []
+        ocr_enabled = bool(self.settings.get("ocr_enabled", False))
+
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(file_path)
+            try:
+                logger.info(f"📄 Обработка PDF (PyMuPDF): {base_name} (всего страниц: {len(doc)})")
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    page_fragments = []
+                    # blocks + sort=True: правильный порядок чтения и отсев дублей
+                    # текстового слоя (дизайнерские PDF и буклеты часто дублируют текст)
+                    blocks = page.get_text("blocks", sort=True)
+                    for block in blocks:
+                        paragraph = block[4].strip()
+                        if not paragraph:
+                            continue
+                        # Склеиваем переносы строк внутри блока в один пробел
+                        paragraph = " ".join(line.strip() for line in paragraph.split('\n') if line.strip())
+                        if len(paragraph) > 50 and not self._is_garbage_text(paragraph):
+                            page_fragments.append(f"[{base_name}, стр. {page_num+1}] {paragraph}")
+
+                    # Если текстовый слой не дал результата (скан или битая кодировка) — пробуем OCR
+                    if not page_fragments and ocr_enabled:
+                        cache_path = self._get_ocr_cache_path(file_path, page_num)
+                        ocr_text = self._ocr_page_with_fal(page, base_name, page_num, cache_path)
+                        if ocr_text:
+                            paragraphs = [p.strip() for p in ocr_text.split('\n') if p.strip()]
+                            for paragraph in paragraphs:
+                                if len(paragraph) > 50 and not self._is_garbage_text(paragraph):
+                                    page_fragments.append(f"[{base_name}, стр. {page_num+1}] {paragraph}")
+
+                    pdf_knowledge.extend(page_fragments)
+            finally:
+                doc.close()
+        except ImportError:
+            # Фолбэк: старый PyPDF2 (если PyMuPDF не установлен)
+            logger.info(f"📄 Обработка PDF (PyPDF2 fallback): {base_name}")
+            with open(file_path, 'rb') as f:
+                pdf_reader = PyPDF2.PdfReader(f)
+                for page_num, page in enumerate(pdf_reader.pages):
+                    text = page.extract_text()
+                    if text:
+                        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                        for paragraph in paragraphs:
+                            if len(paragraph) > 50 and not self._is_garbage_text(paragraph):
+                                pdf_knowledge.append(f"[{base_name}, стр. {page_num+1}] {paragraph}")
+        return pdf_knowledge
+
     def _process_file(self, file_path, all_knowledge):
         """Обработка одного файла"""
         try:
@@ -258,22 +423,12 @@ class RAGCore:
                         logger.warning(f"⚠️ Файл {os.path.basename(file_path)} не содержит данных")
                         
             elif file_path.lower().endswith(".pdf"):
-                with open(file_path, 'rb') as f:
-                    pdf_reader = PyPDF2.PdfReader(f)
-                    logger.info(f"📄 Обработка PDF файла: {os.path.basename(file_path)} (всего страниц: {len(pdf_reader.pages)})")
-                    pdf_knowledge = []
-                    for page_num, page in enumerate(pdf_reader.pages):
-                        text = page.extract_text()
-                        if text:
-                            paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-                            for paragraph in paragraphs:
-                                if len(paragraph) > 50:
-                                    pdf_knowledge.append(f"[{os.path.basename(file_path)}, стр. {page_num+1}] {paragraph}")
-                    if pdf_knowledge:
-                        logger.info(f"✅ Извлечено {len(pdf_knowledge)} фрагментов из {os.path.basename(file_path)}")
-                        all_knowledge[file_path] = pdf_knowledge
-                    else:
-                        logger.warning(f"⚠️ Из файла {os.path.basename(file_path)} не удалось извлечь текст")
+                pdf_knowledge = self._extract_pdf_text(file_path)
+                if pdf_knowledge:
+                    logger.info(f"✅ Извлечено {len(pdf_knowledge)} фрагментов из {os.path.basename(file_path)}")
+                    all_knowledge[file_path] = pdf_knowledge
+                else:
+                    logger.warning(f"⚠️ Из файла {os.path.basename(file_path)} не удалось извлечь текст")
             
             # --- НОВЫЙ БЛОК ДЛЯ .docx ---
             elif file_path.lower().endswith(".docx"):
