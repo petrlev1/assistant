@@ -39,10 +39,10 @@ class RAGSettings:
             "search_alpha": 0.7,
             "relevance_threshold": 0.2,
             "max_context_fragments": 100,
-            # Настройки OCR для сканированных PDF (fal.ai / OpenRouter vision)
+            # Настройки OCR для сканированных PDF (DashScope qwen-vl-ocr)
             "ocr_enabled": False,
-            "fal_api_key": "",
-            "ocr_model": "google/gemini-2.5-flash-lite",
+            "ocr_model": "qwen-vl-ocr",
+            "ocr_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             "ocr_dpi": 150
         }
         self.settings = self.load_settings()
@@ -277,12 +277,12 @@ class RAGCore:
         page_dir.mkdir(exist_ok=True, parents=True)
         return page_dir / f"page_{page_num+1}.txt"
 
-    def _ocr_page_with_fal(self, page, base_name, page_num, cache_path):
-        """OCR страницы через fal.ai (OpenRouter vision). Возвращает распознанный текст
+    def _ocr_page(self, page, base_name, page_num, cache_path):
+        """OCR страницы через DashScope qwen-vl-ocr. Возвращает распознанный текст
         или None, если OCR отключён / не удался."""
-        fal_key = self.settings.get("fal_api_key", "")
-        if not fal_key:
-            logger.info(f"⚠️ OCR отключён (fal_api_key не задан) — страница {page_num+1} файла {base_name} пропущена")
+        api_key = self.settings.get("llm_api_key", "")
+        if not api_key:
+            logger.info(f"⚠️ OCR отключён (llm_api_key не задан) — страница {page_num+1} файла {base_name} пропущена")
             return None
 
         # Кэш: не вызываем API повторно для той же страницы
@@ -290,7 +290,8 @@ class RAGCore:
             logger.info(f"💾 OCR из кэша: {cache_path.name} ({base_name})")
             return cache_path.read_text(encoding='utf-8')
 
-        ocr_model = self.settings.get("ocr_model", "google/gemini-2.5-flash-lite")
+        ocr_model = self.settings.get("ocr_model", "qwen-vl-ocr")
+        ocr_base_url = self.settings.get("ocr_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
         ocr_dpi = int(self.settings.get("ocr_dpi", 150))
 
         try:
@@ -304,16 +305,14 @@ class RAGCore:
                 "messages": [{
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "Распознай весь текст на изображении дословно, без комментариев, префиксов и markdown. Сохрани структуру абзацев."},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
                     ]
                 }],
-                "temperature": 0.1,
             }
             resp = requests.post(
-                "https://fal.run/openrouter/router/openai/v1/chat/completions",
+                f"{ocr_base_url}/chat/completions",
                 json=payload,
-                headers={"Authorization": f"Key {fal_key}", "Content-Type": "application/json"},
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 timeout=180,
             )
             if resp.status_code != 200:
@@ -358,7 +357,7 @@ class RAGCore:
                     # Если текстовый слой не дал результата (скан или битая кодировка) — пробуем OCR
                     if not page_fragments and ocr_enabled:
                         cache_path = self._get_ocr_cache_path(file_path, page_num)
-                        ocr_text = self._ocr_page_with_fal(page, base_name, page_num, cache_path)
+                        ocr_text = self._ocr_page(page, base_name, page_num, cache_path)
                         if ocr_text:
                             paragraphs = [p.strip() for p in ocr_text.split('\n') if p.strip()]
                             for paragraph in paragraphs:

@@ -615,6 +615,27 @@ class LauncherUI:
                 self.caddy_process.kill()
             self.caddy_process = None
 
+    def _resolve_web_python(self):
+        """Возвращает (python, env) для запуска run_web.py.
+        Используем uv python с явным PYTHONPATH на site-packages venv проекта
+        (там лежат torch, sentence_transformers, flask и т.д.). venv/Scripts/python.exe
+        на этой машине — uv-обёртка, которая порождает дочерний uv python с
+        непредсказуемым окружением, поэтому запускаем uv python напрямую."""
+        venv_sp = os.path.join(self.project_dir, 'venv', 'Lib', 'site-packages')
+        hermes_sp = os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'hermes',
+                                 'hermes-agent', 'venv', 'Lib', 'site-packages')
+        paths = [venv_sp]
+        if os.path.isdir(hermes_sp):
+            paths.append(hermes_sp)  # там лежит fitz (PyMuPDF)
+        env = dict(os.environ)
+        env['PYTHONPATH'] = os.pathsep.join(paths)
+        # Ищем uv python (он точно есть, т.к. venv создан через uv)
+        uv_python = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', 'uv', 'python',
+                                 'cpython-3.11-windows-x86_64-none', 'python.exe')
+        if os.path.exists(uv_python):
+            return uv_python, env
+        return sys.executable, env
+
     def launch_web(self):
         """Запуск веб-интерфейса в выбранном режиме"""
         if self.web_process and self.web_process.poll() is None:
@@ -635,13 +656,14 @@ class LauncherUI:
             if mode == "domain":
                 self.start_caddy()
 
-            # Запускаем веб-сервер
-            python_exe = sys.executable
+            # Запускаем веб-сервер (uv python с явным PYTHONPATH на venv site-packages)
+            python_exe, web_env = self._resolve_web_python()
             script_path = os.path.join(self.project_dir, "run_web.py")
 
             self.web_process = subprocess.Popen(
                 [python_exe, script_path],
-                cwd=self.project_dir
+                cwd=self.project_dir,
+                env=web_env
             )
 
             # Определяем URL для открытия
