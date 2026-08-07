@@ -19,6 +19,10 @@ PROVIDERS = {
         "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         "models": ["deepseek-v4-flash", "qwen-plus", "qwen-turbo", "qwen-max"]
     },
+    "DeepSeek": {
+        "base_url": "https://api.deepseek.com/v1",
+        "models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"]
+    },
     "OpenRouter": {
         "base_url": "https://openrouter.ai/api/v1",
         "models": ["qwen/qwen-plus", "deepseek/deepseek-chat", "openai/gpt-4o-mini"]

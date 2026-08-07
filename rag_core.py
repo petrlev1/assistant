@@ -30,7 +30,8 @@ class RAGSettings:
             "disable_llm_models": False,
             "disable_hybrid_search": False,
             "disable_knowledge_base_search": False,  # Отключение поиска в базе знаний (работа только через LLM)
-            "llm_api_key": "",  # Пустое значение по умолчанию
+            "llm_api_key": "",  # Пустое значение по умолчанию (используется и для OCR DashScope)
+            "llm_provider_api_key": "",  # Отдельный ключ для LLM-провайдера (например DeepSeek); fallback — llm_api_key
             "llm_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             "llm_provider": "DashScope",
             "llm_model": "deepseek-v4-flash",
@@ -136,7 +137,7 @@ class RAGCore:
         global client
         client = openai.OpenAI(
             base_url=self.settings.get("llm_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
-            api_key=self.settings.get("llm_api_key", "")
+            api_key=self.settings.get("llm_provider_api_key") or self.settings.get("llm_api_key", "")
         )
     
     def _setup_model(self):
@@ -939,7 +940,7 @@ class RAGCore:
                 response = requests.post(
                 f"{self.settings.get('llm_base_url', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1')}/chat/completions",
                     headers={
-                "Authorization": f"Bearer {self.settings.get('llm_api_key', '')}",
+                "Authorization": f"Bearer {self.settings.get('llm_provider_api_key') or self.settings.get('llm_api_key', '')}",
                     "Content-Type": "application/json",
                 },
                 json={
