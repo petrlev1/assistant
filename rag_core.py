@@ -78,6 +78,13 @@ class RAGSettings:
         """Получение значения настройки"""
         return self.settings.get(key, default)
     
+    def get_llm_api_key(self):
+        """Ключ API для LLM-провайдера: DeepSeek → llm_provider_api_key (fallback llm_api_key),
+        остальные (DashScope и т.п.) → llm_api_key (он же используется для OCR)."""
+        if self.settings.get("llm_provider", "DeepSeek") == "DeepSeek":
+            return self.settings.get("llm_provider_api_key") or self.settings.get("llm_api_key", "")
+        return self.settings.get("llm_api_key", "")
+    
     def set(self, key, value):
         """Установка значения настройки"""
         self.settings[key] = value
@@ -87,7 +94,7 @@ class RAGSettings:
 settings = RAGSettings()
 client = openai.OpenAI(
     base_url=settings.get("llm_base_url", "https://api.deepseek.com/v1"),
-    api_key=settings.get("llm_api_key", "")  # Получаем ключ из файла настроек
+    api_key=settings.get_llm_api_key()  # Ключ зависит от выбранного провайдера
 )
 
 # === Доступные модели ===
@@ -137,7 +144,7 @@ class RAGCore:
         global client
         client = openai.OpenAI(
             base_url=self.settings.get("llm_base_url", "https://api.deepseek.com/v1"),
-            api_key=self.settings.get("llm_provider_api_key") or self.settings.get("llm_api_key", "")
+            api_key=self.settings.get_llm_api_key()
         )
     
     def _setup_model(self):
@@ -940,7 +947,7 @@ class RAGCore:
                 response = requests.post(
                 f"{self.settings.get('llm_base_url', 'https://api.deepseek.com/v1')}/chat/completions",
                     headers={
-                "Authorization": f"Bearer {self.settings.get('llm_provider_api_key') or self.settings.get('llm_api_key', '')}",
+                "Authorization": f"Bearer {self.settings.get_llm_api_key()}",
                     "Content-Type": "application/json",
                 },
                 json={

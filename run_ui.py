@@ -390,6 +390,11 @@ class LauncherUI:
         self.model_combo.set(models[0])
         # Автоматически подставляем base_url
         self.base_url_var.set(PROVIDERS.get(provider, PROVIDERS["DashScope"])["base_url"])
+        # Подставляем ключ соответствующего провайдера в поле API-ключа
+        if provider == "DeepSeek":
+            self.api_key_var.set(self.settings.get("llm_provider_api_key", ""))
+        else:
+            self.api_key_var.set(self.settings.get("llm_api_key", ""))
 
     # =====================================================================
     # Вкладка: Telegram
@@ -553,7 +558,15 @@ class LauncherUI:
         self.settings["llm_provider"] = self.provider_var.get().strip()
         self.settings["llm_model"] = self.model_var.get().strip()
         self.settings["llm_base_url"] = self.base_url_var.get().strip()
-        self.settings["llm_api_key"] = self.api_key_var.get().strip()
+        # Ключ сохраняем в поле, соответствующее провайдеру (DeepSeek → llm_provider_api_key,
+        # остальные → llm_api_key, который также используется для OCR DashScope)
+        api_key = self.api_key_var.get().strip()
+        if self.settings["llm_provider"] == "DeepSeek":
+            self.settings["llm_provider_api_key"] = api_key
+            if not self.settings.get("llm_api_key"):
+                self.settings["llm_api_key"] = api_key
+        else:
+            self.settings["llm_api_key"] = api_key
 
         # Telegram настройки
         self.settings["telegram_bot_token"] = self.telegram_token_var.get().strip()
