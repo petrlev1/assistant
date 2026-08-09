@@ -141,8 +141,10 @@ def ask_question():
         # Сохраняем вопрос в историю
         user_msg_id = save_message(user_id, 'user', question)
 
-        # Логирование вопроса в файл чата
-        chat_logger.log_message(user_name, 0, question, is_bot=False)
+        # Логирование вопроса в файл чата (с провайдером и моделью)
+        provider = rag_system.settings.get("llm_provider", "")
+        model = rag_system.settings.get("llm_model", "")
+        chat_logger.log_message(user_name, 0, question, is_bot=False, provider=provider, model=model)
 
         answer = rag_system.ask_model(question)
         logger.info("Ответ сгенерирован успешно")
@@ -151,7 +153,7 @@ def ask_question():
         assistant_msg_id = save_message(user_id, 'assistant', answer)
 
         # Логирование ответа
-        chat_logger.log_message("Бот", 0, answer, is_bot=True)
+        chat_logger.log_message("Бот", 0, answer, is_bot=True, provider=provider, model=model)
 
         return jsonify({'answer': answer, 'user_msg_id': user_msg_id, 'assistant_msg_id': assistant_msg_id})
 

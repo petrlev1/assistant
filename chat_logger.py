@@ -41,7 +41,7 @@ class ChatLogger:
         # console_handler.setFormatter(formatter)
         # self.logger.addHandler(console_handler)
     
-    def log_message(self, user_name, user_id, message, is_bot=False, chat_id=None):
+    def log_message(self, user_name, user_id, message, is_bot=False, chat_id=None, provider=None, model=None):
         """
         Запись сообщения в лог
         
@@ -51,10 +51,17 @@ class ChatLogger:
             message: Текст сообщения
             is_bot: Флаг, от бота сообщение или от пользователя
             chat_id: ID чата (опционально)
+            provider: LLM-провайдер (опционально, напр. DeepSeek / OpenRouter)
+            model: Модель LLM как в Стартовой панели (опционально)
         """
         prefix = "🤖 Бот:" if is_bot else f"👤 {user_name} (ID: {user_id}):"
         if chat_id:
             prefix += f" [Chat: {chat_id}]"
+        # Добавляем провайдер и модель (модель — ровно как в поле Стартовой панели)
+        if provider and model:
+            prefix += f" [{provider} | {model}]"
+        elif model:
+            prefix += f" [Модель: {model}]"
         
         # Обработка многострочных сообщений
         message_text = message.replace('\n', '\\n')
