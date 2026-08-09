@@ -649,25 +649,33 @@ class LauncherUI:
             self.caddy_process = None
 
     def _resolve_web_python(self):
-        """Возвращает (python, env) для запуска run_web.py.
-        Используем uv python с явным PYTHONPATH на site-packages venv проекта
-        (там лежат torch, sentence_transformers, flask и т.д.). venv/Scripts/python.exe
-        на этой машине — uv-обёртка, которая порождает дочерний uv python с
-        непредсказуемым окружением, поэтому запускаем uv python напрямую."""
-        venv_sp = os.path.join(self.project_dir, 'venv', 'Lib', 'site-packages')
-        hermes_sp = os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'hermes',
-                                 'hermes-agent', 'venv', 'Lib', 'site-packages')
-        paths = [venv_sp]
-        if os.path.isdir(hermes_sp):
-            paths.append(hermes_sp)  # там лежит fitz (PyMuPDF)
+        """Возвращает (python, env) для запуска run_web.py (кроссплатформенно).
+        Windows: venv/Scripts/python.exe — uv-обёртка, порождает дочерний uv python с
+        непредсказуемым окружением, поэтому запускаем uv python напрямую с явным
+        PYTHONPATH на site-packages venv проекта.
+        Linux: venv/bin/python — обычный venv, используем его напрямую."""
         env = dict(os.environ)
-        env['PYTHONPATH'] = os.pathsep.join(paths)
-        # Ищем uv python (он точно есть, т.к. venv создан через uv)
-        uv_python = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', 'uv', 'python',
-                                 'cpython-3.11-windows-x86_64-none', 'python.exe')
-        if os.path.exists(uv_python):
-            return uv_python, env
-        return sys.executable, env
+
+        if os.name == 'nt':
+            venv_sp = os.path.join(self.project_dir, 'venv', 'Lib', 'site-packages')
+            hermes_sp = os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'hermes',
+                                     'hermes-agent', 'venv', 'Lib', 'site-packages')
+            paths = [venv_sp]
+            if os.path.isdir(hermes_sp):
+                paths.append(hermes_sp)  # там лежит fitz (PyMuPDF)
+            env['PYTHONPATH'] = os.pathsep.join(paths)
+            # Ищем uv python (он точно есть, т.к. venv создан через uv)
+            uv_python = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', 'uv', 'python',
+                                     'cpython-3.11-windows-x86_64-none', 'python.exe')
+            if os.path.exists(uv_python):
+                return uv_python, env
+            return sys.executable, env
+        else:
+            # Linux/Ubuntu: обычный venv python
+            venv_python = os.path.join(self.project_dir, 'venv', 'bin', 'python')
+            if os.path.exists(venv_python):
+                return venv_python, env
+            return sys.executable, env
 
     def launch_web(self):
         """Запуск веб-интерфейса в выбранном режиме"""
