@@ -363,11 +363,15 @@ class LauncherUI:
         ttk.Label(frame, text="Модель:").pack(anchor="w", padx=20, pady=(5, 0))
         provider_models = PROVIDERS.get(current_provider, PROVIDERS["DashScope"])["models"]
         self.model_var = tk.StringVar(value=self.settings.get("llm_model", provider_models[0]))
+        # OpenRouter: модель вводится вручную (тысячи моделей), для остальных — выпадающий список
+        model_state = "normal" if current_provider == "OpenRouter" else "readonly"
         self.model_combo = ttk.Combobox(
             frame, textvariable=self.model_var,
-            values=provider_models, state="readonly", width=47
+            values=provider_models, state=model_state, width=47
         )
         self.model_combo.pack(fill="x", padx=20, pady=5)
+        if current_provider == "OpenRouter":
+            ttk.Label(frame, text="Модель OpenRouter вводится вручную, например: openai/gpt-4o, anthropic/claude-3.5-sonnet", foreground="gray").pack(anchor="w", padx=20)
 
         # Base URL
         ttk.Label(frame, text="Base URL:").pack(anchor="w", padx=20, pady=(10, 0))
@@ -387,12 +391,20 @@ class LauncherUI:
         provider = self.provider_var.get()
         models = PROVIDERS.get(provider, PROVIDERS["DashScope"])["models"]
         self.model_combo['values'] = models
-        self.model_combo.set(models[0])
+        if provider == "OpenRouter":
+            # Ручной ввод: оставляем текущую модель, не сбрасываем на первую из списка
+            self.model_combo.config(state="normal")
+            self.model_combo.set(self.settings.get("llm_model", ""))
+        else:
+            self.model_combo.config(state="readonly")
+            self.model_combo.set(models[0])
         # Автоматически подставляем base_url
         self.base_url_var.set(PROVIDERS.get(provider, PROVIDERS["DashScope"])["base_url"])
         # Подставляем ключ соответствующего провайдера в поле API-ключа
         if provider == "DeepSeek":
             self.api_key_var.set(self.settings.get("llm_provider_api_key", ""))
+        elif provider == "OpenRouter":
+            self.api_key_var.set(self.settings.get("llm_openrouter_api_key", ""))
         else:
             self.api_key_var.set(self.settings.get("llm_api_key", ""))
 
@@ -559,10 +571,14 @@ class LauncherUI:
         self.settings["llm_model"] = self.model_var.get().strip()
         self.settings["llm_base_url"] = self.base_url_var.get().strip()
         # Ключ сохраняем в поле, соответствующее провайдеру (DeepSeek → llm_provider_api_key,
-        # остальные → llm_api_key, который также используется для OCR DashScope)
+        # OpenRouter → llm_openrouter_api_key, остальные → llm_api_key, который также используется для OCR DashScope)
         api_key = self.api_key_var.get().strip()
         if self.settings["llm_provider"] == "DeepSeek":
             self.settings["llm_provider_api_key"] = api_key
+            if not self.settings.get("llm_api_key"):
+                self.settings["llm_api_key"] = api_key
+        elif self.settings["llm_provider"] == "OpenRouter":
+            self.settings["llm_openrouter_api_key"] = api_key
             if not self.settings.get("llm_api_key"):
                 self.settings["llm_api_key"] = api_key
         else:

@@ -32,6 +32,7 @@ class RAGSettings:
             "disable_knowledge_base_search": False,  # Отключение поиска в базе знаний (работа только через LLM)
             "llm_api_key": "",  # Пустое значение по умолчанию (используется и для OCR DashScope)
             "llm_provider_api_key": "",  # Отдельный ключ для LLM-провайдера (например DeepSeek); fallback — llm_api_key
+            "llm_openrouter_api_key": "",  # Ключ OpenRouter (sk-or-...); fallback — llm_provider_api_key / llm_api_key
             "llm_base_url": "https://api.deepseek.com/v1",
             "llm_provider": "DeepSeek",
             "llm_model": "deepseek-v4-flash",
@@ -80,9 +81,15 @@ class RAGSettings:
     
     def get_llm_api_key(self):
         """Ключ API для LLM-провайдера: DeepSeek → llm_provider_api_key (fallback llm_api_key),
+        OpenRouter → llm_openrouter_api_key (fallback llm_provider_api_key / llm_api_key),
         остальные (DashScope и т.п.) → llm_api_key (он же используется для OCR)."""
-        if self.settings.get("llm_provider", "DeepSeek") == "DeepSeek":
+        provider = self.settings.get("llm_provider", "DeepSeek")
+        if provider == "DeepSeek":
             return self.settings.get("llm_provider_api_key") or self.settings.get("llm_api_key", "")
+        if provider == "OpenRouter":
+            return (self.settings.get("llm_openrouter_api_key")
+                    or self.settings.get("llm_provider_api_key")
+                    or self.settings.get("llm_api_key", ""))
         return self.settings.get("llm_api_key", "")
     
     def set(self, key, value):
