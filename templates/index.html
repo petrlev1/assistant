@@ -101,6 +101,22 @@
         }
         .message .content p { margin-bottom: 8px; }
         .message .content p:last-child { margin-bottom: 0; }
+        /* Источники в чате: ссылки на скачивание, уменьшенный шрифт */
+        .message .content .sources-title {
+            font-size: 12px;
+            color: #888;
+            margin-top: 6px;
+        }
+        .message .content a.source-link {
+            font-size: 12px;
+            color: #1976d2;
+            text-decoration: underline;
+            cursor: pointer;
+            word-break: break-all;
+        }
+        .message .content a.source-link:hover {
+            color: #0d47a1;
+        }
         /* Delete button on messages */
         .message {
             position: relative;
@@ -513,7 +529,7 @@
             div.dataset.msgId = msgId || '';
             div.innerHTML = `
                 <div class="label">${isUser ? 'Вы' : 'Бот'}</div>
-                <div class="content">${escapeHtml(text).replace(/\\n/g, '<br>')}</div>
+                <div class="content">${renderMessageContent(text)}</div>
                 ${(!isUser && msgId) ? `<button class="btn-msg-delete" onclick="deleteMessagePair(${msgId}, this)" title="Удалить вопрос + ответ">✕</button>` : ''}
             `;
             chatContainer.insertBefore(div, typingIndicator);
@@ -524,6 +540,28 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // Рендер текста ответа: блок «Источники:» — ссылки на скачивание файлов
+        function renderMessageContent(text) {
+            const escaped = escapeHtml(text);
+            const lines = escaped.split('\n');
+            let inSources = false;
+            const html = lines.map(line => {
+                if (line.trim() === 'Источники:') {
+                    inSources = true;
+                    return '<span class="sources-title">Источники:</span>';
+                }
+                if (inSources && line.startsWith('- ')) {
+                    const fname = line.slice(2).trim();
+                    if (fname) {
+                        const href = '/api/kb/download/' + encodeURIComponent(fname);
+                        return `- <a class="source-link" href="${href}" title="Скачать ${fname}">${fname}</a>`;
+                    }
+                }
+                return line;
+            });
+            return html.join('<br>');
         }
 
         function loadHistory() {
@@ -544,7 +582,7 @@
                             div.dataset.msgId = msg.id;
                             div.innerHTML = `
                                 <div class="label">${label}</div>
-                                <div class="content">${escapeHtml(msg.message).replace(/\\n/g, '<br>')}</div>
+                                <div class="content">${renderMessageContent(msg.message)}</div>
                                 ${(!isUser) ? `<button class="btn-msg-delete" onclick="deleteMessagePair(${msg.id}, this)" title="Удалить вопрос + ответ">✕</button>` : ''}
                             `;
                             chatContainer.insertBefore(div, typingIndicator);

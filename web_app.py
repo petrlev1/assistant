@@ -395,6 +395,30 @@ def download_document(doc_id):
     )
 
 
+@app.route('/api/kb/download/<path:filename>')
+def download_kb_file(filename):
+    """Скачивание файла из базы знаний по имени (клик по источнику в чате).
+    Ищем сначала в папке пользователя, затем в общей базе."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    safe_name = os.path.basename(filename)  # защита от path traversal
+    if not safe_name:
+        return jsonify({'error': 'Неверное имя файла'}), 400
+
+    user_id = session['user_id']
+    candidates = [
+        os.path.join('Database', f'user_{user_id}', safe_name),
+        os.path.join('Database', safe_name),
+    ]
+    for file_path in candidates:
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            logger.info(f"⬇️ Пользователь {session.get('username')} скачал из чата: {safe_name}")
+            return send_file(file_path, as_attachment=True, download_name=safe_name)
+
+    return jsonify({'error': 'Файл не найден'}), 404
+
+
 # === Telegram-бот ===
 
 def _run_telegram_bot():
