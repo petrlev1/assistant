@@ -16,7 +16,35 @@ logger = logging.getLogger(__name__)
 chat_logger = get_chat_logger()
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24).hex()
+
+
+def _load_secret_key():
+    """Стабильный секретный ключ для сессий: env → файл → новый с сохранением в файл.
+
+    Без этого ключ генерируется заново при каждом старте, и все пользователи
+    разлогиниваются после рестарта сервера (нужно снова вводить пароль).
+    """
+    env_key = os.environ.get('SECRET_KEY')
+    if env_key:
+        return env_key
+    key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.secret_key')
+    try:
+        with open(key_file, 'r', encoding='utf-8') as f:
+            key = f.read().strip()
+            if key:
+                return key
+    except FileNotFoundError:
+        pass
+    key = os.urandom(24).hex()
+    try:
+        with open(key_file, 'w', encoding='utf-8') as f:
+            f.write(key)
+    except OSError:
+        pass
+    return key
+
+
+app.secret_key = _load_secret_key()
 
 # Глобальная переменная для RAG-системы
 rag_system = None
@@ -53,6 +81,9 @@ def init_auth():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Страница входа"""
+    # Уже вошли в систему — сразу в чат, без повторного ввода пароля
+    if request.method == 'GET' and 'user_id' in session:
+        return redirect(url_for('chat'))
     if request.method == 'GET':
         return render_template('login.html')
 
@@ -68,7 +99,7 @@ def login():
         global rag_system
         if rag_system is not None:
             rag_system.load_for_user(session['user_id'])
-        return redirect(url_for('index'))
+        return redirect(url_for('chat'))
     else:
         flash(result, 'error')
         return render_template('login.html')
@@ -110,13 +141,25 @@ def logout():
 
 @app.route('/')
 def index():
-    """Главная страница с чатом (требуется авторизация)"""
+    """Главная страница — презентация продукта (публичная)"""
+    return render_template('about.html', logged_in='user_id' in session, username=session.get('username', ''))
+
+
+@app.route('/chat')
+def chat():
+    """Страница чата (требуется авторизация)"""
     if 'user_id' not in session:
         return redirect(url_for('login'))
     # Приветствие формируется из персонального промта: бот представляется своей ролью
     user_prompt = get_user_prompt(session['user_id'])
     greeting = build_greeting(user_prompt, session.get('username', 'Пользователь'))
     return render_template('index.html', greeting=greeting)
+
+
+@app.route('/about')
+def about():
+    """Публичная страница с описанием и возможностями системы (для клиентов)"""
+    return render_template('about.html', logged_in='user_id' in session, username=session.get('username', ''))
 
 
 @app.route('/ask', methods=['POST'])
