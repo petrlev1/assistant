@@ -133,6 +133,7 @@ class LauncherUI:
         self._create_search_tab()
         self._create_api_tab()
         self._create_telegram_tab()
+        self._create_users_tab()
 
         # === Блок выбора режима запуска веб-интерфейса ===
         web_mode_frame = ttk.LabelFrame(self.root, text="🌐 Режим запуска веб-интерфейса", padding=5)
@@ -499,6 +500,69 @@ class LauncherUI:
             messagebox.showerror("Ошибка", f"Ошибка остановки Telegram бота: {e}")
 
     
+
+    # =====================================================================
+    # Вкладка: Пользователи
+    # =====================================================================
+    def _create_users_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Пользователи")
+
+        ttk.Label(frame, text="Зарегистрированные пользователи:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 5))
+
+        # Таблица пользователей
+        columns = ("id", "username", "folder", "login", "password")
+        self.users_tree = ttk.Treeview(frame, columns=columns, show="headings", height=12)
+        self.users_tree.heading("id", text="ID")
+        self.users_tree.heading("username", text="Имя пользователя")
+        self.users_tree.heading("folder", text="Папка в Database")
+        self.users_tree.heading("login", text="Логин")
+        self.users_tree.heading("password", text="Пароль")
+        self.users_tree.column("id", width=50, anchor="center")
+        self.users_tree.column("username", width=180, anchor="w")
+        self.users_tree.column("folder", width=190, anchor="w")
+        self.users_tree.column("login", width=150, anchor="w")
+        self.users_tree.column("password", width=230, anchor="w")
+
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.users_tree.yview)
+        self.users_tree.configure(yscrollcommand=scrollbar.set)
+        self.users_tree.pack(fill="both", expand=True, padx=20, pady=5)
+        scrollbar.pack(side="right", fill="y")
+
+        hint = ("Пароли хранятся в базе только в виде хэша (werkzeug) и не могут быть показаны или восстановлены. "
+                "Логин совпадает с именем пользователя. ✅ — папка базы знаний существует на диске.")
+        ttk.Label(frame, text=hint, foreground="gray", wraplength=720, justify="left").pack(anchor="w", padx=20, pady=(5, 0))
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", padx=20, pady=10)
+        ttk.Button(btn_frame, text="🔄 Обновить список", command=self.refresh_users).pack(side="left")
+        self.users_status_var = tk.StringVar(value="")
+        ttk.Label(btn_frame, textvariable=self.users_status_var, foreground="gray").pack(side="left", padx=10)
+
+        self.refresh_users()
+
+    def refresh_users(self):
+        """Загрузка списка пользователей из PostgreSQL (локальная БД)"""
+        # Очищаем таблицу
+        for item in self.users_tree.get_children():
+            self.users_tree.delete(item)
+        try:
+            from auth_db import get_all_users
+            users = get_all_users()
+            if not users:
+                self.users_status_var.set("Пользователи не найдены (или БД недоступна)")
+                return
+            for u in users:
+                user_id = u["id"]
+                folder = f"user_{user_id}"
+                folder_path = os.path.join(self.project_dir, "Database", folder)
+                folder_display = folder + ("  ✅" if os.path.isdir(folder_path) else "  (нет папки)")
+                self.users_tree.insert("", "end", values=(
+                    user_id, u["username"], folder_display, u["username"], "••• (хэш)"
+                ))
+            self.users_status_var.set(f"Всего пользователей: {len(users)}")
+        except Exception as e:
+            self.users_status_var.set(f"Ошибка загрузки: {e}")
 
     # =====================================================================
     # Валидация и сохранение настроек

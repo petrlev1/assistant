@@ -135,6 +135,21 @@ def login_user(username, password):
         return False, f"Ошибка входа: {str(e)}"
 
 
+def get_all_users():
+    """Получение списка всех зарегистрированных пользователей"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT id, username, created_at FROM users ORDER BY id")
+        users = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [dict(u) for u in users]
+    except Exception as e:
+        logger.error(f"Ошибка получения списка пользователей: {e}")
+        return []
+
+
 # === Управление документами пользователей ===
 
 def init_user_documents():
