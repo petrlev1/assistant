@@ -508,11 +508,30 @@ class LauncherUI:
         frame = ttk.Frame(self.notebook)
         self.notebook.add(frame, text="Пользователи")
 
-        ttk.Label(frame, text="Зарегистрированные пользователи:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 5))
+        # Скроллируемый контейнер вкладки (контент выше окна — появляется скролл)
+        style = ttk.Style()
+        canvas_bg = style.lookup("TFrame", "background") or "#f0f0f0"
+        self.users_canvas = tk.Canvas(frame, highlightthickness=0, bg=canvas_bg)
+        users_vbar = ttk.Scrollbar(frame, orient="vertical", command=self.users_canvas.yview)
+        self.users_inner = ttk.Frame(self.users_canvas)
+        self.users_inner.bind(
+            "<Configure>",
+            lambda e: self.users_canvas.configure(scrollregion=self.users_canvas.bbox("all"))
+        )
+        self._users_window_id = self.users_canvas.create_window((0, 0), window=self.users_inner, anchor="nw")
+        self.users_canvas.configure(yscrollcommand=users_vbar.set)
+        self.users_canvas.bind("<Configure>", self._on_users_canvas_resize)
+        # Колесо мыши скроллит вкладку, но не перехватывает виджеты со своим скроллом
+        self.users_canvas.bind_all("<MouseWheel>", self._on_users_mousewheel)
+
+        users_vbar.pack(side="right", fill="y")
+        self.users_canvas.pack(fill="both", expand=True)
+
+        ttk.Label(self.users_inner, text="Зарегистрированные пользователи:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 5))
 
         # Таблица пользователей
         columns = ("id", "username", "folder", "login", "password")
-        self.users_tree = ttk.Treeview(frame, columns=columns, show="headings", height=12)
+        self.users_tree = ttk.Treeview(self.users_inner, columns=columns, show="headings", height=12)
         self.users_tree.heading("id", text="ID")
         self.users_tree.heading("username", text="Имя пользователя")
         self.users_tree.heading("folder", text="Папка в Database")
@@ -524,23 +543,23 @@ class LauncherUI:
         self.users_tree.column("login", width=150, anchor="w")
         self.users_tree.column("password", width=230, anchor="w")
 
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.users_tree.yview)
+        scrollbar = ttk.Scrollbar(self.users_inner, orient="vertical", command=self.users_tree.yview)
         self.users_tree.configure(yscrollcommand=scrollbar.set)
         self.users_tree.pack(fill="both", expand=True, padx=20, pady=5)
         scrollbar.pack(side="right", fill="y")
 
         hint = ("Пароли хранятся в базе только в виде хэша (werkzeug) и не могут быть показаны или восстановлены. "
                 "Логин совпадает с именем пользователя. ✅ — папка базы знаний существует на диске.")
-        ttk.Label(frame, text=hint, foreground="gray", wraplength=720, justify="left").pack(anchor="w", padx=20, pady=(5, 0))
+        ttk.Label(self.users_inner, text=hint, foreground="gray", wraplength=720, justify="left").pack(anchor="w", padx=20, pady=(5, 0))
 
-        btn_frame = ttk.Frame(frame)
+        btn_frame = ttk.Frame(self.users_inner)
         btn_frame.pack(fill="x", padx=20, pady=10)
         ttk.Button(btn_frame, text="🔄 Обновить список", command=self.refresh_users).pack(side="left")
         self.users_status_var = tk.StringVar(value="")
         ttk.Label(btn_frame, textvariable=self.users_status_var, foreground="gray").pack(side="left", padx=10)
 
         # === Раздел: персональный промт пользователя ===
-        prompt_frame = ttk.LabelFrame(frame, text="📝 Персональный промт пользователя", padding=10)
+        prompt_frame = ttk.LabelFrame(self.users_inner, text="📝 Персональный промт пользователя", padding=10)
         prompt_frame.pack(fill="both", expand=True, padx=20, pady=(5, 10))
 
         ttk.Label(
@@ -566,6 +585,29 @@ class LauncherUI:
         self.users_tree.bind("<<TreeviewSelect>>", self.on_user_selected)
 
         self.refresh_users()
+
+    def _on_users_canvas_resize(self, event):
+        """Ширина и высота внутреннего фрейма вкладки следуют за canvas;
+        если контент выше — фрейм растёт (появляется скролл)"""
+        self.users_canvas.itemconfig(
+            self._users_window_id,
+            width=event.width,
+            height=max(event.height, self.users_inner.winfo_reqheight()),
+        )
+
+    def _on_users_mousewheel(self, event):
+        """Колесо мыши скроллит вкладку «Пользователи»; виджеты со своим
+        скроллом (таблица, поле промта) скроллятся сами, другие вкладки не трогаем"""
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+        if widget is None or isinstance(widget, (tk.Text, ttk.Treeview)):
+            return
+        # Скроллим только если курсор внутри вкладки «Пользователи»
+        node = widget
+        while node is not None:
+            if node is self.users_canvas or node is self.users_inner:
+                self.users_canvas.yview_scroll(int(-event.delta / 120), "units")
+                return
+            node = getattr(node, "master", None)
 
     def on_user_selected(self, event=None):
         """Загрузка промта выбранного пользователя"""
