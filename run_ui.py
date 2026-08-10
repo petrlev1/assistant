@@ -539,7 +539,104 @@ class LauncherUI:
         self.users_status_var = tk.StringVar(value="")
         ttk.Label(btn_frame, textvariable=self.users_status_var, foreground="gray").pack(side="left", padx=10)
 
+        # === Раздел: персональный промт пользователя ===
+        prompt_frame = ttk.LabelFrame(frame, text="📝 Персональный промт пользователя", padding=10)
+        prompt_frame.pack(fill="both", expand=True, padx=20, pady=(5, 10))
+
+        ttk.Label(
+            prompt_frame,
+            text="Выберите пользователя в таблице выше — его промт загрузится в поле. Кнопка «Сбросить» вернёт стандартный системный промт.",
+            foreground="gray", wraplength=720, justify="left"
+        ).pack(anchor="w", pady=(0, 5))
+
+        self.prompt_text = scrolledtext.ScrolledText(prompt_frame, height=10, wrap="word", font=("Consolas", 10))
+        self.prompt_text.pack(fill="both", expand=True)
+
+        self.prompt_user_label = tk.StringVar(value="Пользователь не выбран")
+        ttk.Label(prompt_frame, textvariable=self.prompt_user_label, foreground="#1976d2").pack(anchor="w", pady=(5, 5))
+
+        prompt_btn_frame = ttk.Frame(prompt_frame)
+        prompt_btn_frame.pack(fill="x")
+        ttk.Button(prompt_btn_frame, text="💾 Сохранить промт", command=self.save_selected_user_prompt).pack(side="left")
+        ttk.Button(prompt_btn_frame, text="↩️ Сбросить (стандартный)", command=self.reset_selected_user_prompt).pack(side="left", padx=6)
+        self.prompt_status_var = tk.StringVar(value="")
+        ttk.Label(prompt_btn_frame, textvariable=self.prompt_status_var, foreground="gray").pack(side="left", padx=10)
+
+        # При выборе строки в таблице — загружаем промт пользователя
+        self.users_tree.bind("<<TreeviewSelect>>", self.on_user_selected)
+
         self.refresh_users()
+
+    def on_user_selected(self, event=None):
+        """Загрузка промта выбранного пользователя"""
+        selection = self.users_tree.selection()
+        if not selection:
+            return
+        values = self.users_tree.item(selection[0], "values")
+        if not values:
+            return
+        user_id = values[0]
+        username = values[1]
+        self.selected_prompt_user = {"id": user_id, "username": username}
+        self.prompt_user_label.set(f"Пользователь: {username} (ID {user_id})")
+        self.prompt_status_var.set("")
+        self.prompt_text.delete("1.0", tk.END)
+        try:
+            from auth_db import get_user_prompt
+            from rag_core import DEFAULT_BASE_PROMPT
+            prompt = get_user_prompt(user_id)
+            if prompt:
+                self.prompt_text.insert("1.0", prompt)
+                self.prompt_status_var.set("✅ Персональный промт загружен")
+            else:
+                # Показываем стандартный промт, чтобы было видно, что используется
+                self.prompt_text.insert("1.0", DEFAULT_BASE_PROMPT)
+                self.prompt_status_var.set("ℹ️ Используется стандартный промт (показан для справки)")
+        except Exception as e:
+            self.prompt_status_var.set(f"Ошибка загрузки: {e}")
+
+    def save_selected_user_prompt(self):
+        """Сохранение промта выбранного пользователя"""
+        if not hasattr(self, "selected_prompt_user") or not self.selected_prompt_user:
+            self.prompt_status_var.set("Сначала выберите пользователя в таблице")
+            return
+        prompt = self.prompt_text.get("1.0", tk.END).strip()
+        try:
+            from auth_db import set_user_prompt
+            from rag_core import DEFAULT_BASE_PROMPT
+            user = self.selected_prompt_user
+            # Текст стандартного промта = сброс к системному промту по умолчанию
+            if prompt == DEFAULT_BASE_PROMPT.strip():
+                prompt = ""
+            if set_user_prompt(user["id"], prompt):
+                self.prompt_status_var.set(
+                    "✅ Промт сохранён" if prompt else "✅ Сброшен к стандартному"
+                )
+                logger.info(f"📝 Промт пользователя {user['username']} сохранён из стартовой панели")
+            else:
+                self.prompt_status_var.set("❌ Ошибка сохранения в БД")
+        except Exception as e:
+            self.prompt_status_var.set(f"Ошибка сохранения: {e}")
+
+    def reset_selected_user_prompt(self):
+        """Сброс промта выбранного пользователя к стандартному"""
+        if not hasattr(self, "selected_prompt_user") or not self.selected_prompt_user:
+            self.prompt_status_var.set("Сначала выберите пользователя в таблице")
+            return
+        try:
+            from auth_db import set_user_prompt
+            from rag_core import DEFAULT_BASE_PROMPT
+            user = self.selected_prompt_user
+            if set_user_prompt(user["id"], ""):
+                # Показываем стандартный промт, чтобы было видно, что теперь используется
+                self.prompt_text.delete("1.0", tk.END)
+                self.prompt_text.insert("1.0", DEFAULT_BASE_PROMPT)
+                self.prompt_status_var.set("✅ Сброшен к стандартному (показан стандартный промт)")
+                logger.info(f"📝 Промт пользователя {user['username']} сброшен к стандартному")
+            else:
+                self.prompt_status_var.set("❌ Ошибка сброса в БД")
+        except Exception as e:
+            self.prompt_status_var.set(f"Ошибка сброса: {e}")
 
     def refresh_users(self):
         """Загрузка списка пользователей из PostgreSQL (локальная БД)"""

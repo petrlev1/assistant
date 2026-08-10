@@ -60,6 +60,8 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Миграция: колонка персонального промта пользователя (пусто = системный промт по умолчанию)
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_prompt TEXT")
         conn.commit()
         cur.close()
         conn.close()
@@ -148,6 +150,41 @@ def get_all_users():
     except Exception as e:
         logger.error(f"Ошибка получения списка пользователей: {e}")
         return []
+
+
+def get_user_prompt(user_id):
+    """Получение персонального промта пользователя (None/'' = системный промт по умолчанию)"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT base_prompt FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return None
+        return row["base_prompt"] or None
+    except Exception as e:
+        logger.error(f"Ошибка получения промта пользователя: {e}")
+        return None
+
+
+def set_user_prompt(user_id, prompt):
+    """Сохранение персонального промта пользователя (None/'' = сброс к системному промту)"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET base_prompt = %s WHERE id = %s",
+            (prompt or None, user_id),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения промта пользователя: {e}")
+        return False
 
 
 # === Управление документами пользователей ===

@@ -246,6 +246,65 @@
         }
         .docs-panel.active { display: flex; }
         .docs-overlay.active { display: block; }
+        /* Prompt panel */
+        .prompt-panel {
+            display: none;
+            position: fixed;
+            top: 0; right: 0;
+            width: 560px;
+            height: 100%;
+            background: white;
+            box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+            z-index: 100;
+            flex-direction: column;
+            animation: slideIn 0.2s ease;
+        }
+        .prompt-panel.active { display: flex; }
+        .prompt-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 16px 20px;
+            gap: 10px;
+            overflow: hidden;
+        }
+        .prompt-body textarea {
+            flex: 1;
+            width: 100%;
+            resize: none;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 14px;
+            font-family: Consolas, 'Courier New', monospace;
+            line-height: 1.5;
+            box-sizing: border-box;
+        }
+        .prompt-body textarea:focus { outline: none; border-color: #2196f3; }
+        .prompt-hint {
+            font-size: 12px;
+            color: #777;
+            line-height: 1.4;
+        }
+        .prompt-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .btn-reset {
+            background: rgba(244,67,54,0.1);
+            color: #d32f2f;
+            border: 1px solid rgba(244,67,54,0.3);
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .btn-reset:hover { background: rgba(244,67,54,0.2); }
+        .prompt-status {
+            font-size: 13px;
+            color: #4caf50;
+        }
         .docs-header {
             display: flex;
             align-items: center;
@@ -347,6 +406,7 @@
         <div class="user-info">
             <span class="username">👤 {{ session.username }}</span>
             <button class="btn-logout" onclick="toggleDocsPanel()" style="margin-right:8px;">📄 Документы</button>
+            <button class="btn-logout" onclick="togglePromptPanel()" style="margin-right:8px;">📝 Промт</button>
             <button class="btn-logout" onclick="clearChat()" style="margin-right:8px;background:rgba(244,67,54,0.25);">🗑️ Чат</button>
             <a href="{{ url_for('logout') }}" class="btn-logout">Выйти</a>
         </div>
@@ -369,10 +429,31 @@
     <!-- Затемнение -->
     <div class="docs-overlay" id="docsOverlay" onclick="toggleDocsPanel()"></div>
 
+    <!-- Панель персонального промта -->
+    <div class="prompt-panel" id="promptPanel">
+        <div class="docs-header">
+            <h3>📝 Мой промт</h3>
+            <button class="btn-close" onclick="togglePromptPanel()">✕</button>
+        </div>
+        <div class="prompt-body">
+            <textarea id="promptTextarea" placeholder="Введите ваш персональный промт..."></textarea>
+            <div class="prompt-hint">
+                Этот промт будет использоваться как системная инструкция для ИИ вместо стандартной.
+                Кнопка «Сбросить» вернёт стандартный промт системы.
+            </div>
+            <div class="prompt-actions">
+                <button class="btn-send" onclick="savePrompt()">💾 Сохранить</button>
+                <button class="btn-reset" onclick="resetPrompt()">↩️ Сбросить к стандартному</button>
+                <span class="prompt-status" id="promptStatus"></span>
+            </div>
+        </div>
+    </div>
+    <div class="docs-overlay" id="promptOverlay" onclick="togglePromptPanel()"></div>
+
     <div class="chat-container" id="chatContainer">
         <div class="message bot">
             <div class="label">Система</div>
-            <div class="content">Привет, {{ session.username }}! Задай мне вопрос по базе знаний.</div>
+            <div class="content">{{ greeting }}</div>
         </div>
         <div class="typing" id="typingIndicator">
             <div class="dots">
@@ -394,6 +475,7 @@
     </div>
 
     <script>
+        window.GREETING = {{ greeting|tojson }};
         const chatContainer = document.getElementById('chatContainer');
         const questionInput = document.getElementById('questionInput');
         const sendBtn = document.getElementById('sendBtn');
@@ -533,6 +615,94 @@
             if (active) loadDocuments();
         }
 
+        // === Управление персональным промтом ===
+        let promptDefaultText = '';
+
+        function togglePromptPanel() {
+            const panel = document.getElementById('promptPanel');
+            const overlay = document.getElementById('promptOverlay');
+            const active = !panel.classList.contains('active');
+            panel.classList.toggle('active', active);
+            overlay.classList.toggle('active', active);
+            if (active) loadPrompt();
+        }
+
+        function loadPrompt() {
+            const status = document.getElementById('promptStatus');
+            status.textContent = 'Загрузка...';
+            status.style.color = '#777';
+            fetch('/api/prompt')
+                .then(r => r.json())
+                .then(data => {
+                    promptDefaultText = data.default_prompt || '';
+                    const textarea = document.getElementById('promptTextarea');
+                    textarea.value = data.has_custom ? data.prompt : promptDefaultText;
+                    status.textContent = data.has_custom ? '✅ Персональный промт активен' : '✅ Используется стандартный промт';
+                    status.style.color = '#4caf50';
+                })
+                .catch(() => {
+                    status.textContent = '❌ Ошибка загрузки';
+                    status.style.color = '#d32f2f';
+                });
+        }
+
+        function savePrompt() {
+            const textarea = document.getElementById('promptTextarea');
+            const status = document.getElementById('promptStatus');
+            const text = textarea.value;
+            // Пустое поле или текст стандартного промта = сброс к системному промту по умолчанию
+            const isDefault = !text.trim() || text.trim() === (promptDefaultText || '').trim();
+            fetch('/api/prompt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt: isDefault ? '' : text })
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        if (isDefault) {
+                            textarea.value = promptDefaultText;
+                            status.textContent = '✅ Используется стандартный промт';
+                        } else {
+                            status.textContent = '✅ Промт сохранён';
+                        }
+                        status.style.color = '#4caf50';
+                    } else {
+                        status.textContent = '❌ ' + (data.error || 'Ошибка');
+                        status.style.color = '#d32f2f';
+                    }
+                })
+                .catch(() => {
+                    status.textContent = '❌ Ошибка сохранения';
+                    status.style.color = '#d32f2f';
+                });
+        }
+
+        function resetPrompt() {
+            const status = document.getElementById('promptStatus');
+            fetch('/api/prompt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt: '' })
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        // Показываем стандартный промт в поле, чтобы было видно, что теперь используется
+                        document.getElementById('promptTextarea').value = promptDefaultText;
+                        status.textContent = '✅ Сброшено: используется стандартный промт';
+                        status.style.color = '#4caf50';
+                    } else {
+                        status.textContent = '❌ ' + (data.error || 'Ошибка');
+                        status.style.color = '#d32f2f';
+                    }
+                })
+                .catch(() => {
+                    status.textContent = '❌ Ошибка сброса';
+                    status.style.color = '#d32f2f';
+                });
+        }
+
         function loadDocuments() {
             const list = document.getElementById('docsList');
             list.innerHTML = '<div class="docs-empty">Загрузка...</div>';
@@ -640,7 +810,7 @@
                         // Показываем приветствие как при первом входе
                         const div = document.createElement('div');
                         div.className = 'message bot';
-                        div.innerHTML = '<div class="label">Система</div><div class="content">Привет, {{ session.username }}! Задай мне вопрос по базе знаний.</div>';
+                        div.innerHTML = '<div class="label">Система</div><div class="content">' + window.GREETING + '</div>';
                         container.insertBefore(div, document.getElementById('typingIndicator'));
                     } else {
                         alert('Ошибка: ' + (data.error || 'Не удалось очистить историю'));

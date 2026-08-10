@@ -4,9 +4,9 @@ import threading
 import logging
 import asyncio
 import os
-from rag_core import get_rag_system, RAGSettings
+from rag_core import get_rag_system, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -113,7 +113,10 @@ def index():
     """Главная страница с чатом (требуется авторизация)"""
     if 'user_id' not in session:
         return redirect(url_for('login'))
-    return render_template('index.html')
+    # Приветствие формируется из персонального промта: бот представляется своей ролью
+    user_prompt = get_user_prompt(session['user_id'])
+    greeting = build_greeting(user_prompt, session.get('username', 'Пользователь'))
+    return render_template('index.html', greeting=greeting)
 
 
 @app.route('/ask', methods=['POST'])
@@ -146,7 +149,10 @@ def ask_question():
         model = rag_system.settings.get("llm_model", "")
         chat_logger.log_message(user_name, 0, question, is_bot=False, provider=provider, model=model)
 
-        answer = rag_system.ask_model(question)
+        # Персональный промт пользователя (если задан — заменит системный промт по умолчанию)
+        user_prompt = get_user_prompt(user_id)
+
+        answer = rag_system.ask_model(question, user_prompt=user_prompt)
         logger.info("Ответ сгенерирован успешно")
 
         # Сохраняем ответ в историю
@@ -212,6 +218,36 @@ def delete_chat_message_pair(message_id):
         return jsonify({'success': True, 'deleted_ids': deleted_ids})
     else:
         return jsonify({'error': 'Сообщение не найдено'}), 404
+
+
+# === Персональный промт пользователя ===
+
+@app.route('/api/prompt', methods=['GET'])
+def get_prompt():
+    """Получение персонального промта текущего пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    prompt = get_user_prompt(session['user_id'])
+    return jsonify({
+        'prompt': prompt or '',
+        'has_custom': bool(prompt),
+        'default_prompt': DEFAULT_BASE_PROMPT,
+    })
+
+
+@app.route('/api/prompt', methods=['POST'])
+def save_prompt():
+    """Сохранение персонального промта текущего пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    data = request.get_json(silent=True) or {}
+    prompt = (data.get('prompt') or '').strip()
+
+    if set_user_prompt(session['user_id'], prompt):
+        logger.info(f"📝 Пользователь {session.get('username')} сохранил персональный промт ({len(prompt)} симв.)")
+        return jsonify({'success': True, 'has_custom': bool(prompt)})
+    return jsonify({'error': 'Не удалось сохранить промт'}), 500
 
 
 @app.route('/status')
