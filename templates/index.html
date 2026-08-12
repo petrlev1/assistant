@@ -757,7 +757,7 @@
                         list.innerHTML = data.documents.map(doc => `
                             <div class="docs-item">
                                 <div class="doc-info">
-                                    <div class="doc-name">📄 ${escapeHtml(doc.original_name)}</div>
+                                    <div class="doc-name" title="${escapeHtml(doc.original_name)}">📄 ${escapeHtml(doc.original_name)}</div>
                                     <div class="doc-date">${new Date(doc.created_at).toLocaleString('ru-RU')}</div>
                                 </div>
                                 <div style="display:flex;gap:4px;">
