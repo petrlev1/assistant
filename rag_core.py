@@ -229,6 +229,22 @@ class RAGCore:
         self.reload_knowledge_base(user_id)
         logger.info(f"👤 RAG переключён на пользователя #{user_id}")
     
+    def _apply_txt_priority(self, paths):
+        """Приоритет TXT: если для файла есть одноимённый .txt — в эмбеддинги берём только .txt.
+
+        Пример: в базе лежат myfile.pdf и myfile.txt. Эмбеддинги строятся по myfile.txt,
+        а myfile.pdf остаётся на диске и доступен только для скачивания
+        (Документы, источники в чате). Работает для любых поддерживаемых форматов.
+        """
+        txt_stems = {Path(p).stem.lower() for p in paths if str(p).lower().endswith(".txt")}
+        kept = []
+        for p in paths:
+            if not str(p).lower().endswith(".txt") and Path(p).stem.lower() in txt_stems:
+                logger.info(f"⏭️ {os.path.basename(p)} пропущен для эмбеддингов — есть одноимённый .txt (приоритет TXT)")
+                continue
+            kept.append(p)
+        return kept
+
     def load_knowledge_from_txt(self, file_paths=None, user_id=None):
         """Загрузка знаний из файлов"""
         all_knowledge = {}
@@ -242,8 +258,12 @@ class RAGCore:
                 user_db_folder = os.path.join("Database", f"user_{user_id}")
                 if os.path.exists(user_db_folder):
                     logger.info(f"📁 Загрузка базы знаний пользователя #{user_id} из {user_db_folder}")
-                    for file_name in os.listdir(user_db_folder):
-                        file_path = os.path.join(user_db_folder, file_name)
+                    folder_paths = [
+                        os.path.join(user_db_folder, f)
+                        for f in os.listdir(user_db_folder)
+                        if os.path.isfile(os.path.join(user_db_folder, f))
+                    ]
+                    for file_path in self._apply_txt_priority(folder_paths):
                         self._process_file(file_path, all_knowledge)
                 else:
                     logger.info(f"📁 Папка пользователя #{user_id} не найдена, создаю пустую базу")
@@ -254,7 +274,7 @@ class RAGCore:
         else:
             # Загрузка указанных файлов
             logger.info(f"📂 Загрузка {len(file_paths)} выбранных файлов...")
-            for file_path in file_paths:
+            for file_path in self._apply_txt_priority(file_paths):
                 logger.info(f"📄 Обработка файла: {file_path}")
                 self._process_file(file_path, all_knowledge)
         
@@ -287,11 +307,12 @@ class RAGCore:
         database_folder = "Database"
         if os.path.exists(database_folder):
             logger.info(f"📁 Обработка папки: {database_folder}")
-            for file_name in os.listdir(database_folder):
-                file_path = os.path.join(database_folder, file_name)
-                # Пропускаем папки пользователей (user_{id})
-                if os.path.isdir(file_path) and file_name.startswith("user_"):
-                    continue
+            folder_paths = [
+                os.path.join(database_folder, f)
+                for f in os.listdir(database_folder)
+                if os.path.isfile(os.path.join(database_folder, f)) and not f.startswith("user_")
+            ]
+            for file_path in self._apply_txt_priority(folder_paths):
                 self._process_file(file_path, all_knowledge)
         else:
             logger.warning(f"⚠️ Папка {database_folder} не найдена")
@@ -847,6 +868,31 @@ class RAGCore:
                 except Exception as e:
                     logger.error(f"⚠️ Ошибка при удалении кэш-файла {cache_file.name}: {e}")
     
+    def _get_display_source_name(self, source_path):
+        """Отображаемое имя источника.
+
+        Если фрагмент получен из .txt, рядом с которым лежит одноимённый файл
+        другого формата (оригинал, например PDF) — показываем оригинал,
+        чтобы в списке «Источники:» было настоящее имя документа.
+        """
+        name = os.path.basename(source_path)
+        if not name.lower().endswith('.txt'):
+            return name
+        folder = os.path.dirname(source_path)
+        if not folder or not os.path.isdir(folder):
+            return name
+        stem = os.path.splitext(name)[0].lower()
+        siblings = [
+            f for f in os.listdir(folder)
+            if os.path.isfile(os.path.join(folder, f))
+            and os.path.splitext(f)[0].lower() == stem
+            and f.lower() != name.lower()
+        ]
+        if siblings:
+            siblings.sort(key=lambda f: (not f.lower().endswith('.pdf'), f.lower()))
+            return siblings[0]
+        return name
+
     def _get_source_files(self, indices):
         """Возвращает уникальные названия файлов для указанных индексов фрагментов"""
         seen = set()
@@ -854,7 +900,7 @@ class RAGCore:
         for idx in indices:
             if 0 <= idx < len(self.fragment_sources):
                 source_path = self.fragment_sources[idx]
-                source_name = os.path.basename(source_path)
+                source_name = self._get_display_source_name(source_path)
                 if source_name and source_name not in seen:
                     seen.add(source_name)
                     ordered_sources.append(source_name)

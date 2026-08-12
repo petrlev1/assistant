@@ -450,7 +450,9 @@ def download_document(doc_id):
 @app.route('/api/kb/download/<path:filename>')
 def download_kb_file(filename):
     """Скачивание файла из базы знаний по имени (клик по источнику в чате).
-    Ищем сначала в папке пользователя, затем в общей базе."""
+    Ищем сначала в папке пользователя, затем в общей базе.
+    Если запрошен .txt, а рядом лежит одноимённый файл другого формата
+    (например myfile.pdf) — для скачивания отдаём оригинал (приоритет .pdf)."""
     if 'user_id' not in session:
         return jsonify({'error': 'Необходима авторизация'}), 401
 
@@ -460,13 +462,40 @@ def download_kb_file(filename):
 
     user_id = session['user_id']
     candidates = [
-        os.path.join('Database', f'user_{user_id}', safe_name),
-        os.path.join('Database', safe_name),
+        os.path.join('Database', f'user_{user_id}'),
+        os.path.join('Database'),
     ]
-    for file_path in candidates:
-        if os.path.exists(file_path) and os.path.isfile(file_path):
-            logger.info(f"⬇️ Пользователь {session.get('username')} скачал из чата: {safe_name}")
-            return send_file(file_path, as_attachment=True, download_name=safe_name)
+
+    def _pick_download(folder):
+        """Выбирает файл для скачивания из папки: (путь, имя_для_скачивания) или None."""
+        if not os.path.isdir(folder):
+            return None
+        # Если запрошен .txt и в папке есть одноимённый файл другого формата —
+        # отдаём оригинал (приоритет .pdf)
+        if safe_name.lower().endswith('.txt'):
+            stem = os.path.splitext(safe_name)[0].lower()
+            siblings = [
+                f for f in os.listdir(folder)
+                if os.path.isfile(os.path.join(folder, f))
+                and os.path.splitext(f)[0].lower() == stem
+                and f.lower() != safe_name.lower()
+            ]
+            if siblings:
+                siblings.sort(key=lambda f: (not f.lower().endswith('.pdf'), f.lower()))
+                original = siblings[0]
+                logger.info(f"📎 Для источника {safe_name} скачивается оригинал: {original}")
+                return os.path.join(folder, original), original
+        direct = os.path.join(folder, safe_name)
+        if os.path.isfile(direct):
+            return direct, safe_name
+        return None
+
+    for folder in candidates:
+        hit = _pick_download(folder)
+        if hit:
+            file_path, download_name = hit
+            logger.info(f"⬇️ Пользователь {session.get('username')} скачал из чата: {download_name}")
+            return send_file(file_path, as_attachment=True, download_name=download_name)
 
     return jsonify({'error': 'Файл не найден'}), 404
 
