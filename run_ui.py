@@ -88,11 +88,13 @@ class LauncherUI:
             return defaults.copy()
 
     def save_settings_to_file(self):
-        """Сохранение настроек в rag_settings.json"""
+        """Сохранение настроек в rag_settings.json (атомарно: tmp + rename)"""
         settings_file = os.path.join(self.project_dir, "rag_settings.json")
         try:
-            with open(settings_file, 'w', encoding='utf-8') as f:
+            tmp_file = settings_file + '.tmp'
+            with open(tmp_file, 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, indent=4, ensure_ascii=False)
+            os.replace(tmp_file, settings_file)
             return True
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить настройки:\n{e}")

@@ -67,10 +67,12 @@ class RAGSettings:
             return self.default_settings.copy()
     
     def save_settings(self):
-        """Сохранение настроек в файл"""
+        """Сохранение настроек в файл (атомарно: tmp + rename — веб-сервер может читать файл параллельно)"""
         try:
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
+            tmp_file = self.settings_file + '.tmp'
+            with open(tmp_file, 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, indent=4, ensure_ascii=False)
+            os.replace(tmp_file, self.settings_file)
             logger.info("Настройки сохранены")
         except Exception as e:
             logger.error(f"Ошибка сохранения настроек: {e}")
@@ -78,6 +80,21 @@ class RAGSettings:
     def get(self, key, default=None):
         """Получение значения настройки"""
         return self.settings.get(key, default)
+
+    def reload(self):
+        """Перечитать настройки из файла (изменения из лаунчера применяются без рестарта веб-сервера).
+        При ошибке чтения/парсинга — оставить текущие настройки, НЕ сбрасывать на defaults."""
+        try:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    for key, value in self.default_settings.items():
+                        if key not in settings:
+                            settings[key] = value
+                    self.settings = settings
+                    logger.info("⚙️ Настройки перечитаны из файла")
+        except Exception as e:
+            logger.error(f"Ошибка перечитывания настроек: {e} — оставлены текущие")
     
     def get_llm_api_key(self):
         """Ключ API для LLM-провайдера: DeepSeek → llm_provider_api_key (fallback llm_api_key),
@@ -915,6 +932,8 @@ class RAGCore:
         """Отправка запроса ко всем доступным моделям
         user_prompt: персональный системный промт пользователя (если задан — используется вместо системного по умолчанию)
         """
+        # Перечитываем настройки из файла — изменения из лаунчера применяются без рестарта сервера
+        self.settings.reload()
         # Обновляем клиент с актуальными настройками
         self._setup_client()
         

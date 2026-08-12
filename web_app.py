@@ -150,6 +150,11 @@ def chat():
     """Страница чата (требуется авторизация)"""
     if 'user_id' not in session:
         return redirect(url_for('login'))
+    # После рестарта сервера сессия пользователя живёт, а RAG-система остаётся
+    # на общей (пустой) базе знаний. Загружаем БЗ текущего пользователя, если ещё не загружена.
+    global rag_system
+    if rag_system is not None and rag_system.current_user_id != session['user_id']:
+        rag_system.load_for_user(session['user_id'])
     # Приветствие формируется из персонального промта: бот представляется своей ролью
     user_prompt = get_user_prompt(session['user_id'])
     greeting = build_greeting(user_prompt, session.get('username', 'Пользователь'))
@@ -169,6 +174,10 @@ def ask_question():
         return jsonify({'error': 'Необходима авторизация'}), 401
 
     global rag_system
+
+    # Убеждаемся, что загружена БЗ текущего пользователя (актуально после рестарта сервера)
+    if rag_system is not None and rag_system.current_user_id != session['user_id']:
+        rag_system.load_for_user(session['user_id'])
 
     try:
         data = request.get_json()
@@ -190,7 +199,7 @@ def ask_question():
         # Логирование вопроса в файл чата (с провайдером и моделью)
         provider = rag_system.settings.get("llm_provider", "")
         model = rag_system.settings.get("llm_model", "")
-        chat_logger.log_message(user_name, 0, question, is_bot=False, provider=provider, model=model)
+        chat_logger.log_message(user_name, user_id, question, is_bot=False, provider=provider, model=model)
 
         # Персональный промт пользователя (если задан — заменит системный промт по умолчанию)
         user_prompt = get_user_prompt(user_id)
@@ -202,7 +211,7 @@ def ask_question():
         assistant_msg_id = save_message(user_id, 'assistant', answer)
 
         # Логирование ответа
-        chat_logger.log_message("Бот", 0, answer, is_bot=True, provider=provider, model=model)
+        chat_logger.log_message("Бот", user_id, answer, is_bot=True, provider=provider, model=model)
 
         return jsonify({'answer': answer, 'user_msg_id': user_msg_id, 'assistant_msg_id': assistant_msg_id})
 
