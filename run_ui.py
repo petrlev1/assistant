@@ -10,6 +10,7 @@ import json
 import webbrowser
 import threading
 import logging
+import http.client
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,9 @@ class LauncherUI:
         self.settings = self.load_settings()
 
         self.setup_ui()
+
+        # Периодическая проверка: не запущен ли веб-сервер вне лаунчера (порт 8077)
+        self.root.after(300, self._poll_external_server)
 
     def load_settings(self):
         """Загрузка настроек из rag_settings.json"""
@@ -234,6 +238,16 @@ class LauncherUI:
             anchor="w"
         )
         self.status_label.pack(side="bottom", fill="x", padx=10, pady=(0, 5))
+
+        # Надпись-предупреждение о внешнем веб-сервере (запущен вне лаунчера)
+        self.ext_server_label = tk.Label(
+            self.root,
+            text="",
+            font=("Arial", 9),
+            fg="orange",
+            anchor="w"
+        )
+        self.ext_server_label.pack(side="bottom", fill="x", padx=10, pady=(0, 2))
 
     def _update_web_mode_hint(self):
         """Обновление подсказки под радио-кнопками"""
@@ -882,10 +896,61 @@ class LauncherUI:
                 return venv_python, env
             return sys.executable, env
 
+    # =====================================================================
+    # Проверка внешнего веб-сервера (запущен вне лаунчера)
+    # =====================================================================
+    def is_web_server_running(self):
+        """True, если на порту 8077 уже отвечает веб-сервер (кроссплатформенно).
+
+        HTTP-проверка надёжнее TCP: любой ответ на GET /login означает, что порт
+        занят именно веб-приложением, а не случайным процессом."""
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", 8077, timeout=1)
+            try:
+                conn.request("GET", "/login")
+                conn.getresponse()
+            finally:
+                conn.close()
+            return True
+        except Exception:
+            return False
+
+    def _poll_external_server(self):
+        """Периодическая проверка: если веб-сервер запущен вне лаунчера —
+        показываем предупреждение и блокируем кнопку «Веб-интерфейс»."""
+        try:
+            own_running = self.web_process is not None and self.web_process.poll() is None
+            external_running = not own_running and self.is_web_server_running()
+            if external_running:
+                if self.web_button["state"] != "disabled":
+                    self.web_button.config(state="disabled", bg="#9e9e9e", cursor="")
+                    self.ext_server_label.config(
+                        text="⚠️ Веб-сервер уже запущен вне лаунчера (порт 8077 занят) — кнопка «Веб-интерфейс» отключена",
+                        fg="orange",
+                    )
+            else:
+                if self.web_button["state"] != "normal":
+                    self.web_button.config(state="normal", bg="#4CAF50", cursor="hand2")
+                    self.ext_server_label.config(text="", fg="orange")
+        except Exception as e:
+            logger.warning("Ошибка проверки внешнего веб-сервера: %s", e)
+        finally:
+            self.root.after(3000, self._poll_external_server)
+
     def launch_web(self):
         """Запуск веб-интерфейса в выбранном режиме"""
         if self.web_process and self.web_process.poll() is None:
             messagebox.showinfo("Информация", "Веб-интерфейс уже запущен!")
+            return
+
+        # Страховка: порт занят внешним сервером (например, кнопка была активна при старте)
+        if self.is_web_server_running():
+            messagebox.showwarning(
+                "Веб-интерфейс",
+                "Порт 8077 уже занят — веб-сервер запущен вне лаунчера.\n"
+                "Чтобы запустить сервер из лаунчера, сначала остановите внешний процесс.",
+            )
+            self._poll_external_server()
             return
 
         mode = self.web_mode_var.get()

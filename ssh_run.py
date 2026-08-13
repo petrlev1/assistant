@@ -37,7 +37,6 @@ def run_ssh(cmd: str, timeout: int) -> tuple[str, str, int]:
         ["ssh", "-p", PORT,
          "-o", "BatchMode=yes",
          "-o", "StrictHostKeyChecking=no",
-         "-o", "UserKnownHostsFile=NUL",
          HOST, cmd],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         creationflags=subprocess.CREATE_NO_WINDOW,
