@@ -640,18 +640,38 @@ class RAGCore:
                         logger.warning(f"⚠️ Файл {os.path.basename(file_path)} пуст")
                         
             elif file_path.lower().endswith(".csv"):
-                with open(file_path, "r", encoding="utf-8") as csvfile:
-                    reader = csv.DictReader(csvfile)
-                    rows = list(reader)
-                    csv_knowledge = []
-                    for row in rows:
-                        parts = []
-                        for key, value in row.items():
-                            clean_key = key.strip()
-                            if clean_key.lower().startswith("unnamed"):
-                                continue
-                            if value and value.strip():
-                                parts.append(f"{clean_key} — {value.strip()}")
+                # Автодетект разделителя (';' — выгрузки 1С/CRM) и кодировки (utf-8/cp1251).
+                # Без этого ';'-файлы читаются как один столбец, а лишние поля строки
+                # попадают под ключ None и роняют обработку (None.strip()).
+                rows = []
+                for enc in ("utf-8-sig", "cp1251"):
+                    try:
+                        with open(file_path, "r", encoding=enc, newline="") as csvfile:
+                            sample = csvfile.read(8192)
+                            csvfile.seek(0)
+                            try:
+                                delim = csv.Sniffer().sniff(sample, delimiters=";,\t").delimiter
+                            except csv.Error:
+                                delim = ","
+                            reader = csv.DictReader(csvfile, delimiter=delim)
+                            rows = list(reader)
+                        break
+                    except (UnicodeDecodeError, UnicodeError):
+                        continue
+                csv_knowledge = []
+                for row in rows:
+                    parts = []
+                    for key, value in row.items():
+                        if not key:  # None-ключ: лишние поля строки (restkey) — пропускаем
+                            continue
+                        clean_key = str(key).strip()
+                        if clean_key.lower().startswith("unnamed"):
+                            continue
+                        if isinstance(value, list):  # restkey собирает лишние поля в список
+                            value = " ".join(str(v) for v in value if v)
+                        vs = str(value).strip() if value is not None else ""
+                        if vs:
+                            parts.append(f"{clean_key} — {vs}")
 
                         if parts:
                             if "Проект" in row and "Ответственный" in row:
