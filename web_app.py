@@ -4,9 +4,9 @@ import threading
 import logging
 import asyncio
 import os
-from rag_core import get_rag_system, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting
+from rag_core import get_rag_system, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -341,6 +341,14 @@ def get_documents():
 
     # Возвращаем актуальный список
     docs = get_user_documents(user_id)
+    # Пометка прайс-листов: сколько позиций распарсено в price_items для каждого файла
+    try:
+        price_files = get_price_files(user_id)
+        for d in docs:
+            d['is_price_list'] = d['filename'] in price_files
+            d['price_count'] = price_files.get(d['filename'], 0)
+    except Exception as e:
+        logger.error(f"Ошибка получения прайсов для списка документов: {e}")
     return jsonify({'documents': docs})
 
 
@@ -366,6 +374,9 @@ def upload_document():
     user_db_folder = os.path.join('Database', f'user_{user_id}')
     os.makedirs(user_db_folder, exist_ok=True)
 
+    # Ручной флажок «Это прайс-лист» (если автодетект не сработал)
+    is_price_flag = request.form.get('is_price_list') in ('1', 'true', 'on')
+
     # Сохраняем файл
     filename = file.filename
     file_path = os.path.join(user_db_folder, filename)
@@ -378,13 +389,35 @@ def upload_document():
         os.remove(file_path)
         return jsonify({'error': 'Ошибка при сохранении в БД'}), 500
 
+    # Прайс-лист: автоопределение (xlsx/csv) или ручной флажок.
+    # Парсер сам решает, похож ли файл на прайс (шапка с ценой+наименованием и есть строки с ценой).
+    price_parsed = 0
+    is_price_list = False
+    if file.filename.lower().endswith(('.xlsx', '.csv')):
+        try:
+            price_rows = parse_price_list(file_path)
+        except Exception as e:
+            logger.error(f"❌ Ошибка разбора прайс-листа {filename}: {e}")
+            price_rows = []
+        if price_rows:
+            is_price_list = True
+            price_parsed = len(price_rows)
+            replace_price_items(user_id, filename, price_rows)
+            logger.info(f"📋 Прайс-лист {filename}: {price_parsed} позиций (user {user_id})")
+        elif is_price_flag:
+            logger.warning(f"⚠️ {filename} помечен как прайс-лист, но парсер не нашёл таблицу с ценой и наименованием")
+
     # Перезагружаем базу знаний пользователя
     global rag_system
     if rag_system is not None:
         rag_system.load_for_user(user_id)
 
     logger.info(f"📄 Пользователь {session.get('username')} загрузил документ: {filename}")
-    return jsonify({'success': True, 'message': f'Документ {filename} загружен'})
+    if is_price_list:
+        message = f'Прайс-лист {filename} загружен: {price_parsed} позиций'
+    else:
+        message = f'Документ {filename} загружен'
+    return jsonify({'success': True, 'message': message, 'is_price_list': is_price_list, 'price_count': price_parsed})
 
 
 @app.route('/api/documents/delete/<int:doc_id>', methods=['POST'])
@@ -410,6 +443,8 @@ def delete_document_route(doc_id):
 
     # Удаляем запись из БД
     delete_document(doc_id, user_id)
+    # Если файл был прайс-листом — удаляем его позиции из price_items
+    delete_price_items_for_file(user_id, doc_info['filename'])
 
     # Перезагружаем базу знаний пользователя
     global rag_system

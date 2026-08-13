@@ -386,6 +386,19 @@
             color: #999;
             margin-top: 2px;
         }
+        .docs-item .price-badge {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 6px;
+            font-size: 11px;
+            line-height: 1.4;
+            color: #2e7d32;
+            background: #e8f5e9;
+            border: 1px solid #c8e6c9;
+            border-radius: 10px;
+            vertical-align: middle;
+            white-space: nowrap;
+        }
         .docs-item .btn-delete {
             background: none;
             border: none;
@@ -441,9 +454,13 @@
             <button class="btn-close" onclick="toggleDocsPanel()">✕</button>
         </div>
         <div class="docs-upload">
-            <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.xlsx">
+            <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.xlsx,.xls">
             <button class="btn-send" onclick="uploadDocument()" style="padding:8px 16px;font-size:13px;">Загрузить</button>
         </div>
+        <label style="display:block;margin:8px 0 0 2px;font-size:13px;color:#555;cursor:pointer;">
+            <input type="checkbox" id="priceListCheck" style="vertical-align:middle;margin-right:4px;cursor:pointer;">
+            📋 Это прайс-лист
+        </label>
         <div class="docs-list" id="docsList">
             <div class="docs-empty">Загрузка...</div>
         </div>
@@ -757,7 +774,7 @@
                         list.innerHTML = data.documents.map(doc => `
                             <div class="docs-item">
                                 <div class="doc-info">
-                                    <div class="doc-name" title="${escapeHtml(doc.original_name)}">📄 ${escapeHtml(doc.original_name)}</div>
+                                    <div class="doc-name" title="${escapeHtml(doc.original_name)}">📄 ${escapeHtml(doc.original_name)}${doc.is_price_list ? ` <span class="price-badge" title="Прайс-лист: ${doc.price_count} позиций">📋 ${doc.price_count}</span>` : ''}</div>
                                     <div class="doc-date">${new Date(doc.created_at).toLocaleString('ru-RU')}</div>
                                 </div>
                                 <div style="display:flex;gap:4px;">
@@ -792,6 +809,7 @@
 
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('is_price_list', document.getElementById('priceListCheck').checked ? '1' : '0');
 
             const list = document.getElementById('docsList');
             list.innerHTML = '<div class="upload-progress">⏳ Загрузка...</div>';
@@ -804,7 +822,13 @@
             .then(data => {
                 if (data.success) {
                     fileInput.value = '';
-                    loadDocuments();
+                    document.getElementById('priceListCheck').checked = false;
+                    if (data.is_price_list) {
+                        list.innerHTML = `<div class="docs-empty">✅ Прайс-лист распознан: ${data.price_count} позиций</div>`;
+                        setTimeout(loadDocuments, 1200);
+                    } else {
+                        loadDocuments();
+                    }
                 } else {
                     list.innerHTML = `<div class="docs-empty">❌ ${data.error || 'Ошибка загрузки'}</div>`;
                 }

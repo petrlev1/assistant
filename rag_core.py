@@ -22,6 +22,151 @@ import base64
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# === Парсер прайс-листов ===
+
+# Ключевые слова колонок прайс-листа (по подстроке, в нижнем регистре)
+_PRICE_COL_KEYWORDS = {
+    "price": ("цена", "стоимост", "стоим", "розн", "опт", "прайс", "price", "сумма"),
+    "name": ("наименовани", "наимен", "товар", "название", "позици", "описани", "продукт", "name", "номенклатур"),
+    "article": ("артикул", "код", "article", "sku", "каталожный", "арт."),
+    "unit": ("ед.", "ед ", "единиц", "ед.изм", "unit", "изм."),
+}
+
+
+def _classify_header(headers):
+    """По строке заголовков определяет индексы колонок price/name/article/unit.
+    Возвращает dict индексов или None, если это не похоже на прайс (нет цены + наименования)."""
+    idx = {"price": None, "name": None, "article": None, "unit": None}
+    for i, h in enumerate(headers):
+        h = (h or "").strip().lower()
+        if not h:
+            continue
+        for kind, kws in _PRICE_COL_KEYWORDS.items():
+            if idx[kind] is None and any(k in h for k in kws):
+                idx[kind] = i
+                break
+    if idx["price"] is None or idx["name"] is None:
+        return None
+    return idx
+
+
+def _parse_price_value(value):
+    """'12 500,00 ₽' / 12500.0 → 12500.0; None если это не число"""
+    if value is None:
+        return None
+    s = str(value).strip().replace("\xa0", " ").replace("\u202f", "").replace(" ", "")
+    s = s.replace("₽", "").replace("руб.", "").replace("руб", "").replace("р.", "")
+    # Евроформат "12.500,00" — точки как разделители тысяч
+    if re.match(r"^\d{1,3}(\.\d{3})+(,\d+)?$", s):
+        s = s.replace(".", "")
+    s = s.replace(",", ".")
+    # "от 1250" / "1250-1500" → берём первое число
+    m = re.search(r"-?\d+(\.\d+)?", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except ValueError:
+        return None
+
+
+def _row_to_price_item(row, headers, idx):
+    """Строка таблицы → позиция прайса {article, name, price, unit, raw} или None (пустая/мусорная)"""
+    def cell(col):
+        if col is None or col >= len(row):
+            return ""
+        v = row[col]
+        return str(v).strip() if v is not None else ""
+
+    name = cell(idx["name"])
+    if not name:
+        return None
+    low = name.lower()
+    if any(w in low for w in ("итого", "всего:", "сумма по")):
+        return None
+    price = _parse_price_value(cell(idx["price"]) if idx["price"] is not None else None)
+    if price is None:
+        return None  # строка без цены для прайса бесполезна
+    article = cell(idx["article"]) if idx["article"] is not None else ""
+    unit = cell(idx["unit"]) if idx["unit"] is not None else ""
+    raw = {headers[i]: v for i, v in enumerate(row) if i < len(headers) and headers[i] and v is not None and str(v).strip()}
+    return {"article": article, "name": name, "price": price, "unit": unit, "raw": raw}
+
+
+def _extract_price_rows(rows, max_header_scan=15):
+    """Ищет строку-шапку среди первых N строк и извлекает позиции.
+    Возвращает список dict-позиций или [] — если это не прайс (нет шапки или ни одной строки с ценой)."""
+    for i in range(min(len(rows), max_header_scan)):
+        headers = [str(c).strip() if c is not None else "" for c in rows[i]]
+        idx = _classify_header(headers)
+        if not idx:
+            continue
+        parsed = []
+        for row in rows[i + 1:]:
+            item = _row_to_price_item(row, headers, idx)
+            if item:
+                parsed.append(item)
+        if parsed:
+            logger.info(f"📋 Шапка прайса найдена в строке {i + 1}: {[h for h in headers if h][:8]}")
+            return parsed
+    return []
+
+
+def _iter_csv_rows(file_path):
+    """Читает CSV (utf-8/cp1251 — русские прайсы бывают в cp1251) в список списков"""
+    for enc in ("utf-8-sig", "cp1251"):
+        try:
+            with open(file_path, "r", encoding=enc, newline="") as f:
+                return list(csv.reader(f))
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    return []
+
+
+def _iter_xlsx_rows(file_path):
+    """Читает листы .xlsx (openpyxl не умеет .xls) и возвращает позиции первого листа-прайса"""
+    workbook = openpyxl.load_workbook(file_path, data_only=True)
+    try:
+        for sheet_name in workbook.sheetnames:
+            sheet = workbook[sheet_name]
+            rows = [list(r) for r in sheet.iter_rows(values_only=True)]
+            parsed = _extract_price_rows(rows)
+            if parsed:
+                logger.info(f"📊 Прайс найден на листе «{sheet_name}»: {len(parsed)} позиций")
+                return parsed
+    finally:
+        workbook.close()
+    return []
+
+
+def parse_price_list(file_path):
+    """Определяет, является ли файл прайс-листом, и извлекает позиции.
+    Поддерживает .xlsx и .csv. Возвращает список dict {article, name, price, unit, raw};
+    пустой список — файл не похож на прайс или не поддерживается."""
+    ext = file_path.lower().rsplit(".", 1)[-1] if "." in file_path else ""
+    try:
+        if ext == "xlsx":
+            return _iter_xlsx_rows(file_path)
+        if ext == "csv":
+            return _extract_price_rows(_iter_csv_rows(file_path))
+    except Exception as e:
+        logger.error(f"❌ Ошибка парсинга прайс-листа {file_path}: {e}")
+    return []
+
+
+# Детект ценового вопроса: «цена», «сколько стоит», «артикул», «₽» и т.п.
+_PRICE_INTENT_RE = re.compile(
+    r"(цена|цены|цену|стоимость|стоит|стоят|сколько стоит|прайс|артикул|арт\.?"
+    r"|руб\b|₽|рублей|дешевле|дороже|дешёвле|дёшево|дорого|скидк|price)",
+    re.IGNORECASE,
+)
+
+
+def detect_price_intent(question):
+    """True, если вопрос похож на ценовой (тогда сначала ищем в прайс-листе)"""
+    return bool(_PRICE_INTENT_RE.search(question or ""))
+
+
 class RAGSettings:
     """Класс для управления настройками RAG-системы"""
     def __init__(self):
@@ -913,6 +1058,55 @@ class RAGCore:
         lines = [f"- {source}" for source in source_files]
         return "Источники:\n" + "\n".join(lines)
     
+    def _try_price_answer(self, question):
+        """Точный путь: ценовой вопрос → поиск по прайс-листу (PostgreSQL).
+        Возвращает готовый ответ (факты из таблицы, без LLM — никаких галлюцинаций цены)
+        или None — тогда выполняется обычный RAG-путь."""
+        if not detect_price_intent(question):
+            return None
+        user_id = self.current_user_id
+        if user_id is None:
+            return None
+        try:
+            from auth_db import search_price_items
+            rows = search_price_items(user_id, question)
+        except Exception as e:
+            logger.error(f"Ошибка поиска по прайс-листу: {e}")
+            return None
+        if not rows:
+            logger.info("💲 Ценовой интент, но по прайсу ничего не найдено — обычный RAG-путь")
+            return None
+        logger.info(f"💲 По прайс-листу найдено {len(rows)} позиций")
+        lines = []
+        for r in rows:
+            parts = []
+            if r.get("article"):
+                parts.append(f"арт. {r['article']}")
+            unit = f" за {r['unit']}" if r.get("unit") else ""
+            price = self._format_price(r.get("price"))
+            name = r.get("name", "")
+            suffix = f" ({', '.join(parts)})" if parts else ""
+            lines.append(f"{name}{suffix} — {price}{unit}")
+        answer = "💲 По прайс-листу:\n" + "\n".join(lines)
+        sources = sorted({r["filename"] for r in rows})
+        answer += "\n\n" + self._format_sources_note(sources)
+        return answer
+
+    @staticmethod
+    def _format_price(price):
+        """12500.0 → '12 500 ₽'; None → 'цена не указана'"""
+        if price is None:
+            return "цена не указана"
+        try:
+            val = float(price)
+        except (TypeError, ValueError):
+            return "цена не указана"
+        if val == int(val):
+            s = f"{int(val):,}".replace(",", " ")
+        else:
+            s = f"{val:,.2f}".replace(",", " ").replace(".", ",")
+        return f"{s} ₽"
+
     def find_relevant_info(self, query, top_k=None, alpha=None):
         """Гибридный поиск"""
         # Используем значения из настроек, если не переданы другие
@@ -982,6 +1176,14 @@ class RAGCore:
         self.settings.reload()
         # Обновляем клиент с актуальными настройками
         self._setup_client()
+
+        # Точный путь: ценовой вопрос → поиск по прайс-листу (PostgreSQL).
+        # Если найдено — отвечаем фактами из таблицы без LLM.
+        price_answer = self._try_price_answer(question)
+        if price_answer:
+            if self.settings.get("disable_llm_models", False):
+                price_answer += "\n\n⚠️ Отправка запросов к LLM моделям отключена."
+            return price_answer
         
         # Проверяем настройку отключения поиска в базе знаний
         disable_kb_search = self.settings.get("disable_knowledge_base_search", False)
