@@ -42,9 +42,10 @@ def _classify_header(headers):
         if not h:
             continue
         for kind, kws in _PRICE_COL_KEYWORDS.items():
+            # БЕЗ break: одна ячейка может нести несколько ролей сразу
+            # (например, "IE_NAME;CR_PRICE_1_RUB" — имя и цена в одной ячейке)
             if idx[kind] is None and any(k in h for k in kws):
                 idx[kind] = i
-                break
     if idx["price"] is None or idx["name"] is None:
         return None
     return idx
@@ -113,11 +114,18 @@ def _extract_price_rows(rows, max_header_scan=15):
 
 
 def _iter_csv_rows(file_path):
-    """Читает CSV (utf-8/cp1251 — русские прайсы бывают в cp1251) в список списков"""
+    """Читает CSV (utf-8/cp1251) в список списков; разделитель определяется автоматически
+    (';' — типично для выгрузок 1С/CRM, ',' — Excel, '\t' — копипаста из таблиц)."""
     for enc in ("utf-8-sig", "cp1251"):
         try:
             with open(file_path, "r", encoding=enc, newline="") as f:
-                return list(csv.reader(f))
+                sample = f.read(8192)
+                f.seek(0)
+                try:
+                    delim = csv.Sniffer().sniff(sample, delimiters=";,\t").delimiter
+                except csv.Error:
+                    delim = ","
+                return list(csv.reader(f, delimiter=delim))
         except (UnicodeDecodeError, UnicodeError):
             continue
     return []
