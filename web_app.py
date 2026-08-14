@@ -351,7 +351,7 @@ def get_documents():
             d['price_count'] = price_files.get(d['filename'], 0)
     except Exception as e:
         logger.error(f"Ошибка получения прайсов для списка документов: {e}")
-        # Ленивый бэкфилл группы документа для старых файлов (doc_group пуст): имя + содержимое
+    # Ленивый бэкфилл группы документа для старых файлов (doc_group пуст): имя + содержимое
     for d in docs:
         if not d.get('doc_group'):
             file_path = os.path.join('Database', f'user_{user_id}', d['filename'])
@@ -364,6 +364,40 @@ def get_documents():
                     logger.info(f"🗂️ Группа для {d['filename']}: {group}")
                 except Exception as e:
                     logger.error(f"❌ Ошибка бэкфилла группы {d['filename']}: {e}")
+    # Пометка TXT-файлов, созданных для эмбеддингов (есть одноимённый файл другого формата)
+    try:
+        stems = {}
+        for d in docs:
+            stem = os.path.splitext(d['original_name'])[0].lower()
+            stems.setdefault(stem, []).append(d)
+        for d in docs:
+            d['is_rag_helper'] = False
+            if d['original_name'].lower().endswith('.txt'):
+                stem = os.path.splitext(d['original_name'])[0].lower()
+                has_twin = any(x['id'] != d['id'] and not x['original_name'].lower().endswith('.txt')
+                               for x in stems.get(stem, []))
+                if has_twin:
+                    d['is_rag_helper'] = True
+                    logger.info(f"🙈 RAG-файл (скрывается по умолчанию): {d['original_name']}")
+    except Exception as e:
+        logger.error(f"Ошибка пометки RAG-файлов: {e}")
+    # TXT-дубликаты наследуют группу основного файла (одноимённый не-txt), чтобы быть в одной группе
+    try:
+        twin_stems = {}
+        for d in docs:
+            stem = os.path.splitext(d['original_name'])[0].lower()
+            twin_stems.setdefault(stem, []).append(d)
+        for d in docs:
+            if d.get('is_rag_helper'):
+                stem = os.path.splitext(d['original_name'])[0].lower()
+                twin = next((x for x in twin_stems.get(stem, [])
+                             if x['id'] != d['id'] and not x['original_name'].lower().endswith('.txt')), None)
+                if twin and twin.get('doc_group') and d.get('doc_group') != twin['doc_group']:
+                    update_document_group(d['id'], user_id, twin['doc_group'])
+                    d['doc_group'] = twin['doc_group']
+                    logger.info(f"🔗 RAG-файл {d['original_name']} наследует группу основного файла: {twin['doc_group']}")
+    except Exception as e:
+        logger.error(f"Ошибка наследования группы RAG-файлов: {e}")
     return jsonify({'documents': docs})
 
 

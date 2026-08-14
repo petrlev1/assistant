@@ -583,6 +583,35 @@
             text-decoration: underline;
         }
         .btn-bulk-link:hover { color: #2b5ad1; }
+        /* Строка показа RAG-файлов у списка документов */
+        .docs-rag-row {
+            display: flex;
+            align-items: center;
+            padding: 8px 20px;
+            border-bottom: 1px solid #eee;
+            background: #fafbfd;
+        }
+        .docs-rag-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #666;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+        }
+        .docs-rag-toggle:hover { color: #4a7dff; }
+        .docs-rag-toggle input {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: #4a7dff;
+        }
+        .rag-hidden-count {
+            font-size: 11px;
+            color: #999;
+        }
         .docs-empty {
             text-align: center;
             color: #999;
@@ -644,6 +673,13 @@
             <span style="flex:1"></span>
             <button class="btn-bulk-link" onclick="toggleSelectAll()" id="selectAllBtn">☑️ Выбрать все</button>
             <button class="btn-bulk-link" onclick="clearSelection()">Снять</button>
+        </div>
+        <!-- Показ RAG-файлов (TXT для эмбеддингов): галочка снята = скрыты, нажата = показаны -->
+        <div class="docs-rag-row" id="docsRagRow">
+            <label class="docs-rag-toggle" title="Показать TXT-файлы, созданные для эмбеддингов (одноимённые с PDF/другими форматами)">
+                <input type="checkbox" id="docsShowRagToggle" onchange="setDocsShowRag(this.checked)">
+                📄 Показать RAG-файлы<span class="rag-hidden-count" id="ragHiddenCount"></span>
+            </label>
         </div>
         <div class="docs-list" id="docsList">
             <div class="docs-empty">Загрузка...</div>
@@ -864,6 +900,8 @@
                 if (grpToggle) grpToggle.checked = getDocsGrouped();
                 const grpLbl = grpToggle ? grpToggle.closest('.docs-group-toggle') : null;
                 if (grpLbl) grpLbl.classList.toggle('active', getDocsGrouped());
+                const showRagToggle = document.getElementById('docsShowRagToggle');
+                if (showRagToggle) showRagToggle.checked = getDocsShowRag();
                 loadDocuments();
             }
         }
@@ -1049,6 +1087,19 @@
                         `;
         }
 
+        // Показ RAG-файлов (TXT для эмбеддингов, одноимённых с другими форматами).
+        // Галочка СНЯТА = скрыты (по умолчанию), НАЖАТА = показаны.
+        function getDocsShowRag() {
+            return localStorage.getItem('docsShowRag') === '1';
+        }
+
+        function setDocsShowRag(value) {
+            localStorage.setItem('docsShowRag', value ? '1' : '0');
+            const t = document.getElementById('docsShowRagToggle');
+            if (t) t.checked = value;
+            loadDocuments();
+        }
+
         function loadDocuments() {
             const list = document.getElementById('docsList');
             list.innerHTML = '<div class="docs-empty">Загрузка...</div>';
@@ -1057,7 +1108,20 @@
                 .then(data => {
                     if (data.documents && data.documents.length > 0) {
                         const sortMode = getDocsSort();
-                        const docs = sortDocuments(data.documents, sortMode);
+                        const allDocs = data.documents;
+                        // Счётчик скрытых RAG-файлов (виден только когда они скрыты)
+                        const hiddenCount = allDocs.filter(d => d.is_rag_helper).length;
+                        const countEl = document.getElementById('ragHiddenCount');
+                        if (countEl) countEl.textContent = (!getDocsShowRag() && hiddenCount > 0) ? ` (скрыто: ${hiddenCount})` : '';
+                        let docs = sortDocuments(allDocs, sortMode);
+                        if (!getDocsShowRag()) {
+                            docs = docs.filter(d => !d.is_rag_helper);
+                        }
+                        if (docs.length === 0) {
+                            list.innerHTML = '<div class="docs-empty">Все документы — RAG-файлы (TXT для эмбеддингов). Отметьте «📄 Показать RAG-файлы», чтобы увидеть их.</div>';
+                            updateBulkBar();
+                            return;
+                        }
                         if (getDocsGrouped()) {
                             const groups = groupDocuments(docs);
                             list.innerHTML = groups.map(g => `
