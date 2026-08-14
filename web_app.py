@@ -354,21 +354,23 @@ def get_documents():
 
 @app.route('/api/documents/upload', methods=['POST'])
 def upload_document():
-    """Загрузка документа в базу знаний пользователя"""
+    """Загрузка одного или нескольких документов в базу знаний пользователя"""
     if 'user_id' not in session:
         return jsonify({'error': 'Необходима авторизация'}), 401
 
-    if 'file' not in request.files:
+    # Поддержка нескольких файлов: поле 'files' (список) или одно поле 'file'
+    files = request.files.getlist('files')
+    if not files and 'file' in request.files:
+        files = [request.files['file']]
+    files = [f for f in files if f and f.filename]
+    if not files:
         return jsonify({'error': 'Файл не выбран'}), 400
 
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'Пустое имя файла'}), 400
-
-    # Проверка расширения
+    # Проверка расширений
     allowed_ext = ('.txt', '.pdf', '.docx', '.csv', '.xlsx', '.xls')
-    if not file.filename.lower().endswith(allowed_ext):
-        return jsonify({'error': f'Неподдерживаемый формат. Разрешены: {", ".join(allowed_ext)}'}), 400
+    bad_files = [f.filename for f in files if not f.filename.lower().endswith(allowed_ext)]
+    if bad_files:
+        return jsonify({'error': f'Неподдерживаемый формат: {", ".join(bad_files)}. Разрешены: {", ".join(allowed_ext)}'}), 400
 
     user_id = session['user_id']
     user_db_folder = os.path.join('Database', f'user_{user_id}')
@@ -377,47 +379,62 @@ def upload_document():
     # Ручной флажок «Это прайс-лист» (если автодетект не сработал)
     is_price_flag = request.form.get('is_price_list') in ('1', 'true', 'on')
 
-    # Сохраняем файл
-    filename = file.filename
-    file_path = os.path.join(user_db_folder, filename)
-    file.save(file_path)
+    results = []
+    total_price = 0
+    any_price = False
 
-    # Добавляем запись в БД
-    success, doc_id = add_document(user_id, filename, filename)
-    if not success:
-        # Если не удалось записать в БД — удаляем файл
-        os.remove(file_path)
-        return jsonify({'error': 'Ошибка при сохранении в БД'}), 500
+    for file in files:
+        filename = file.filename
+        file_path = os.path.join(user_db_folder, filename)
+        file.save(file_path)
 
-    # Прайс-лист: автоопределение (xlsx/csv) или ручной флажок.
-    # Парсер сам решает, похож ли файл на прайс (шапка с ценой+наименованием и есть строки с ценой).
-    price_parsed = 0
-    is_price_list = False
-    if file.filename.lower().endswith(('.xlsx', '.csv')):
-        try:
-            price_rows = parse_price_list(file_path)
-        except Exception as e:
-            logger.error(f"❌ Ошибка разбора прайс-листа {filename}: {e}")
-            price_rows = []
-        if price_rows:
-            is_price_list = True
-            price_parsed = len(price_rows)
-            replace_price_items(user_id, filename, price_rows)
-            logger.info(f"📋 Прайс-лист {filename}: {price_parsed} позиций (user {user_id})")
-        elif is_price_flag:
-            logger.warning(f"⚠️ {filename} помечен как прайс-лист, но парсер не нашёл таблицу с ценой и наименованием")
+        # Добавляем запись в БД
+        success, doc_id = add_document(user_id, filename, filename)
+        if not success:
+            os.remove(file_path)
+            results.append({'filename': filename, 'success': False, 'error': 'Ошибка при сохранении в БД'})
+            continue
 
-    # Перезагружаем базу знаний пользователя
+        # Прайс-лист: автоопределение (xlsx/csv) или ручной флажок.
+        # Парсер сам решает, похож ли файл на прайс (шапка с ценой+наименованием и есть строки с ценой).
+        price_parsed = 0
+        is_price_list = False
+        if filename.lower().endswith(('.xlsx', '.csv')):
+            try:
+                price_rows = parse_price_list(file_path)
+            except Exception as e:
+                logger.error(f"❌ Ошибка разбора прайс-листа {filename}: {e}")
+                price_rows = []
+            if price_rows:
+                is_price_list = True
+                price_parsed = len(price_rows)
+                replace_price_items(user_id, filename, price_rows)
+                logger.info(f"📋 Прайс-лист {filename}: {price_parsed} позиций (user {user_id})")
+            elif is_price_flag:
+                logger.warning(f"⚠️ {filename} помечен как прайс-лист, но парсер не нашёл таблицу с ценой и наименованием")
+
+        total_price += price_parsed
+        any_price = any_price or is_price_list
+        results.append({'filename': filename, 'success': True, 'is_price_list': is_price_list, 'price_count': price_parsed})
+        logger.info(f"📄 Пользователь {session.get('username')} загрузил документ: {filename}")
+
+    # Перезагружаем базу знаний пользователя один раз для всего батча
     global rag_system
     if rag_system is not None:
         rag_system.load_for_user(user_id)
 
-    logger.info(f"📄 Пользователь {session.get('username')} загрузил документ: {filename}")
-    if is_price_list:
-        message = f'Прайс-лист {filename} загружен: {price_parsed} позиций'
-    else:
-        message = f'Документ {filename} загружен'
-    return jsonify({'success': True, 'message': message, 'is_price_list': is_price_list, 'price_count': price_parsed})
+    uploaded = sum(1 for r in results if r['success'])
+    failed = [r for r in results if not r['success']]
+    if uploaded == 0:
+        return jsonify({'success': False, 'error': 'Ни один файл не загружен'}), 500
+
+    message = f'Загружено документов: {uploaded}'
+    if failed:
+        message += f', ошибок: {len(failed)}'
+    if any_price:
+        message += f'. Прайс-листы: {total_price} позиций'
+    return jsonify({'success': True, 'message': message, 'results': results,
+                    'is_price_list': any_price, 'price_count': total_price})
 
 
 @app.route('/api/documents/delete/<int:doc_id>', methods=['POST'])

@@ -350,10 +350,37 @@
             display: flex;
             gap: 8px;
         }
-        .docs-upload input[type="file"] {
+        /* Зона загрузки: иконка + drag&drop */
+        .docs-dropzone {
             flex: 1;
-            font-size: 13px;
+            border: 2px dashed #c9ced8;
+            border-radius: 12px;
+            background: #fafbfd;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 18px 16px;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            user-select: none;
         }
+        .docs-dropzone:hover { border-color: #4a7dff; background: #f0f5ff; }
+        .docs-dropzone.dragover {
+            border-color: #4a7dff;
+            background: #e8f0ff;
+            box-shadow: inset 0 0 0 2px rgba(74,125,255,0.25);
+        }
+        .docs-dropzone .dz-icon {
+            font-size: 34px;
+            line-height: 1;
+        }
+        .docs-dropzone .dz-text {
+            font-size: 13px;
+            color: #555;
+            line-height: 1.4;
+        }
+        .docs-dropzone .dz-text b { color: #4a7dff; }
         .docs-list {
             flex: 1;
             overflow-y: auto;
@@ -454,8 +481,11 @@
             <button class="btn-close" onclick="toggleDocsPanel()">✕</button>
         </div>
         <div class="docs-upload">
-            <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.xlsx,.xls">
-            <button class="btn-send" onclick="uploadDocument()" style="padding:8px 16px;font-size:13px;">Загрузить</button>
+            <div class="docs-dropzone" id="dropZone" title="Нажмите или перетащите файлы сюда">
+                <div class="dz-icon">📤</div>
+                <div class="dz-text">Перетащите файлы сюда<br>или <b>нажмите</b> для выбора</div>
+                <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.xlsx,.xls" multiple style="display:none;">
+            </div>
         </div>
         <label style="display:block;margin:8px 0 0 2px;font-size:13px;color:#555;cursor:pointer;">
             <input type="checkbox" id="priceListCheck" style="vertical-align:middle;margin-right:4px;cursor:pointer;">
@@ -792,27 +822,36 @@
                 });
         }
 
-        function uploadDocument() {
-            const fileInput = document.getElementById('fileInput');
-            const file = fileInput.files[0];
-            if (!file) {
-                alert('Выберите файл для загрузки');
+        // Загрузка одного или нескольких файлов (клик по иконке или drag&drop)
+        function uploadDocuments(fileList) {
+            const files = Array.from(fileList || []);
+            if (files.length === 0) {
+                alert('Выберите файлы для загрузки');
                 return;
             }
 
             const allowedExt = ['.txt', '.pdf', '.docx', '.csv', '.xlsx', '.xls'];
-            const ext = '.' + file.name.split('.').pop().toLowerCase();
-            if (!allowedExt.includes(ext)) {
+            const valid = [];
+            const rejected = [];
+            files.forEach(file => {
+                const ext = '.' + file.name.split('.').pop().toLowerCase();
+                if (allowedExt.includes(ext)) valid.push(file);
+                else rejected.push(file.name);
+            });
+            if (valid.length === 0) {
                 alert('Неподдерживаемый формат. Разрешены: ' + allowedExt.join(', '));
                 return;
             }
+            if (rejected.length > 0) {
+                alert('Пропущены файлы с неподдерживаемым форматом: ' + rejected.join(', '));
+            }
 
             const formData = new FormData();
-            formData.append('file', file);
+            valid.forEach(file => formData.append('files', file));
             formData.append('is_price_list', document.getElementById('priceListCheck').checked ? '1' : '0');
 
             const list = document.getElementById('docsList');
-            list.innerHTML = '<div class="upload-progress">⏳ Загрузка...</div>';
+            list.innerHTML = `<div class="upload-progress">⏳ Загрузка ${valid.length} файл(ов)...</div>`;
 
             fetch('/api/documents/upload', {
                 method: 'POST',
@@ -821,22 +860,58 @@
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    fileInput.value = '';
+                    document.getElementById('fileInput').value = '';
                     document.getElementById('priceListCheck').checked = false;
-                    if (data.is_price_list) {
-                        list.innerHTML = `<div class="docs-empty">✅ Прайс-лист распознан: ${data.price_count} позиций</div>`;
+                    if (data.results && data.results.some(r => r.is_price_list)) {
+                        const priceFiles = data.results.filter(r => r.is_price_list);
+                        const priceMsg = priceFiles.map(r => `${r.filename} (${r.price_count} поз.)`).join(', ');
+                        list.innerHTML = `<div class="docs-empty">✅ ${data.message || 'Документы загружены'}<br><span style="font-size:12px;color:#2e7d32;">📋 Прайс-листы: ${escapeHtml(priceMsg)}</span></div>`;
                         setTimeout(loadDocuments, 1200);
                     } else {
+                        list.innerHTML = `<div class="docs-empty">✅ ${escapeHtml(data.message || 'Документы загружены')}</div>`;
                         loadDocuments();
                     }
                 } else {
-                    list.innerHTML = `<div class="docs-empty">❌ ${data.error || 'Ошибка загрузки'}</div>`;
+                    list.innerHTML = `<div class="docs-empty">❌ ${escapeHtml(data.error || 'Ошибка загрузки')}</div>`;
                 }
             })
             .catch(() => {
                 list.innerHTML = '<div class="docs-empty">❌ Ошибка соединения с сервером</div>';
             });
         }
+
+        // Инициализация зоны загрузки: клик по иконке и drag&drop
+        (function initDropZone() {
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+            if (!dropZone || !fileInput) return;
+
+            dropZone.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', () => {
+                uploadDocuments(fileInput.files);
+                fileInput.value = '';
+            });
+
+            ['dragenter', 'dragover'].forEach(ev => {
+                dropZone.addEventListener(ev, e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropZone.classList.add('dragover');
+                });
+            });
+            ['dragleave', 'drop'].forEach(ev => {
+                dropZone.addEventListener(ev, e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropZone.classList.remove('dragover');
+                });
+            });
+            dropZone.addEventListener('drop', e => {
+                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    uploadDocuments(e.dataTransfer.files);
+                }
+            });
+        })();
 
         function deleteDocument(docId, docName) {
             if (!confirm(`Удалить документ "${docName}"? База знаний будет перезагружена.`)) return;
