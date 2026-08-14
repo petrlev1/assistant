@@ -170,7 +170,90 @@ _PRICE_INTENT_RE = re.compile(
 )
 
 
+# === Детекция группы документа (по имени файла + превью содержимого) ===
+# Порядок правил важен: первое совпадение выигрывает.
+_DOC_GROUP_PATTERNS = [
+    (r'инструкц|instruction|manual|guide', '📖 Инструкции'),
+    (r'паспорт|passport', '📋 Паспорт товара'),
+    (r'руководств|эксплуатац|operation|operating', '📘 Руководства'),
+    (r'каталог|catalog|catalogue', '📚 Каталоги'),
+    (r'сертификат|certificat', '📜 Сертификаты'),
+    (r'договор|contract|agreement', '🤝 Договоры'),
+    (r'\bсчет|\bсчёт|invoice|\bbill', '🧾 Счета'),
+    (r'накладн|waybill|delivery note', '📦 Накладные'),
+    (r'характеристик|спецификац|specification|\bspec\b|datasheet', '📊 Характеристики'),
+    (r'описани|description', '📝 Описания'),
+    (r'брошюр|буклет|brochure', '📗 Брошюры'),
+    (r'презентац|presentation', '🖥️ Презентации'),
+    (r'таблиц|расчет|расчёт|calculation|\btable', '🗂️ Таблицы'),
+    (r'\bформ|бланк|заявк|\bform\b|\bapplication\b', '📄 Формы и бланки'),
+]
+
+
+def _read_text_preview(file_path, max_chars=3000):
+    """Быстрое извлечение первых max_chars символов текста файла для детекции группы.
+    Поддерживает .txt/.csv/.pdf/.docx/.xlsx; никогда не бросает исключений."""
+    ext = file_path.lower().rsplit('.', 1)[-1] if '.' in file_path else ''
+    text = ''
+    try:
+        if ext in ('txt', 'csv'):
+            with open(file_path, 'rb') as f:
+                raw = f.read(max_chars * 2)
+            for enc in ('utf-8', 'utf-8-sig', 'cp1251'):
+                try:
+                    text = raw.decode(enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+        elif ext == 'pdf':
+            try:
+                import fitz  # PyMuPDF
+                doc = fitz.open(file_path)
+                try:
+                    for i in range(min(3, len(doc))):
+                        text += doc[i].get_text() or ''
+                        if len(text) >= max_chars:
+                            break
+                finally:
+                    doc.close()
+            except ImportError:
+                reader = PyPDF2.PdfReader(file_path)
+                for i in range(min(3, len(reader.pages))):
+                    text += reader.pages[i].extract_text() or ''
+                    if len(text) >= max_chars:
+                        break
+        elif ext == 'docx':
+            doc = docx.Document(file_path)
+            for p in doc.paragraphs[:60]:
+                text += (p.text or '') + '\n'
+        elif ext == 'xlsx':
+            wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+            try:
+                ws = wb.worksheets[0]
+                for row in ws.iter_rows(max_row=10, values_only=True):
+                    text += ' '.join(str(c) for c in row if c is not None) + '\n'
+            finally:
+                wb.close()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось извлечь текст для детекции группы {file_path}: {e}")
+    return text[:max_chars]
+
+
+def detect_doc_group(filename='', preview_text='', is_price_list=False):
+    """Определяет группу документа по имени файла и превью содержимого.
+    Сначала флаг прайс-листа, затем ключевые слова (RU+EN) в склеенном тексте.
+    Возвращает название группы с эмодзи (напр. '📖 Инструкции') или '📁 Прочие документы'."""
+    if is_price_list:
+        return '💲 Прайс-листы'
+    haystack = f"{filename or ''} {preview_text or ''}".lower()
+    for pattern, group in _DOC_GROUP_PATTERNS:
+        if re.search(pattern, haystack):
+            return group
+    return '📁 Прочие документы'
+
+
 def detect_price_intent(question):
+
     """True, если вопрос похож на ценовой (тогда сначала ищем в прайс-листе)"""
     return bool(_PRICE_INTENT_RE.search(question or ""))
 

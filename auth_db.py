@@ -64,6 +64,7 @@ def init_db():
         """)
         # Миграция: колонка персонального промта пользователя (пусто = системный промт по умолчанию)
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_prompt TEXT")
+        cur.execute("ALTER TABLE user_documents ADD COLUMN IF NOT EXISTS doc_group VARCHAR(100) DEFAULT ''")
         conn.commit()
         cur.close()
         conn.close()
@@ -206,6 +207,7 @@ def init_user_documents():
                 filename VARCHAR(255) NOT NULL,
                 original_name VARCHAR(255) NOT NULL,
                 file_hash VARCHAR(64),
+                doc_group VARCHAR(100) DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -223,14 +225,14 @@ def init_user_documents():
         return False
 
 
-def add_document(user_id, filename, original_name, file_hash=None):
+def add_document(user_id, filename, original_name, file_hash=None, doc_group=''):
     """Добавление записи о документе пользователя"""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO user_documents (user_id, filename, original_name, file_hash) VALUES (%s, %s, %s, %s) RETURNING id",
-            (user_id, filename, original_name, file_hash),
+            "INSERT INTO user_documents (user_id, filename, original_name, file_hash, doc_group) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (user_id, filename, original_name, file_hash, doc_group),
         )
         doc_id = cur.fetchone()[0]
         conn.commit()
@@ -268,7 +270,7 @@ def get_user_documents(user_id):
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            "SELECT id, filename, original_name, created_at FROM user_documents WHERE user_id = %s ORDER BY created_at DESC",
+            "SELECT id, filename, original_name, doc_group, created_at FROM user_documents WHERE user_id = %s ORDER BY created_at DESC",
             (user_id,),
         )
         docs = cur.fetchall()
@@ -278,6 +280,24 @@ def get_user_documents(user_id):
     except Exception as e:
         logger.error(f"Ошибка получения документов: {e}")
         return []
+
+
+def update_document_group(doc_id, user_id, doc_group):
+    """Обновление группы документа (для ленивого бэкфилла старых файлов)"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE user_documents SET doc_group = %s WHERE id = %s AND user_id = %s",
+            (doc_group, doc_id, user_id),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка обновления группы документа: {e}")
+        return False
 
 
 # === Прайс-листы ===

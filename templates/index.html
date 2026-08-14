@@ -348,6 +348,56 @@
         }
         .docs-sort:hover { border-color: #4a7dff; background: #f0f5ff; }
         .docs-sort:focus { border-color: #4a7dff; }
+        .docs-group-toggle {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            color: #555;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            padding: 5px 8px;
+            border: 1px solid #d5dae3;
+            border-radius: 6px;
+            background: #fafbfd;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .docs-group-toggle:hover { border-color: #4a7dff; background: #f0f5ff; }
+        .docs-group-toggle input {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: #4a7dff;
+        }
+        .docs-group-toggle.active {
+            border-color: #4a7dff;
+            background: #e8f0ff;
+            color: #2b5ad1;
+        }
+        /* Заголовок группы документов */
+        .docs-group {
+            margin-bottom: 6px;
+        }
+        .docs-group-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #4a7dff;
+            padding: 8px 10px 6px;
+            border-bottom: 1px solid #e4e9f2;
+            margin-bottom: 6px;
+        }
+        .docs-group-count {
+            font-size: 11px;
+            font-weight: 500;
+            color: #999;
+            background: #f0f3f8;
+            border-radius: 10px;
+            padding: 1px 8px;
+        }
         .btn-close {
             background: none;
             border: none;
@@ -563,10 +613,16 @@
     <div class="docs-panel" id="docsPanel">
         <div class="docs-header">
             <h3>📄 Мои документы</h3>
-            <select id="docsSort" class="docs-sort" onchange="setDocsSort(this.value)" title="Сортировка списка документов">
-                <option value="date">По дате загрузки</option>
-                <option value="name">По имени</option>
-            </select>
+            <div style="display:flex;align-items:center;gap:10px;">
+                <label class="docs-group-toggle" title="Сгруппировать документы по типу (инструкции, паспорта, прайсы и т.д.)">
+                    <input type="checkbox" id="docsGroupToggle" onchange="setDocsGrouped(this.checked)">
+                    🗂️ По группам
+                </label>
+                <select id="docsSort" class="docs-sort" onchange="setDocsSort(this.value)" title="Сортировка списка документов">
+                    <option value="date">По дате загрузки</option>
+                    <option value="name">По имени</option>
+                </select>
+            </div>
             <button class="btn-close" onclick="toggleDocsPanel()">✕</button>
         </div>
         <div class="docs-upload">
@@ -804,6 +860,10 @@
             if (active) {
                 const sortSel = document.getElementById('docsSort');
                 if (sortSel) sortSel.value = getDocsSort();
+                const grpToggle = document.getElementById('docsGroupToggle');
+                if (grpToggle) grpToggle.checked = getDocsGrouped();
+                const grpLbl = grpToggle ? grpToggle.closest('.docs-group-toggle') : null;
+                if (grpLbl) grpLbl.classList.toggle('active', getDocsGrouped());
                 loadDocuments();
             }
         }
@@ -918,16 +978,63 @@
             return sorted;
         }
 
-        function loadDocuments() {
-            const list = document.getElementById('docsList');
-            list.innerHTML = '<div class="docs-empty">Загрузка...</div>';
-            fetch('/api/documents')
-                .then(r => r.json())
-                .then(data => {
-                    if (data.documents && data.documents.length > 0) {
-                        const sortMode = getDocsSort();
-                        const docs = sortDocuments(data.documents, sortMode);
-                        list.innerHTML = docs.map(doc => `
+        // Группировка документов по типу (по ключевым словам в имени файла, RU+EN)
+        // Сервер заполняет doc_group (имя + содержимое файла); этот детектор — fallback для файлов без группы
+        function detectDocGroup(doc) {
+            if (doc.is_price_list) return '💲 Прайс-листы';
+            if (doc.doc_group) return doc.doc_group;
+            const n = (doc.original_name || doc.filename || '').toLowerCase();
+            const rules = [
+                ['📖 Инструкции', /инструкц|instruction|manual|guide/],
+                ['📋 Паспорт товара', /паспорт|passport/],
+                ['📘 Руководства', /руководств|эксплуатац|operation|operating/],
+                ['📚 Каталоги', /каталог|catalog|catalogue/],
+                ['📜 Сертификаты', /сертификат|certificat/],
+                ['🤝 Договоры', /договор|contract|agreement/],
+                ['🧾 Счета', /(^|[^\w])счет|(^|[^\w])счёт|invoice|(^|[^\w])bill/],
+                ['📦 Накладные', /накладн|waybill|delivery note/],
+                ['📊 Характеристики', /характеристик|спецификац|specification|datasheet/],
+                ['📝 Описания', /описани|description/],
+                ['📗 Брошюры', /брошюр|буклет|brochure/],
+                ['🖥️ Презентации', /презентац|presentation/],
+                ['🗂️ Таблицы', /таблиц|расчет|расчёт|calculation/],
+                ['📄 Формы и бланки', /(^|[^\w])форм|бланк|заявк|(^|[^\w])form|(^|[^\w])application/],
+            ];
+            for (const [name, re] of rules) {
+                if (re.test(n)) return name;
+            }
+            return '📁 Прочие документы';
+        }
+
+        function groupDocuments(docs) {
+            const groups = [];
+            const index = {};
+            docs.forEach(doc => {
+                const gname = detectDocGroup(doc);
+                if (!(gname in index)) {
+                    index[gname] = groups.length;
+                    groups.push({ name: gname, docs: [] });
+                }
+                groups[index[gname]].docs.push(doc);
+            });
+            return groups;
+        }
+
+        function getDocsGrouped() {
+            return localStorage.getItem('docsGrouped') === '1';
+        }
+
+        function setDocsGrouped(value) {
+            localStorage.setItem('docsGrouped', value ? '1' : '0');
+            const t = document.getElementById('docsGroupToggle');
+            if (t) t.checked = value;
+            const lbl = t ? t.closest('.docs-group-toggle') : null;
+            if (lbl) lbl.classList.toggle('active', value);
+            loadDocuments();
+        }
+
+        function docItemHtml(doc) {
+            return `
                             <div class="docs-item">
                                 <input type="checkbox" class="doc-check" data-id="${doc.id}" onchange="updateBulkBar()" title="Выбрать">
                                 <div class="doc-info">
@@ -939,7 +1046,29 @@
                                     <button class="btn-delete" onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_name)}')">🗑️</button>
                                 </div>
                             </div>
-                        `).join('');
+                        `;
+        }
+
+        function loadDocuments() {
+            const list = document.getElementById('docsList');
+            list.innerHTML = '<div class="docs-empty">Загрузка...</div>';
+            fetch('/api/documents')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.documents && data.documents.length > 0) {
+                        const sortMode = getDocsSort();
+                        const docs = sortDocuments(data.documents, sortMode);
+                        if (getDocsGrouped()) {
+                            const groups = groupDocuments(docs);
+                            list.innerHTML = groups.map(g => `
+                                <div class="docs-group">
+                                    <div class="docs-group-title">${g.name}<span class="docs-group-count">${g.docs.length}</span></div>
+                                    ${g.docs.map(doc => docItemHtml(doc)).join('')}
+                                </div>
+                            `).join('');
+                        } else {
+                            list.innerHTML = docs.map(doc => docItemHtml(doc)).join('');
+                        }
                         updateBulkBar();
                     } else {
                         list.innerHTML = '<div class="docs-empty">У вас пока нет документов. Загрузите файлы для обучения RAG-системы.</div>';

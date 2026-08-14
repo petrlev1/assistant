@@ -6,9 +6,9 @@ import asyncio
 import os
 import io
 import zipfile
-from rag_core import get_rag_system, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list
+from rag_core import get_rag_system, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -351,6 +351,19 @@ def get_documents():
             d['price_count'] = price_files.get(d['filename'], 0)
     except Exception as e:
         logger.error(f"Ошибка получения прайсов для списка документов: {e}")
+        # Ленивый бэкфилл группы документа для старых файлов (doc_group пуст): имя + содержимое
+    for d in docs:
+        if not d.get('doc_group'):
+            file_path = os.path.join('Database', f'user_{user_id}', d['filename'])
+            if os.path.exists(file_path):
+                try:
+                    preview = _read_text_preview(file_path)
+                    group = detect_doc_group(d['filename'], preview, bool(d.get('is_price_list')))
+                    update_document_group(d['id'], user_id, group)
+                    d['doc_group'] = group
+                    logger.info(f"🗂️ Группа для {d['filename']}: {group}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка бэкфилла группы {d['filename']}: {e}")
     return jsonify({'documents': docs})
 
 
@@ -390,8 +403,11 @@ def upload_document():
         file_path = os.path.join(user_db_folder, filename)
         file.save(file_path)
 
+        # Определяем группу документа (имя файла + превью содержимого)
+        preview = _read_text_preview(file_path)
+        doc_group = detect_doc_group(filename, preview)
         # Добавляем запись в БД
-        success, doc_id = add_document(user_id, filename, filename)
+        success, doc_id = add_document(user_id, filename, filename, doc_group=doc_group)
         if not success:
             os.remove(file_path)
             results.append({'filename': filename, 'success': False, 'error': 'Ошибка при сохранении в БД'})
@@ -412,6 +428,7 @@ def upload_document():
                 price_parsed = len(price_rows)
                 replace_price_items(user_id, filename, price_rows)
                 logger.info(f"📋 Прайс-лист {filename}: {price_parsed} позиций (user {user_id})")
+                update_document_group(doc_id, user_id, '💲 Прайс-листы')
             elif is_price_flag:
                 logger.warning(f"⚠️ {filename} помечен как прайс-лист, но парсер не нашёл таблицу с ценой и наименованием")
 
