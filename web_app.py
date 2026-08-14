@@ -4,6 +4,8 @@ import threading
 import logging
 import asyncio
 import os
+import io
+import zipfile
 from rag_core import get_rag_system, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file
@@ -497,6 +499,93 @@ def download_document(doc_id):
         as_attachment=True,
         download_name=doc_info['original_name']
     )
+
+@app.route('/api/documents/delete-bulk', methods=['POST'])
+def delete_documents_bulk():
+    """Удаление нескольких документов пользователя"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    data = request.get_json(silent=True) or {}
+    ids = data.get('ids') or []
+    ids = [int(i) for i in ids if str(i).isdigit()]
+    if not ids:
+        return jsonify({'error': 'Документы не выбраны'}), 400
+
+    user_id = session['user_id']
+    docs = get_user_documents(user_id)
+    by_id = {d['id']: d for d in docs}
+
+    deleted_names = []
+    for doc_id in ids:
+        doc_info = by_id.get(doc_id)
+        if not doc_info:
+            continue
+        file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"🗑️ Удалён файл: {file_path}")
+        delete_document(doc_id, user_id)
+        delete_price_items_for_file(user_id, doc_info['filename'])
+        deleted_names.append(doc_info['filename'])
+
+    if not deleted_names:
+        return jsonify({'error': 'Документы не найдены'}), 404
+
+    # Перезагружаем базу знаний один раз для всего батча
+    global rag_system
+    if rag_system is not None:
+        rag_system.load_for_user(user_id)
+
+    logger.info(f"🗑️ Пользователь {session.get('username')} удалил документы: {', '.join(deleted_names)}")
+    return jsonify({'success': True, 'message': f'Удалено документов: {len(deleted_names)}', 'deleted': deleted_names})
+
+
+@app.route('/api/documents/download-bulk')
+def download_documents_bulk():
+    """Скачивание нескольких документов одним ZIP-архивом"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    ids = [int(x) for x in request.args.get('ids', '').split(',') if x.strip().isdigit()]
+    if not ids:
+        return jsonify({'error': 'Документы не выбраны'}), 400
+
+    user_id = session['user_id']
+    docs = get_user_documents(user_id)
+    by_id = {d['id']: d for d in docs}
+
+    buf = io.BytesIO()
+    used_names = set()
+    added = 0
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for doc_id in ids:
+            doc_info = by_id.get(doc_id)
+            if not doc_info:
+                continue
+            file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
+            if not os.path.exists(file_path):
+                continue
+            # Уникализируем имя внутри архива (два файла с одинаковым именем)
+            name = doc_info['original_name']
+            base, ext = os.path.splitext(name)
+            n = 2
+            arcname = name
+            while arcname in used_names:
+                arcname = f'{base} ({n}){ext}'
+                n += 1
+            used_names.add(arcname)
+            zf.write(file_path, arcname=arcname)
+            added += 1
+            logger.info(f"⬇️ В архив: {doc_info['filename']}")
+
+    if added == 0:
+        return jsonify({'error': 'Файлы не найдены на диске'}), 404
+
+    buf.seek(0)
+    logger.info(f"⬇️ Пользователь {session.get('username')} скачал архив из {added} документов")
+    return send_file(buf, mimetype='application/zip', as_attachment=True, download_name='documents.zip')
+
 
 
 @app.route('/api/kb/download/<path:filename>')

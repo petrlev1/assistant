@@ -397,6 +397,14 @@
             transition: background 0.2s;
         }
         .docs-item:hover { background: #eef0f5; }
+        .docs-item .doc-check {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+            flex-shrink: 0;
+            accent-color: #4a7dff;
+        }
+        .docs-item.has-check { padding-left: 14px; }
         .docs-item .doc-info {
             flex: 1;
             min-width: 0;
@@ -448,6 +456,47 @@
             transition: background 0.2s;
         }
         .docs-item .btn-download:hover { background: #e3f2fd; }
+        /* Панель множественных действий */
+        .docs-bulkbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-bottom: 1px solid #eee;
+            background: #f4f7ff;
+            font-size: 13px;
+        }
+        .docs-bulkbar .bulk-count {
+            font-weight: 600;
+            color: #4a7dff;
+            white-space: nowrap;
+        }
+        .btn-bulk {
+            border: none;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 13px;
+            cursor: pointer;
+            background: #e3f2fd;
+            color: #1565c0;
+            transition: background 0.2s;
+        }
+        .btn-bulk:hover { background: #bbdefb; }
+        .btn-bulk.btn-bulk-danger {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .btn-bulk.btn-bulk-danger:hover { background: #ffcdd2; }
+        .btn-bulk-link {
+            background: none;
+            border: none;
+            color: #4a7dff;
+            cursor: pointer;
+            font-size: 13px;
+            padding: 4px 6px;
+            text-decoration: underline;
+        }
+        .btn-bulk-link:hover { color: #2b5ad1; }
         .docs-empty {
             text-align: center;
             color: #999;
@@ -491,6 +540,15 @@
             <input type="checkbox" id="priceListCheck" style="vertical-align:middle;margin-right:4px;cursor:pointer;">
             📋 Это прайс-лист
         </label>
+        <!-- Панель множественных действий (видна при выборе документов) -->
+        <div class="docs-bulkbar" id="bulkBar" style="display:none;">
+            <span class="bulk-count" id="bulkCount">Выбрано: 0</span>
+            <button class="btn-bulk" onclick="downloadSelected()" title="Скачать выбранные файлы одним архивом">⬇️ Скачать выбранные</button>
+            <button class="btn-bulk btn-bulk-danger" onclick="deleteSelected()" title="Удалить выбранные файлы">🗑️ Удалить выбранные</button>
+            <span style="flex:1"></span>
+            <button class="btn-bulk-link" onclick="toggleSelectAll()" id="selectAllBtn">☑️ Выбрать все</button>
+            <button class="btn-bulk-link" onclick="clearSelection()">Снять</button>
+        </div>
         <div class="docs-list" id="docsList">
             <div class="docs-empty">Загрузка...</div>
         </div>
@@ -803,6 +861,7 @@
                     if (data.documents && data.documents.length > 0) {
                         list.innerHTML = data.documents.map(doc => `
                             <div class="docs-item">
+                                <input type="checkbox" class="doc-check" data-id="${doc.id}" onchange="updateBulkBar()" title="Выбрать">
                                 <div class="doc-info">
                                     <div class="doc-name" title="${escapeHtml(doc.original_name)}">📄 ${escapeHtml(doc.original_name)}${doc.is_price_list ? ` <span class="price-badge" title="Прайс-лист: ${doc.price_count} позиций">📋 ${doc.price_count}</span>` : ''}</div>
                                     <div class="doc-date">${new Date(doc.created_at).toLocaleString('ru-RU')}</div>
@@ -813,6 +872,7 @@
                                 </div>
                             </div>
                         `).join('');
+                        updateBulkBar();
                     } else {
                         list.innerHTML = '<div class="docs-empty">У вас пока нет документов. Загрузите файлы для обучения RAG-системы.</div>';
                     }
@@ -937,6 +997,80 @@
 
         function downloadDocument(docId) {
             window.location.href = `/api/documents/download/${docId}`;
+        }
+
+        // === Множественный выбор / удаление / скачивание ===
+        function getSelectedDocIds() {
+            return Array.from(document.querySelectorAll('.doc-check:checked'))
+                .map(cb => parseInt(cb.dataset.id));
+        }
+
+        function updateBulkBar() {
+            const bar = document.getElementById('bulkBar');
+            const ids = getSelectedDocIds();
+            if (!bar) return;
+            if (ids.length > 0) {
+                bar.style.display = 'flex';
+                document.getElementById('bulkCount').textContent = `Выбрано: ${ids.length}`;
+                const allBtn = document.getElementById('selectAllBtn');
+                const allChecked = document.querySelectorAll('.doc-check').length === ids.length;
+                allBtn.textContent = allChecked ? '☑️ Снять все' : '☑️ Выбрать все';
+            } else {
+                bar.style.display = 'none';
+                const allBtn = document.getElementById('selectAllBtn');
+                if (allBtn) allBtn.textContent = '☑️ Выбрать все';
+            }
+        }
+
+        function toggleSelectAll() {
+            const ids = getSelectedDocIds();
+            const checks = document.querySelectorAll('.doc-check');
+            const allSelected = checks.length > 0 && checks.length === ids.length;
+            checks.forEach(cb => cb.checked = !allSelected);
+            updateBulkBar();
+        }
+
+        function clearSelection() {
+            document.querySelectorAll('.doc-check').forEach(cb => cb.checked = false);
+            updateBulkBar();
+        }
+
+        function deleteSelected() {
+            const ids = getSelectedDocIds();
+            if (ids.length === 0) {
+                alert('Выберите документы для удаления');
+                return;
+            }
+            if (!confirm(`Удалить выбранные документы (${ids.length})? База знаний будет перезагружена.`)) return;
+
+            const list = document.getElementById('docsList');
+            list.innerHTML = '<div class="upload-progress">⏳ Удаление...</div>';
+
+            fetch('/api/documents/delete-bulk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    loadDocuments();
+                } else {
+                    list.innerHTML = `<div class="docs-empty">❌ ${escapeHtml(data.error || 'Ошибка удаления')}</div>`;
+                }
+            })
+            .catch(() => {
+                list.innerHTML = '<div class="docs-empty">❌ Ошибка соединения с сервером</div>';
+            });
+        }
+
+        function downloadSelected() {
+            const ids = getSelectedDocIds();
+            if (ids.length === 0) {
+                alert('Выберите документы для скачивания');
+                return;
+            }
+            window.location.href = '/api/documents/download-bulk?ids=' + ids.join(',');
         }
 
         function clearChat() {
