@@ -348,7 +348,30 @@
             padding: 16px 20px;
             border-bottom: 1px solid #eee;
             display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        /* Чекбокс «Это прайс-лист» — плашка в зоне загрузки */
+        .docs-price-flag {
+            display: flex;
+            align-items: center;
             gap: 8px;
+            font-size: 13px;
+            color: #555;
+            cursor: pointer;
+            padding: 8px 12px;
+            border: 1px dashed #d5dae3;
+            border-radius: 8px;
+            background: #fafbfd;
+            transition: border-color 0.2s, background 0.2s;
+            user-select: none;
+        }
+        .docs-price-flag:hover { border-color: #4a7dff; background: #f0f5ff; }
+        .docs-price-flag input {
+            width: 15px;
+            height: 15px;
+            cursor: pointer;
+            accent-color: #4a7dff;
         }
         /* Зона загрузки: иконка + drag&drop */
         .docs-dropzone {
@@ -535,11 +558,11 @@
                 <div class="dz-text">Перетащите файлы сюда<br>или <b>нажмите</b> для выбора</div>
                 <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.xlsx,.xls" multiple style="display:none;">
             </div>
+            <label class="docs-price-flag" title="Пометить файлы как прайс-лист">
+                <input type="checkbox" id="priceListCheck">
+                📋 Это прайс-лист
+            </label>
         </div>
-        <label style="display:block;margin:8px 0 0 2px;font-size:13px;color:#555;cursor:pointer;">
-            <input type="checkbox" id="priceListCheck" style="vertical-align:middle;margin-right:4px;cursor:pointer;">
-            📋 Это прайс-лист
-        </label>
         <!-- Панель множественных действий (видна при выборе документов) -->
         <div class="docs-bulkbar" id="bulkBar" style="display:none;">
             <span class="bulk-count" id="bulkCount">Выбрано: 0</span>
