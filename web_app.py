@@ -71,6 +71,44 @@ def initialize_rag_system():
         logger.error(f"Ошибка инициализации RAG-системы: {e}")
 
 
+# === Фоновая переиндексация БЗ (не блокирует HTTP-ответ) ===
+
+_reindex_lock = threading.Lock()
+_reindex_needed = {}    # user_id -> True, если во время индексации появились новые файлы
+_reindex_running = set()  # user_id, для которых уже крутится фоновый worker
+
+
+def _reindex_user_async(user_id):
+    """Переиндексировать БЗ пользователя в фоне.
+
+    Загрузка/удаление большого прайса или CSV раньше блокировала HTTP-ответ на 1-2 мин
+    (пересборка эмбеддингов + BM25). Теперь ответ уходит сразу, а переиндексация
+    выполняется в отдельном потоке. Один worker на пользователя: если во время
+    индексации подъехали новые файлы - worker делает ещё один проход.
+    """
+    with _reindex_lock:
+        _reindex_needed[user_id] = True
+        if user_id in _reindex_running:
+            return  # worker уже работает и подхватит новый файл
+        _reindex_running.add(user_id)
+
+    def _worker():
+        while True:
+            try:
+                get_user_rag(user_id).load_for_user(user_id)
+            except Exception as e:
+                logger.error(f"Ошибка фоновой переиндексации пользователя #{user_id}: {e}")
+            with _reindex_lock:
+                if _reindex_needed.get(user_id):
+                    _reindex_needed[user_id] = False
+                    continue  # ещё проход — за время индексации добавились файлы
+                _reindex_running.discard(user_id)
+                break
+
+    threading.Thread(target=_worker, daemon=True).start()
+    logger.info(f"🔄 Фоновая переиндексация БЗ пользователя #{user_id} запущена")
+
+
 def init_auth():
     """Инициализация БД аутентификации и истории чата"""
     try:
@@ -485,9 +523,9 @@ def upload_document():
         results.append({'filename': filename, 'success': True, 'is_price_list': is_price_list, 'price_count': price_parsed})
         logger.info(f"📄 Пользователь {session.get('username')} загрузил документ: {filename}")
 
-    # Перезагружаем базу знаний пользователя один раз для всего батча
+    # Переиндексация БЗ в фоне — большой прайс/CSV не блокирует HTTP-ответ
     if rag_ready:
-        get_user_rag(user_id).load_for_user(user_id)
+        _reindex_user_async(user_id)
 
     uploaded = sum(1 for r in results if r['success'])
     failed = [r for r in results if not r['success']]
@@ -529,9 +567,9 @@ def delete_document_route(doc_id):
     # Если файл был прайс-листом — удаляем его позиции из price_items
     delete_price_items_for_file(user_id, doc_info['filename'])
 
-    # Перезагружаем базу знаний пользователя
+    # Переиндексация БЗ в фоне
     if rag_ready:
-        get_user_rag(user_id).load_for_user(user_id)
+        _reindex_user_async(user_id)
 
     logger.info(f"🗑️ Пользователь {session.get('username')} удалил документ: {doc_info['filename']}")
     return jsonify({'success': True, 'message': 'Документ удалён'})
@@ -595,9 +633,9 @@ def delete_documents_bulk():
     if not deleted_names:
         return jsonify({'error': 'Документы не найдены'}), 404
 
-    # Перезагружаем базу знаний один раз для всего батча
+    # Переиндексация БЗ в фоне
     if rag_ready:
-        get_user_rag(user_id).load_for_user(user_id)
+        _reindex_user_async(user_id)
 
     logger.info(f"🗑️ Пользователь {session.get('username')} удалил документы: {', '.join(deleted_names)}")
     return jsonify({'success': True, 'message': f'Удалено документов: {len(deleted_names)}', 'deleted': deleted_names})
