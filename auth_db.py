@@ -5,23 +5,67 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import logging
 import json
 import re
+import os
 
 logger = logging.getLogger(__name__)
 
-# Настройки подключения к PostgreSQL для БД rag_system
-DB_CONFIG = {
+# Параметры подключения к PostgreSQL. Пароль и отличия платформ НЕ хранятся в коде
+# (чтобы не попадать в git), а берутся из rag_settings.json (gitignored) или переменных
+# окружения. Несекретные значения по умолчанию оставлены здесь для удобства.
+_DB_DEFAULTS = {
     "host": "localhost",
     "port": 5432,
     "dbname": "rag_system",
     "user": "postgres",
-    "password": "nfhpfyktktdf12",
+    "password": "",
 }
+
+# Ключи rag_settings.json -> параметры psycopg2
+_DB_SETTINGS_KEYS = {
+    "db_host": "host",
+    "db_port": "port",
+    "db_name": "dbname",
+    "db_user": "user",
+    "db_password": "password",
+}
+
+# Переменные окружения -> параметры psycopg2 (приоритет над файлом)
+_DB_ENV_KEYS = {
+    "PGHOST": "host",
+    "PGPORT": "port",
+    "PGDATABASE": "dbname",
+    "PGUSER": "user",
+    "PGPASSWORD": "password",
+}
+
+
+def _get_db_config():
+    """Эффективные параметры подключения: defaults <- rag_settings.json <- env."""
+    cfg = dict(_DB_DEFAULTS)
+    try:
+        with open("rag_settings.json", "r", encoding="utf-8") as f:
+            s = json.load(f)
+        for skey, ckey in _DB_SETTINGS_KEYS.items():
+            v = s.get(skey)
+            if v not in (None, ""):
+                cfg[ckey] = v
+    except Exception:
+        pass  # файла нет или битый — остаются defaults/env
+    for ekey, ckey in _DB_ENV_KEYS.items():
+        v = os.environ.get(ekey)
+        if v:
+            cfg[ckey] = v
+    try:
+        cfg["port"] = int(cfg["port"])
+    except (TypeError, ValueError):
+        cfg["port"] = 5432
+    return cfg
 
 
 def get_db_connection():
     """Создание подключения к PostgreSQL"""
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = psycopg2.connect(**_get_db_config())
         return conn
     except psycopg2.OperationalError as e:
         logger.error(f"Ошибка подключения к PostgreSQL: {e}")
@@ -32,22 +76,23 @@ def init_db():
     """Инициализация базы данных: создание таблицы пользователей"""
     try:
         # Сначала подключаемся к БД postgres, чтобы создать rag_system если её нет
+        dbcfg = _get_db_config()
         conn = psycopg2.connect(
-            host=DB_CONFIG["host"],
-            port=DB_CONFIG["port"],
+            host=dbcfg["host"],
+            port=dbcfg["port"],
             dbname="postgres",
-            user=DB_CONFIG["user"],
-            password=DB_CONFIG["password"],
+            user=dbcfg["user"],
+            password=dbcfg["password"],
         )
         conn.autocommit = True
         cur = conn.cursor()
         cur.execute(
             "SELECT 1 FROM pg_database WHERE datname = %s",
-            (DB_CONFIG["dbname"],),
+            (dbcfg["dbname"],),
         )
         if not cur.fetchone():
-            cur.execute(f'CREATE DATABASE "{DB_CONFIG["dbname"]}"')
-            logger.info(f"База данных {DB_CONFIG['dbname']} создана")
+            cur.execute(f'CREATE DATABASE "{dbcfg["dbname"]}"')
+            logger.info(f"База данных {dbcfg['dbname']} создана")
         cur.close()
         conn.close()
 
