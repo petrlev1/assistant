@@ -109,6 +109,45 @@ def _reindex_user_async(user_id):
     logger.info(f"🔄 Фоновая переиндексация БЗ пользователя #{user_id} запущена")
 
 
+_group_backfill_lock = threading.Lock()
+_group_backfill_running = set()
+
+
+def _backfill_doc_groups_async(user_id, pending_docs):
+    """Доопределяет doc_group старых документов в фоне (не блокирует /api/documents).
+
+    Раньше это делалось синхронно прямо в ответе: для каждого файла без doc_group
+    читалось превью (PDF/Excel) и определялась группа — при большом числе старых
+    файлов панель открывалась с задержкой. Теперь ответ уходит сразу (фронт временно
+    группирует по имени), а группы по содержимому дописываются в БД к следующему запросу.
+    """
+    if not pending_docs:
+        return
+    with _group_backfill_lock:
+        if user_id in _group_backfill_running:
+            return
+        _group_backfill_running.add(user_id)
+
+    def _worker():
+        try:
+            for d in pending_docs:
+                file_path = os.path.join('Database', f'user_{user_id}', d['filename'])
+                if not os.path.exists(file_path):
+                    continue
+                try:
+                    preview = _read_text_preview(file_path)
+                    group = detect_doc_group(d['filename'], preview, bool(d.get('is_price_list')))
+                    update_document_group(d['id'], user_id, group)
+                    logger.info(f"🗂️ Группа для {d['filename']}: {group}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка бэкфилла группы {d['filename']}: {e}")
+        finally:
+            with _group_backfill_lock:
+                _group_backfill_running.discard(user_id)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def init_auth():
     """Инициализация БД аутентификации и истории чата"""
     try:
@@ -386,19 +425,9 @@ def get_documents():
             d['price_count'] = price_files.get(d['filename'], 0)
     except Exception as e:
         logger.error(f"Ошибка получения прайсов для списка документов: {e}")
-    # Ленивый бэкфилл группы документа для старых файлов (doc_group пуст): имя + содержимое
-    for d in docs:
-        if not d.get('doc_group'):
-            file_path = os.path.join('Database', f'user_{user_id}', d['filename'])
-            if os.path.exists(file_path):
-                try:
-                    preview = _read_text_preview(file_path)
-                    group = detect_doc_group(d['filename'], preview, bool(d.get('is_price_list')))
-                    update_document_group(d['id'], user_id, group)
-                    d['doc_group'] = group
-                    logger.info(f"🗂️ Группа для {d['filename']}: {group}")
-                except Exception as e:
-                    logger.error(f"❌ Ошибка бэкфилла группы {d['filename']}: {e}")
+    # Фоновая миграция групп старых документов: doc_group по содержимому дописывается
+    # в БД в фоне (не блокирует ответ; фронт временно группирует по имени).
+    _backfill_doc_groups_async(user_id, [d for d in docs if not d.get('doc_group')])
     # Пометка TXT-файлов, созданных для эмбеддингов (есть одноимённый файл другого формата)
     try:
         stems = {}
