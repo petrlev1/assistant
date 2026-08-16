@@ -17,6 +17,7 @@ import openpyxl
 import requests
 import re
 import base64
+import threading
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -402,6 +403,24 @@ def build_greeting(prompt, username="Пользователь"):
         return f"Привет! Я — {role}. Задай мне вопрос по базе знаний."
     return f"Привет, {username}! Задай мне вопрос по базе знаний."
 
+# === Общая модель эмбеддингов (синглтон на процесс) ===
+# Модель multilingual-e5-large весит ~2 ГБ RAM — грузим один раз и делим между
+# всеми пользователями. Каждый RAGCore хранит только свои знания/эмбеддинги/BM25.
+_EMBEDDING_MODEL = None
+_EMBEDDING_MODEL_LOCK = threading.Lock()
+
+
+def _get_embedding_model():
+    """Возвращает общий экземпляр модели эмбеддингов (лениво, потокобезопасно)."""
+    global _EMBEDDING_MODEL
+    with _EMBEDDING_MODEL_LOCK:
+        if _EMBEDDING_MODEL is None:
+            logger.info("🧠 Загрузка модели...")
+            _EMBEDDING_MODEL = SentenceTransformer('intfloat/multilingual-e5-large')
+            logger.info("✅ Модель загружена")
+        return _EMBEDDING_MODEL
+
+
 class RAGCore:
     def __init__(self, user_id=None):
         """Инициализация RAG-системы"""
@@ -414,6 +433,7 @@ class RAGCore:
         self.tokenized_corpus = None
         self.settings = RAGSettings()
         self.current_user_id = user_id  # None = общая база знаний
+        self._state_lock = threading.RLock()  # защита reload/search от гонок внутри одного core
         
         # Переинициализация клиента с актуальными настройками
         self._setup_client()
@@ -448,13 +468,9 @@ class RAGCore:
         )
     
     def _setup_model(self):
-        """Инициализация модели эмбеддингов"""
+        """Инициализация модели эмбеддингов (общий синглтон на процесс — грузится один раз)."""
         try:
-            logger.info("🧠 Загрузка модели...")
-            self.model = SentenceTransformer('intfloat/multilingual-e5-large') #запуск модели эмбеддингов из интернета
-            # self.model = SentenceTransformer('/workspaces/codespaces-blank/models/multilingual_e5_large') #запуск с github.com/codespaces
-            #self.model = SentenceTransformer('/models/multilingual_e5_large') #запуск модели эмбеддингов локально
-            logger.info("✅ Модель загружена")
+            self.model = _get_embedding_model()
         except Exception as e:
             logger.error(f"❌ Не удалось загрузить модель: {e}")
             raise
@@ -1037,6 +1053,11 @@ class RAGCore:
         return embeddings
     
     def reload_knowledge_base(self, user_id=None):
+        """Перезагрузка базы знаний (потокобезопасно: блокирует поиск на время пересборки)."""
+        with self._state_lock:
+            return self._reload_knowledge_base_impl(user_id)
+
+    def _reload_knowledge_base_impl(self, user_id=None):
         """Перезагрузка базы знаний"""
         try:
             logger.info("\n🔄 Перезагрузка базы знаний...")
@@ -1219,6 +1240,11 @@ class RAGCore:
         return f"{s} ₽"
 
     def find_relevant_info(self, query, top_k=None, alpha=None):
+        """Гибридный поиск (потокобезопасно: читает согласованный снимок БЗ)."""
+        with self._state_lock:
+            return self._find_relevant_info_impl(query, top_k, alpha)
+
+    def _find_relevant_info_impl(self, query, top_k=None, alpha=None):
         """Гибридный поиск"""
         # Используем значения из настроек, если не переданы другие
         actual_top_k = top_k if top_k is not None else self.settings.get("search_top_k", 10)
@@ -1400,6 +1426,25 @@ def get_rag_system():
     if rag_system is None:
         rag_system = RAGCore()
     return rag_system
+
+
+# === Реестр per-user экземпляров (изоляция пользователей, потокобезопасно) ===
+# Один RAGCore на пользователя: БЗ/эмбеддинги/BM25 одного пользователя не затирают
+# другого при параллельных запросах. Модель эмбеддингов — общий синглтон
+# (см. _get_embedding_model), поэтому создание новых core дешёвое.
+_user_cores = {}
+_user_cores_lock = threading.Lock()
+
+
+def get_user_rag(user_id):
+    """Возвращает RAGCore конкретного пользователя (лениво создаётся и кэшируется)."""
+    with _user_cores_lock:
+        core = _user_cores.get(user_id)
+        if core is None:
+            core = RAGCore(user_id=user_id)
+            _user_cores[user_id] = core
+        return core
+
 
 # Для тестирования и запуска интерфейса настроек
 if __name__ == "__main__":

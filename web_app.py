@@ -6,7 +6,7 @@ import asyncio
 import os
 import io
 import zipfile
-from rag_core import get_rag_system, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview
+from rag_core import get_rag_system, get_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group
 
@@ -48,8 +48,10 @@ def _load_secret_key():
 
 app.secret_key = _load_secret_key()
 
-# Глобальная переменная для RAG-системы
-rag_system = None
+# RAG-система: модель эмбеддингов прогревается в фоне, а база знаний каждого
+# пользователя хранится в ОТДЕЛЬНОМ экземпляре RAGCore (изоляция, без гонок
+# данных — см. rag_core.get_user_rag). rag_ready = модель загружена, можно отвечать.
+rag_ready = False
 
 # Состояние Telegram-бота (общее с run_gui.py)
 telegram_bot = None
@@ -58,11 +60,12 @@ telegram_running = False
 
 
 def initialize_rag_system():
-    """Инициализация RAG-системы в отдельном потоке"""
-    global rag_system
+    """Прогрев модели эмбеддингов в отдельном потоке (чтобы первый запрос не блокировался)."""
+    global rag_ready
     try:
         logger.info("Запуск инициализации RAG-системы...")
-        rag_system = get_rag_system()
+        get_rag_system()  # грузит общий синглтон модели эмбеддингов (+ общую БЗ)
+        rag_ready = True
         logger.info("RAG-система успешно инициализирована")
     except Exception as e:
         logger.error(f"Ошибка инициализации RAG-системы: {e}")
@@ -97,10 +100,9 @@ def login():
         session['user_id'] = result['id']
         session['username'] = result['username']
         logger.info(f"Пользователь {username} вошёл в систему")
-        # Загружаем базу знаний пользователя
-        global rag_system
-        if rag_system is not None:
-            rag_system.load_for_user(session['user_id'])
+        # Заранее создаём/загружаем базу знаний пользователя (модель уже прогрета)
+        if rag_ready:
+            get_user_rag(session['user_id'])
         return redirect(url_for('chat'))
     else:
         flash(result, 'error')
@@ -152,11 +154,10 @@ def chat():
     """Страница чата (требуется авторизация)"""
     if 'user_id' not in session:
         return redirect(url_for('login'))
-    # После рестарта сервера сессия пользователя живёт, а RAG-система остаётся
-    # на общей (пустой) базе знаний. Загружаем БЗ текущего пользователя, если ещё не загружена.
-    global rag_system
-    if rag_system is not None and rag_system.current_user_id != session['user_id']:
-        rag_system.load_for_user(session['user_id'])
+    # Создаём/подгружаем базу знаний текущего пользователя (отдельный изолированный RAGCore).
+    # Модель эмбеддингов уже прогрета в фоне; первая загрузка строит эмбеддинги/BM25.
+    if rag_ready:
+        get_user_rag(session['user_id'])
     # Приветствие формируется из персонального промта: бот представляется своей ролью
     user_prompt = get_user_prompt(session['user_id'])
     greeting = build_greeting(user_prompt, session.get('username', 'Пользователь'))
@@ -175,12 +176,6 @@ def ask_question():
     if 'user_id' not in session:
         return jsonify({'error': 'Необходима авторизация'}), 401
 
-    global rag_system
-
-    # Убеждаемся, что загружена БЗ текущего пользователя (актуально после рестарта сервера)
-    if rag_system is not None and rag_system.current_user_id != session['user_id']:
-        rag_system.load_for_user(session['user_id'])
-
     try:
         data = request.get_json()
         question = data.get('question', '').strip()
@@ -190,8 +185,11 @@ def ask_question():
         if not question:
             return jsonify({'error': 'Пустой вопрос'}), 400
 
-        if rag_system is None:
+        if not rag_ready:
             return jsonify({'answer': 'Система еще инициализируется. Пожалуйста, подождите...'}), 200
+
+        # База знаний конкретного пользователя — отдельный изолированный экземпляр RAGCore
+        user_rag = get_user_rag(user_id)
 
         logger.info(f"Вопрос от {user_name}: {question}")
 
@@ -199,14 +197,14 @@ def ask_question():
         user_msg_id = save_message(user_id, 'user', question)
 
         # Логирование вопроса в файл чата (с провайдером и моделью)
-        provider = rag_system.settings.get("llm_provider", "")
-        model = rag_system.settings.get("llm_model", "")
+        provider = user_rag.settings.get("llm_provider", "")
+        model = user_rag.settings.get("llm_model", "")
         chat_logger.log_message(user_name, user_id, question, is_bot=False, provider=provider, model=model)
 
         # Персональный промт пользователя (если задан — заменит системный промт по умолчанию)
         user_prompt = get_user_prompt(user_id)
 
-        answer = rag_system.ask_model(question, user_prompt=user_prompt)
+        answer = user_rag.ask_model(question, user_prompt=user_prompt)
         logger.info("Ответ сгенерирован успешно")
 
         # Сохраняем ответ в историю
@@ -309,8 +307,7 @@ def status():
     """Проверка статуса системы"""
     if 'user_id' not in session:
         return jsonify({'initialized': False}), 401
-    global rag_system
-    return jsonify({'initialized': rag_system is not None})
+    return jsonify({'initialized': rag_ready})
 
 
 # === Управление документами пользователя ===
@@ -484,9 +481,8 @@ def upload_document():
         logger.info(f"📄 Пользователь {session.get('username')} загрузил документ: {filename}")
 
     # Перезагружаем базу знаний пользователя один раз для всего батча
-    global rag_system
-    if rag_system is not None:
-        rag_system.load_for_user(user_id)
+    if rag_ready:
+        get_user_rag(user_id).load_for_user(user_id)
 
     uploaded = sum(1 for r in results if r['success'])
     failed = [r for r in results if not r['success']]
@@ -529,9 +525,8 @@ def delete_document_route(doc_id):
     delete_price_items_for_file(user_id, doc_info['filename'])
 
     # Перезагружаем базу знаний пользователя
-    global rag_system
-    if rag_system is not None:
-        rag_system.load_for_user(user_id)
+    if rag_ready:
+        get_user_rag(user_id).load_for_user(user_id)
 
     logger.info(f"🗑️ Пользователь {session.get('username')} удалил документ: {doc_info['filename']}")
     return jsonify({'success': True, 'message': 'Документ удалён'})
@@ -596,9 +591,8 @@ def delete_documents_bulk():
         return jsonify({'error': 'Документы не найдены'}), 404
 
     # Перезагружаем базу знаний один раз для всего батча
-    global rag_system
-    if rag_system is not None:
-        rag_system.load_for_user(user_id)
+    if rag_ready:
+        get_user_rag(user_id).load_for_user(user_id)
 
     logger.info(f"🗑️ Пользователь {session.get('username')} удалил документы: {', '.join(deleted_names)}")
     return jsonify({'success': True, 'message': f'Удалено документов: {len(deleted_names)}', 'deleted': deleted_names})
