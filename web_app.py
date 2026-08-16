@@ -434,7 +434,12 @@ def upload_document():
     existing_by_name = {d['filename']: d for d in existing_docs}
 
     for file in files:
-        filename = file.filename
+        # Защита от path traversal: оставляем только имя файла без пути
+        # (os.path.basename отсекает путь на обеих платформах, кириллицу не трогает)
+        filename = os.path.basename(file.filename)
+        if not filename:
+            results.append({'filename': file.filename, 'success': False, 'error': 'Некорректное имя файла'})
+            continue
         file_path = os.path.join(user_db_folder, filename)
         file.save(file_path)
 
