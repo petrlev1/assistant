@@ -358,11 +358,6 @@ client = openai.OpenAI(
     api_key=settings.get_llm_api_key()  # Ключ зависит от выбранного провайдера
 )
 
-# === Доступные модели ===
-AVAILABLE_MODELS = [
-    "deepseek-v4-flash"
-]
-
 # Стандартный системный промт (используется, если у пользователя нет персонального)
 DEFAULT_BASE_PROMPT = """Ты - информационный ассистент.
 Правила:
@@ -1366,38 +1361,38 @@ class RAGCore:
             logger.info("⚠️ Найден символ \\u2026 в question, заменяю...")
         question = self._sanitize_text(question)
         
-        for i, model_name in enumerate(AVAILABLE_MODELS):
-            # Используем модель из настроек если она задана
-            active_model = self.settings.get("llm_model", model_name)
-            try:
-                logger.info(f"🤖 Отправка запроса к модели {active_model}...")
-                # Используем requests напрямую (httpx на Windows может падать на Unicode)
-                response = requests.post(
+        # Единственная активная модель — из настроек (раньше был цикл по AVAILABLE_MODELS,
+        # но список содержал одну модель и только путал: фактически всегда бралась llm_model).
+        active_model = self.settings.get("llm_model", "deepseek-v4-flash")
+        try:
+            logger.info(f"🤖 Отправка запроса к модели {active_model}...")
+            # Используем requests напрямую (httpx на Windows может падать на Unicode)
+            response = requests.post(
                 f"{self.settings.get('llm_base_url', 'https://api.deepseek.com/v1')}/chat/completions",
-                    headers={
-                "Authorization": f"Bearer {self.settings.get_llm_api_key()}",
+                headers={
+                    "Authorization": f"Bearer {self.settings.get_llm_api_key()}",
                     "Content-Type": "application/json",
                 },
                 json={
-                "model": active_model,
+                    "model": active_model,
                     "messages": [
-                {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": question}
-                ]
-                    },
-                timeout=60
-                )
-                response.raise_for_status()
-                answer = response.json()["choices"][0]["message"]["content"].strip()
-                answers.append(f"{answer}")
-                logger.info(f"✅ Ответ получен от модели {active_model}")
-            except Exception as e:
-                error_msg = f"❌ Ошибка при обращении к модели {active_model}: {e}"
-                # На Windows str(e) может содержать символы, ломающие ascii-кодировку
-                error_msg_safe = error_msg.encode('utf-8', errors='replace').decode('utf-8')
-                logger.error(error_msg_safe)
-                answers.append(f"Ответ ИИ модели {active_model}:\nОшибка: {error_msg_safe}\n")
-                        # Добавляем информацию об источниках только если использовалась база знаний
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": question},
+                    ],
+                },
+                timeout=60,
+            )
+            response.raise_for_status()
+            answer = response.json()["choices"][0]["message"]["content"].strip()
+            answers.append(answer)
+            logger.info(f"✅ Ответ получен от модели {active_model}")
+        except Exception as e:
+            error_msg = f"❌ Ошибка при обращении к модели {active_model}: {e}"
+            # На Windows str(e) может содержать символы, ломающие ascii-кодировку
+            error_msg_safe = error_msg.encode('utf-8', errors='replace').decode('utf-8')
+            logger.error(error_msg_safe)
+            answers.append(f"Ответ ИИ модели {active_model}:\nОшибка: {error_msg_safe}\n")
+
         result = "\n---\n".join(answers)
         if not disable_kb_search and source_files:
             sources_note = self._format_sources_note(source_files)
