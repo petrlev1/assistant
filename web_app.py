@@ -6,6 +6,7 @@ import asyncio
 import os
 import io
 import zipfile
+import time
 from rag_core import get_rag_system, get_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group
@@ -47,6 +48,52 @@ def _load_secret_key():
 
 
 app.secret_key = _load_secret_key()
+
+# === Базовые меры безопасности: rate-limit и CSRF ===
+
+# Простейший in-memory rate-limit для /ask (дорогие вызовы LLM + эмбеддингов).
+# Ключ — user_id, окно 60 с, лимит 30 запросов. Человеку хватает, скриптовый спам отсекается.
+_rate_lock = threading.Lock()
+_rate_hits = {}  # key -> list[float] (таймстемпы)
+
+
+def _rate_limited(key, limit=30, window=60):
+    now = time.time()
+    with _rate_lock:
+        hits = [t for t in _rate_hits.get(key, []) if now - t < window]
+        if len(hits) >= limit:
+            _rate_hits[key] = hits
+            return True
+        hits.append(now)
+        _rate_hits[key] = hits
+        return False
+
+
+def _origin_matches_host():
+    """True, если Origin (если он есть) совпадает с Host — защита от CSRF.
+
+    Браузер шлёт Origin на кросс-доменных POST (и на fetch). Если он есть и не
+    совпадает с нашим хостом — это CSRF из чужого сайта. Отсутствие Origin
+    (curl, сервер-к-серверу) пропускаем: CSRF грозит только браузерам.
+    """
+    origin = request.headers.get('Origin')
+    if not origin:
+        return True
+    try:
+        from urllib.parse import urlparse
+        o_host = (urlparse(origin).hostname or '').lower()
+    except Exception:
+        return False
+    host = request.host.split(':')[0].split('@')[-1].lower()
+    return o_host == host
+
+
+@app.before_request
+def csrf_protect():
+    if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+        if not _origin_matches_host():
+            logger.warning(f"🚫 CSRF отклонён: Origin={request.headers.get('Origin')} Host={request.host}")
+            return jsonify({'error': 'Неверный источник запроса'}), 403
 
 # RAG-система: модель эмбеддингов прогревается в фоне, а база знаний каждого
 # пользователя хранится в ОТДЕЛЬНОМ экземпляре RAGCore (изоляция, без гонок
@@ -253,6 +300,10 @@ def ask_question():
     if 'user_id' not in session:
         return jsonify({'error': 'Необходима авторизация'}), 401
 
+    # Rate-limit: защита от спама дорогими LLM/эмбеддинг-вызовами (30 запросов/мин на пользователя)
+    if _rate_limited(f"ask:{session['user_id']}"):
+        return jsonify({'error': 'Слишком много запросов. Подождите немного.'}), 429
+
     try:
         data = request.get_json()
         question = data.get('question', '').strip()
@@ -293,8 +344,8 @@ def ask_question():
         return jsonify({'answer': answer, 'user_msg_id': user_msg_id, 'assistant_msg_id': assistant_msg_id})
 
     except Exception as e:
-        logger.error(f"Ошибка обработки вопроса: {e}")
-        return jsonify({'error': f'Ошибка обработки вопроса: {str(e)}'}), 500
+        logger.exception(f"Ошибка обработки вопроса: {e}")  # полный traceback в лог
+        return jsonify({'error': 'Внутренняя ошибка при обработке вопроса. Попробуйте ещё раз.'}), 500
 
 
 @app.route('/history')
@@ -834,8 +885,8 @@ def telegram_start():
         return jsonify({'success': True, 'message': 'Бот запущен. Проверьте Telegram.'})
     except Exception as e:
         telegram_running = False
-        logger.error(f"Ошибка запуска Telegram бота: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.exception(f"Ошибка запуска Telegram бота: {e}")
+        return jsonify({'success': False, 'error': 'Не удалось запустить бота'}), 500
 
 
 @app.route('/telegram/stop', methods=['POST'])
@@ -855,8 +906,8 @@ def telegram_stop():
         telegram_running = False
         return jsonify({'success': True, 'message': 'Бот остановлен'})
     except Exception as e:
-        logger.error(f"Ошибка остановки Telegram бота: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.exception(f"Ошибка остановки Telegram бота: {e}")
+        return jsonify({'success': False, 'error': 'Не удалось остановить бота'}), 500
 
 
 def create_app():
