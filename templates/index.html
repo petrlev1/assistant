@@ -507,6 +507,27 @@
             color: #999;
             margin-top: 2px;
         }
+        /* Технические RAG-файлы (TXT-дубликаты для эмбеддингов): мельче и серым */
+        .docs-item.rag-helper { opacity: 0.8; }
+        .docs-item.rag-helper .doc-name {
+            font-size: 12.5px;
+            color: #8a8f98;
+            font-weight: 400;
+        }
+        .docs-item.rag-helper .doc-date { color: #b0b5bd; }
+        .rag-tag {
+            display: inline-block;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            color: #9aa0aa;
+            background: #eceff3;
+            border-radius: 4px;
+            padding: 1px 5px;
+            margin-left: 6px;
+            vertical-align: middle;
+            text-transform: uppercase;
+        }
         .docs-item .price-badge {
             display: inline-block;
             margin-left: 6px;
@@ -1072,11 +1093,13 @@
         }
 
         function docItemHtml(doc) {
+            const ragClass = doc.is_rag_helper ? ' rag-helper' : '';
+            const ragTag = doc.is_rag_helper ? ' <span class="rag-tag" title="Технический TXT-файл для эмбеддингов">RAG</span>' : '';
             return `
-                            <div class="docs-item">
+                            <div class="docs-item${ragClass}">
                                 <input type="checkbox" class="doc-check" data-id="${doc.id}" onchange="updateBulkBar()" title="Выбрать">
                                 <div class="doc-info">
-                                    <div class="doc-name" title="${escapeHtml(doc.original_name)}">📄 ${escapeHtml(doc.original_name)}${doc.is_price_list ? ` <span class="price-badge" title="Прайс-лист: ${doc.price_count} позиций">📋 ${doc.price_count}</span>` : ''}</div>
+                                    <div class="doc-name" title="${escapeHtml(doc.original_name)}">📄 ${escapeHtml(doc.original_name)}${doc.is_price_list ? ` <span class="price-badge" title="Прайс-лист: ${doc.price_count} позиций">📋 ${doc.price_count}</span>` : ''}${ragTag}</div>
                                     <div class="doc-date">${new Date(doc.created_at).toLocaleString('ru-RU')}</div>
                                 </div>
                                 <div style="display:flex;gap:4px;">
