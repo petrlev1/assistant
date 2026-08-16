@@ -1,18 +1,19 @@
 # RAG-система — зависимости
 # Установка: pip install -r requirements.txt
 
-# LLM API
+# LLM API (DeepSeek / OpenRouter / DashScope — OpenAI-совместимые эндпоинты)
 openai>=1.0.0
+requests>=2.28.0            # прямые HTTP-вызовы LLM и OCR (rag_core.py)
 
 # RAG / поиск
-sentence-transformers>=2.2.0
-rank-bm25>=0.2.0
+sentence-transformers>=2.2.0   # эмбеддинги (multilingual-e5-large)
+rank-bm25>=0.2.0               # лексический поиск (BM25)
 numpy>=1.24.0
 torch>=2.0.0
 
 # Обработка документов
 PyPDF2>=3.0.0
-PyMuPDF>=1.23.0
+PyMuPDF>=1.23.0              # основной экстрактор текста PDF (fitz), рендер страниц для OCR
 python-docx>=1.0.0
 openpyxl>=3.1.0
 
