@@ -771,15 +771,9 @@ class RAGCore:
                         vs = str(value).strip() if value is not None else ""
                         if vs:
                             parts.append(f"{clean_key} — {vs}")
-
-                        if parts:
-                            if "Проект" in row and "Ответственный" in row:
-                                entry = f"Проект {row['Проект']} находится в статусе «{row.get('Статус', 'не указан')}». Ответственный — {row['Ответственный']}."
-                            elif "Имя" in row and "Должность" in row:
-                                entry = f"{row['Имя']} работает {row['Должность']}. Контакт: email — {row.get('Email', 'не указан')}, телефон — {row.get('Телефон', 'не указан')}."
-                            else:
-                                entry = "В компании Аквесегмент: " + ", ".join(parts) + "."
-                            csv_knowledge.append(entry)
+                    # Одна строка CSV = один факт (универсально, без привязки к колонкам клиента)
+                    if parts:
+                        csv_knowledge.append(", ".join(parts) + ".")
                     if csv_knowledge:
                         logger.info(f"✅ Загружено {len(csv_knowledge)} строк из {os.path.basename(file_path)}")
                         all_knowledge[file_path] = csv_knowledge
@@ -896,13 +890,8 @@ class RAGCore:
                                         parts.append(f"{key} — {value}")
                                 
                                 if parts:
-                                    # Формируем запись аналогично CSV
-                                    if "Проект" in row_data and "Ответственный" in row_data:
-                                        entry = f"Проект {row_data['Проект']} находится в статусе «{row_data.get('Статус', 'не указан')}». Ответственный — {row_data['Ответственный']}."
-                                    elif "Имя" in row_data and "Должность" in row_data:
-                                        entry = f"{row_data['Имя']} работает {row_data['Должность']}. Контакт: email — {row_data.get('Email', 'не указан')}, телефон — {row_data.get('Телефон', 'не указан')}."
-                                    else:
-                                        entry = f"[{os.path.basename(file_path)}, лист '{sheet_name}'] В компании Аквесегмент: " + ", ".join(parts) + "."
+                                    # Одна строка = один факт (универсально, без привязки к колонкам клиента)
+                                    entry = f"[{os.path.basename(file_path)}, лист '{sheet_name}'] " + ", ".join(parts) + "."
                                     xlsx_knowledge.append(entry)
                     
                     if xlsx_knowledge:
