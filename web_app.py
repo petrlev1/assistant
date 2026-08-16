@@ -432,10 +432,22 @@ def upload_document():
     total_price = 0
     any_price = False
 
+    # Существующие документы пользователя — для обновления при повторной загрузке
+    existing_docs = get_user_documents(user_id)
+    existing_by_name = {d['filename']: d for d in existing_docs}
+
     for file in files:
         filename = file.filename
         file_path = os.path.join(user_db_folder, filename)
         file.save(file_path)
+
+        # Повторная загрузка файла с тем же именем = обновление документа, а не дубликат
+        old_doc = existing_by_name.get(filename)
+        if old_doc is not None:
+            delete_document(old_doc['id'], user_id)
+            delete_price_items_for_file(user_id, filename)
+            existing_by_name.pop(filename, None)
+            logger.info(f"♻️ Обновление документа: {filename} (заменяет id {old_doc['id']})")
 
         # Определяем группу документа (имя файла + превью содержимого)
         preview = _read_text_preview(file_path)
