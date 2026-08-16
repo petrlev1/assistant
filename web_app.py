@@ -480,7 +480,7 @@ def upload_document():
         return jsonify({'error': 'Файл не выбран'}), 400
 
     # Проверка расширений
-    allowed_ext = ('.txt', '.pdf', '.docx', '.csv', '.xlsx', '.xls')
+    allowed_ext = ('.txt', '.pdf', '.docx', '.csv', '.xlsx')
     bad_files = [f.filename for f in files if not f.filename.lower().endswith(allowed_ext)]
     if bad_files:
         return jsonify({'error': f'Неподдерживаемый формат: {", ".join(bad_files)}. Разрешены: {", ".join(allowed_ext)}'}), 400

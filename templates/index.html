@@ -679,7 +679,7 @@
             <div class="docs-dropzone" id="dropZone" title="Нажмите или перетащите файлы сюда">
                 <div class="dz-icon">📤</div>
                 <div class="dz-text">Перетащите файлы сюда<br>или <b>нажмите</b> для выбора</div>
-                <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.xlsx,.xls" multiple style="display:none;">
+                <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.xlsx" multiple style="display:none;">
             </div>
             <label class="docs-price-flag" title="Пометить файлы как прайс-лист">
                 <input type="checkbox" id="priceListCheck">
@@ -1174,7 +1174,7 @@
                 return;
             }
 
-            const allowedExt = ['.txt', '.pdf', '.docx', '.csv', '.xlsx', '.xls'];
+            const allowedExt = ['.txt', '.pdf', '.docx', '.csv', '.xlsx'];
             const valid = [];
             const rejected = [];
             files.forEach(file => {
