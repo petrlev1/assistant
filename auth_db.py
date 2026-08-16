@@ -64,7 +64,6 @@ def init_db():
         """)
         # Миграция: колонка персонального промта пользователя (пусто = системный промт по умолчанию)
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_prompt TEXT")
-        cur.execute("ALTER TABLE user_documents ADD COLUMN IF NOT EXISTS doc_group VARCHAR(100) DEFAULT ''")
         conn.commit()
         cur.close()
         conn.close()
@@ -211,6 +210,8 @@ def init_user_documents():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Миграция: doc_group для уже существующих таблиц (CREATE IF NOT EXISTS не добавит колонку)
+        cur.execute("ALTER TABLE user_documents ADD COLUMN IF NOT EXISTS doc_group VARCHAR(100) DEFAULT ''")
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_user_documents_user
             ON user_documents (user_id)
