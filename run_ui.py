@@ -6,7 +6,6 @@ from tkinter import ttk, messagebox, scrolledtext
 import subprocess
 import sys
 import os
-import json
 import webbrowser
 import threading
 import logging
@@ -30,7 +29,7 @@ PROVIDERS = {
     }
 }
 
-# Значения по умолчанию для Caddy (хранятся в rag_settings.json)
+# Значения по умолчанию для Caddy (хранятся в БД, таблица app_settings — как и все настройки)
 # CADDY_PATH и CADDY_DIR читаются из self.settings["caddy_path"] / self.settings["caddy_dir"]
 
 
@@ -62,8 +61,7 @@ class LauncherUI:
         self.root.after(300, self._poll_external_server)
 
     def load_settings(self):
-        """Загрузка настроек из rag_settings.json"""
-        settings_file = os.path.join(self.project_dir, "rag_settings.json")
+        """Загрузка настроек из БД (таблица app_settings). При недоступной БД — defaults."""
         defaults = {
             "disable_llm_models": False,
             "disable_hybrid_search": False,
@@ -81,25 +79,25 @@ class LauncherUI:
             "caddy_dir": r"C:\peter\ai_bot\automation\assistant"
         }
         try:
-            with open(settings_file, 'r', encoding='utf-8') as f:
-                loaded = json.load(f)
-                # Объединяем с дефолтами (недостающие ключи)
-                for key, value in defaults.items():
-                    if key not in loaded:
-                        loaded[key] = value
-                return loaded
-        except Exception:
+            from auth_db import get_all_settings
+            loaded = get_all_settings()
+            # Объединяем с дефолтами (недостающие ключи)
+            for key, value in defaults.items():
+                if key not in loaded:
+                    loaded[key] = value
+            return loaded
+        except Exception as e:
+            logger.warning(f"БД недоступна, используются настройки по умолчанию: {e}")
             return defaults.copy()
 
-    def save_settings_to_file(self):
-        """Сохранение настроек в rag_settings.json (атомарно: tmp + rename)"""
-        settings_file = os.path.join(self.project_dir, "rag_settings.json")
+    def save_settings_to_db(self):
+        """Сохранение настроек в БД (таблица app_settings, UPSERT)."""
         try:
-            tmp_file = settings_file + '.tmp'
-            with open(tmp_file, 'w', encoding='utf-8') as f:
-                json.dump(self.settings, f, indent=4, ensure_ascii=False)
-            os.replace(tmp_file, settings_file)
-            return True
+            from auth_db import set_settings
+            if set_settings(self.settings):
+                return True
+            messagebox.showerror("Ошибка", "Не удалось сохранить настройки в БД")
+            return False
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить настройки:\n{e}")
             return False
@@ -138,6 +136,7 @@ class LauncherUI:
         self._create_main_tab()
         self._create_search_tab()
         self._create_api_tab()
+        self._create_ocr_tab()
         self._create_telegram_tab()
         self._create_users_tab()
 
@@ -403,6 +402,65 @@ class LauncherUI:
         api_key_entry.pack(fill="x", padx=20, pady=5)
         ttk.Label(frame, text="Ключ API для доступа к LLM провайдеру", foreground="gray").pack(anchor="w", padx=20)
 
+    # =====================================================================
+    # Вкладка: OCR
+    # =====================================================================
+    def _create_ocr_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="OCR")
+
+        ttk.Label(frame, text="OCR для сканированных PDF:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(10, 10))
+
+        # Включить OCR
+        self.ocr_enabled_var = tk.BooleanVar(value=self.settings.get("ocr_enabled", False))
+        ocr_check = ttk.Checkbutton(
+            frame,
+            text="Включить OCR (страницы без текстового слоя распознаются через LLM-модель)",
+            variable=self.ocr_enabled_var
+        )
+        ocr_check.pack(anchor="w", padx=20, pady=5)
+
+        # Модель
+        ttk.Label(frame, text="OCR модель:").pack(anchor="w", padx=20, pady=(10, 0))
+        ocr_models = ["qwen-vl-ocr", "qwen-vl-plus", "qwen-vl-max"]
+        self.ocr_model_var = tk.StringVar(value=self.settings.get("ocr_model", "qwen-vl-ocr"))
+        self.ocr_model_combo = ttk.Combobox(
+            frame, textvariable=self.ocr_model_var, values=ocr_models, state="normal", width=47
+        )
+        self.ocr_model_combo.pack(fill="x", padx=20, pady=5)
+        ttk.Label(frame, text="qwen-vl-ocr — специализированная OCR-модель DashScope (рекомендуется)", foreground="gray").pack(anchor="w", padx=20)
+
+        # Base URL
+        ttk.Label(frame, text="OCR Base URL:").pack(anchor="w", padx=20, pady=(10, 0))
+        self.ocr_base_url_var = tk.StringVar(
+            value=self.settings.get("ocr_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+        )
+        ocr_base_url_entry = ttk.Entry(frame, textvariable=self.ocr_base_url_var, width=50)
+        ocr_base_url_entry.pack(fill="x", padx=20, pady=5)
+
+        # DPI
+        ttk.Label(frame, text="OCR DPI (разрешение рендера страницы):").pack(anchor="w", padx=20, pady=(10, 0))
+        self.ocr_dpi_var = tk.StringVar(value=str(self.settings.get("ocr_dpi", 150)))
+        ocr_dpi_entry = ttk.Entry(frame, textvariable=self.ocr_dpi_var, width=10)
+        ocr_dpi_entry.pack(anchor="w", padx=20, pady=5)
+        ttk.Label(frame, text="Выше DPI — качественнее распознавание, но дороже (50-600, рекомендуется 150)", foreground="gray").pack(anchor="w", padx=20)
+
+        # Ключ DashScope (общий для OCR и провайдера DashScope)
+        ttk.Label(frame, text="API ключ DashScope (для OCR):").pack(anchor="w", padx=20, pady=(10, 0))
+        self.ocr_api_key_var = tk.StringVar(value=self.settings.get("llm_api_key", ""))
+        self.ocr_api_key_entry = ttk.Entry(frame, textvariable=self.ocr_api_key_var, width=50, show="*")
+        self.ocr_api_key_entry.pack(fill="x", padx=20, pady=5)
+        ocr_key_hint = (
+            "OCR всегда работает через ключ DashScope (llm_api_key).\n"
+            "Основная LLM при этом может использовать другой провайдер (например OpenRouter — вкладка API).\n"
+            "При провайдере DashScope этот ключ совпадает с ключом из вкладки API и редактируется там."
+        )
+        ttk.Label(frame, text=ocr_key_hint, foreground="gray", justify="left").pack(anchor="w", padx=20)
+
+        # При провайдере DashScope ключ редактируется во вкладке API (это один и тот же ключ)
+        if self.settings.get("llm_provider", "DashScope") == "DashScope":
+            self.ocr_api_key_entry.config(state="disabled")
+
     def on_provider_change(self, event=None):
         """Обновление списка моделей при смене провайдера"""
         provider = self.provider_var.get()
@@ -424,6 +482,12 @@ class LauncherUI:
             self.api_key_var.set(self.settings.get("llm_openrouter_api_key", ""))
         else:
             self.api_key_var.set(self.settings.get("llm_api_key", ""))
+        # OCR-ключ (llm_api_key) доступен для редактирования только при НЕ-DashScope провайдере
+        # (при DashScope это один и тот же ключ, он редактируется во вкладке API)
+        if hasattr(self, "ocr_api_key_entry"):
+            self.ocr_api_key_entry.config(
+                state="disabled" if provider == "DashScope" else "normal"
+            )
 
     # =====================================================================
     # Вкладка: Telegram
@@ -477,7 +541,7 @@ class LauncherUI:
 
             # Сохраняем токен в настройки
             self.settings["telegram_bot_token"] = token
-            self.save_settings_to_file()
+            self.save_settings_to_db()
 
             from telegram_bot import TelegramRAGBot
             self.telegram_bot = TelegramRAGBot(token)
@@ -806,13 +870,37 @@ class LauncherUI:
         # Telegram настройки
         self.settings["telegram_bot_token"] = self.telegram_token_var.get().strip()
 
+        # OCR настройки (сканированные PDF → qwen-vl-ocr)
+        self.settings["ocr_enabled"] = self.ocr_enabled_var.get()
+        ocr_model = self.ocr_model_var.get().strip()
+        self.settings["ocr_model"] = ocr_model or "qwen-vl-ocr"
+        self.settings["ocr_base_url"] = self.ocr_base_url_var.get().strip()
+        try:
+            dpi = int(self.ocr_dpi_var.get())
+            if 50 <= dpi <= 600:
+                self.settings["ocr_dpi"] = dpi
+            else:
+                messagebox.showwarning("Предупреждение", "OCR DPI должен быть от 50 до 600. Установлено 150.")
+                self.settings["ocr_dpi"] = 150
+                self.ocr_dpi_var.set("150")
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Неверное значение OCR DPI. Установлено 150.")
+            self.settings["ocr_dpi"] = 150
+            self.ocr_dpi_var.set("150")
+        # Ключ DashScope для OCR. При провайдере DashScope редактируется во вкладке API
+        # (это один и тот же llm_api_key); для остальных провайдеров — здесь.
+        if self.settings.get("llm_provider") != "DashScope":
+            ocr_key = self.ocr_api_key_var.get().strip()
+            if ocr_key:
+                self.settings["llm_api_key"] = ocr_key
+
         return True
 
     def save_settings(self):
-        """Сохранить настройки (валидация + запись в файл)"""
+        """Сохранить настройки (валидация + запись в БД)"""
         try:
             if self.validate_and_apply_settings():
-                if self.save_settings_to_file():
+                if self.save_settings_to_db():
                     messagebox.showinfo("Настройки", "Настройки сохранены!")
                     self.status_label.config(
                         text=f"✅ Настройки сохранены | {self.settings['llm_provider']} / {self.settings['llm_model']}",
@@ -825,7 +913,7 @@ class LauncherUI:
         """Применить настройки (сохранить + обновить RAG-систему)"""
         try:
             if self.validate_and_apply_settings():
-                if self.save_settings_to_file():
+                if self.save_settings_to_db():
                     # Обновляем настройки в RAG-системе, если она уже инициализирована
                     if self.rag_system is not None:
                         for key, value in self.settings.items():
@@ -961,7 +1049,7 @@ class LauncherUI:
         try:
             # Сначала сохраняем настройки
             self.validate_and_apply_settings()
-            self.save_settings_to_file()
+            self.save_settings_to_db()
 
             # Запускаем Caddy только для режима "домен"
             if mode == "domain":
