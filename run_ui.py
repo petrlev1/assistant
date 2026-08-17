@@ -75,8 +75,11 @@ class LauncherUI:
             "relevance_threshold": 0.1,
             "max_context_fragments": 100,
             "telegram_bot_token": "",
-            "caddy_path": r"C:\Users\Petrlev\AppData\Local\Microsoft\WinGet\Packages\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe",
-            "caddy_dir": r"C:\peter\ai_bot\automation\assistant"
+            # Дефолты Caddy зависят от платформы (реальные значения — в БД каждой машины)
+            "caddy_path": (r"C:\Users\Petrlev\AppData\Local\Microsoft\WinGet\Packages"
+                           r"\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe"
+                           if os.name == "nt" else "/usr/bin/caddy"),
+            "caddy_dir": self.project_dir
         }
         try:
             from auth_db import get_all_settings
@@ -294,6 +297,27 @@ class LauncherUI:
             variable=self.disable_knowledge_base_search_var
         )
         disable_kb_search_check.pack(anchor="w", padx=20, pady=5)
+
+        # Настройки Caddy (reverse proxy для внешнего домена)
+        caddy_frame = ttk.LabelFrame(frame, text="🛠 Caddy (reverse proxy)")
+        caddy_frame.pack(fill="x", padx=20, pady=(10, 0))
+
+        ttk.Label(caddy_frame, text="Путь к исполняемому файлу Caddy:").pack(anchor="w", padx=5, pady=(5, 0))
+        self.caddy_path_var = tk.StringVar(value=self.settings.get("caddy_path", ""))
+        caddy_path_entry = ttk.Entry(caddy_frame, textvariable=self.caddy_path_var, width=60)
+        caddy_path_entry.pack(fill="x", padx=5, pady=5)
+
+        ttk.Label(caddy_frame, text="Рабочая папка Caddy (где лежит Caddyfile):").pack(anchor="w", padx=5, pady=(5, 0))
+        self.caddy_dir_var = tk.StringVar(value=self.settings.get("caddy_dir", ""))
+        caddy_dir_entry = ttk.Entry(caddy_frame, textvariable=self.caddy_dir_var, width=60)
+        caddy_dir_entry.pack(fill="x", padx=5, pady=5)
+
+        ttk.Label(
+            caddy_frame,
+            text="Пути различаются на Windows и Ubuntu и хранятся в БД каждой машины "
+                 "(например, на сервере: /usr/bin/caddy).",
+            foreground="gray", wraplength=680, justify="left"
+        ).pack(anchor="w", padx=5, pady=(0, 5))
 
         # Информация о системе
         info_frame = ttk.LabelFrame(frame, text="Информация о системе")
@@ -893,6 +917,10 @@ class LauncherUI:
             ocr_key = self.ocr_api_key_var.get().strip()
             if ocr_key:
                 self.settings["llm_api_key"] = ocr_key
+
+        # Caddy (reverse proxy) — пути различаются на Windows/Ubuntu, хранятся в БД
+        self.settings["caddy_path"] = self.caddy_path_var.get().strip()
+        self.settings["caddy_dir"] = self.caddy_dir_var.get().strip()
 
         return True
 
