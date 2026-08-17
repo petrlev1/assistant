@@ -260,9 +260,11 @@ def detect_price_intent(question):
 
 
 class RAGSettings:
-    """Класс для управления настройками RAG-системы"""
+    """Класс для управления настройками RAG-системы.
+    Настройки хранятся в PostgreSQL (таблица app_settings). Файл rag_settings.json
+    упразднён; параметры подключения к БД — в db_config.json (gitignored)."""
     def __init__(self):
-        self.settings_file = "rag_settings.json"
+        self.settings_file = None  # файла настроек больше нет — всё в БД
         self.default_settings = {
             "disable_llm_models": False,
             "disable_hybrid_search": False,
@@ -287,49 +289,43 @@ class RAGSettings:
         self.settings = self.load_settings()
     
     def load_settings(self):
-        """Загрузка настроек из файла"""
+        """Загрузка настроек из БД (таблица app_settings). При ошибке — defaults."""
         try:
-            if os.path.exists(self.settings_file):
-                with open(self.settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                    # Объединяем с настройками по умолчанию
-                    for key, value in self.default_settings.items():
-                        if key not in settings:
-                            settings[key] = value
-                    return settings
-            else:
-                return self.default_settings.copy()
+            from auth_db import get_all_settings
+            settings = get_all_settings()
+            # Объединяем с настройками по умолчанию
+            for key, value in self.default_settings.items():
+                if key not in settings:
+                    settings[key] = value
+            return settings
         except Exception as e:
-            logger.error(f"Ошибка загрузки настроек: {e}")
+            logger.error(f"Ошибка загрузки настроек из БД: {e}")
             return self.default_settings.copy()
     
     def save_settings(self):
-        """Сохранение настроек в файл (атомарно: tmp + rename — веб-сервер может читать файл параллельно)"""
+        """Сохранение настроек в БД (UPSERT в app_settings)."""
         try:
-            tmp_file = self.settings_file + '.tmp'
-            with open(tmp_file, 'w', encoding='utf-8') as f:
-                json.dump(self.settings, f, indent=4, ensure_ascii=False)
-            os.replace(tmp_file, self.settings_file)
-            logger.info("Настройки сохранены")
+            from auth_db import set_settings
+            if set_settings(self.settings):
+                logger.info("Настройки сохранены в БД")
         except Exception as e:
-            logger.error(f"Ошибка сохранения настроек: {e}")
+            logger.error(f"Ошибка сохранения настроек в БД: {e}")
     
     def get(self, key, default=None):
         """Получение значения настройки"""
         return self.settings.get(key, default)
 
     def reload(self):
-        """Перечитать настройки из файла (изменения из лаунчера применяются без рестарта веб-сервера).
-        При ошибке чтения/парсинга — оставить текущие настройки, НЕ сбрасывать на defaults."""
+        """Перечитать настройки из БД (изменения из лаунчера применяются без рестарта
+        веб-сервера). При ошибке — оставить текущие настройки, НЕ сбрасывать на defaults."""
         try:
-            if os.path.exists(self.settings_file):
-                with open(self.settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                    for key, value in self.default_settings.items():
-                        if key not in settings:
-                            settings[key] = value
-                    self.settings = settings
-                    logger.info("⚙️ Настройки перечитаны из файла")
+            from auth_db import get_all_settings
+            settings = get_all_settings()
+            for key, value in self.default_settings.items():
+                if key not in settings:
+                    settings[key] = value
+            self.settings = settings
+            logger.info("⚙️ Настройки перечитаны из БД")
         except Exception as e:
             logger.error(f"Ошибка перечитывания настроек: {e} — оставлены текущие")
     
