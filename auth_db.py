@@ -10,7 +10,7 @@ import os
 logger = logging.getLogger(__name__)
 
 # Параметры подключения к PostgreSQL. Пароль и отличия платформ НЕ хранятся в коде
-# (чтобы не попадать в git), а берутся из rag_settings.json (gitignored) или переменных
+# (чтобы не попадать в git), а берутся из db_config.json (gitignored) или переменных
 # окружения. Несекретные значения по умолчанию оставлены здесь для удобства.
 _DB_DEFAULTS = {
     "host": "localhost",
@@ -20,7 +20,15 @@ _DB_DEFAULTS = {
     "password": "",
 }
 
-# Ключи rag_settings.json -> параметры psycopg2
+# Файл с параметрами подключения к БД (gitignored; содержит ТОЛЬКО db_* —
+# все остальные настройки хранятся в таблице app_settings).
+_DB_CONFIG_FILE = "db_config.json"
+
+# Устаревший файл настроек: используется ТОЛЬКО для одноразовой миграции
+# (см. _ensure_db_config_file / init_app_settings) — приложение его не читает.
+_LEGACY_SETTINGS_FILE = "rag_settings.json"
+
+# Ключи db_config.json -> параметры psycopg2
 _DB_SETTINGS_KEYS = {
     "db_host": "host",
     "db_port": "port",
@@ -39,11 +47,42 @@ _DB_ENV_KEYS = {
 }
 
 
-def _get_db_config():
-    """Эффективные параметры подключения: defaults <- rag_settings.json <- env."""
-    cfg = dict(_DB_DEFAULTS)
+def _load_legacy_settings():
+    """Чтение устаревшего rag_settings.json (только для одноразовой миграции)."""
     try:
-        with open("rag_settings.json", "r", encoding="utf-8") as f:
+        with open(_LEGACY_SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _ensure_db_config_file():
+    """Одноразовая миграция: если db_config.json отсутствует, а в устаревшем
+    rag_settings.json есть db_* — создать db_config.json из них (бесшовный переход
+    на сервере после git pull; локально файл уже создан)."""
+    if os.path.exists(_DB_CONFIG_FILE):
+        return
+    legacy = _load_legacy_settings()
+    db_cfg = {skey: v for skey, v in legacy.items() if skey in _DB_SETTINGS_KEYS and v not in (None, "")}
+    if not db_cfg:
+        return
+    try:
+        tmp = _DB_CONFIG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(db_cfg, f, indent=4, ensure_ascii=False)
+        os.replace(tmp, _DB_CONFIG_FILE)
+        logger.warning("⚠️ db_config.json создан из устаревшего rag_settings.json (ключи db_*)")
+    except Exception as e:
+        logger.error(f"Не удалось создать db_config.json: {e}")
+
+
+def _get_db_config():
+    """Эффективные параметры подключения: defaults <- db_config.json
+    <- (устаревший rag_settings.json, только если db_config.json нет) <- env."""
+    cfg = dict(_DB_DEFAULTS)
+    config_file = _DB_CONFIG_FILE if os.path.exists(_DB_CONFIG_FILE) else _LEGACY_SETTINGS_FILE
+    try:
+        with open(config_file, "r", encoding="utf-8") as f:
             s = json.load(f)
         for skey, ckey in _DB_SETTINGS_KEYS.items():
             v = s.get(skey)
@@ -75,6 +114,9 @@ def get_db_connection():
 def init_db():
     """Инициализация базы данных: создание таблицы пользователей"""
     try:
+        # Одноразовая миграция: db_config.json из устаревшего rag_settings.json (если нет)
+        _ensure_db_config_file()
+
         # Сначала подключаемся к БД postgres, чтобы создать rag_system если её нет
         dbcfg = _get_db_config()
         conn = psycopg2.connect(
@@ -120,9 +162,92 @@ def init_db():
         # Инициализация таблицы прайс-листов
         init_price_items()
 
+        # Инициализация таблицы настроек (app_settings) + одноразовый перенос из rag_settings.json
+        init_app_settings()
+
         return True
     except Exception as e:
         logger.error(f"Ошибка инициализации БД: {e}")
+        return False
+
+
+def init_app_settings():
+    """Таблица app_settings (ключ-значение; значения JSON-сериализованы).
+    Если таблица пуста и есть устаревший rag_settings.json — одноразовый перенос
+    всех настроек (кроме db_*) в БД. Вызывается из init_db()."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key VARCHAR(100) PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("SELECT COUNT(*) FROM app_settings")
+        if cur.fetchone()[0] == 0:
+            legacy = {k: v for k, v in _load_legacy_settings().items() if k not in _DB_SETTINGS_KEYS}
+            if legacy:
+                for key, value in legacy.items():
+                    cur.execute(
+                        "INSERT INTO app_settings (key, value) VALUES (%s, %s)",
+                        (key, json.dumps(value, ensure_ascii=False)),
+                    )
+                logger.warning(
+                    f"⚙️ Настройки перенесены из rag_settings.json в app_settings ({len(legacy)} ключей)"
+                )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка инициализации app_settings: {e}")
+        return False
+
+
+def get_all_settings():
+    """Все настройки из app_settings (значения JSON-десериализованы).
+    При ошибке БД возвращает {} — вызывающий код подставляет defaults."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT key, value FROM app_settings")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        result = {}
+        for key, raw in rows:
+            try:
+                result[key] = json.loads(raw)
+            except Exception:
+                result[key] = raw  # не JSON — храним как строку
+        return result
+    except Exception as e:
+        logger.error(f"Ошибка чтения настроек из БД: {e}")
+        return {}
+
+
+def set_settings(mapping):
+    """Сохранение набора настроек в app_settings (UPSERT по ключам)."""
+    if not mapping:
+        return True
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        for key, value in mapping.items():
+            cur.execute(
+                """INSERT INTO app_settings (key, value, updated_at)
+                   VALUES (%s, %s, NOW())
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()""",
+                (key, json.dumps(value, ensure_ascii=False)),
+            )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения настроек в БД: {e}")
         return False
 
 
