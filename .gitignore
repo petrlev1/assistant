@@ -5,6 +5,7 @@ rag_mod/
 __pycache__/
 chat_logs/
 rag_settings.json
+db_config.json
 .secret_key
 .sync.ffs_db
 venv/
