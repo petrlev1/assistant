@@ -1,5 +1,5 @@
 # web_app.py - Веб-интерфейс для RAG-системы (с авторизацией)
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file, abort
 import threading
 import logging
 import asyncio
@@ -10,6 +10,7 @@ import time
 from rag_core import get_rag_system, get_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group
+import docs_renderer
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -292,6 +293,45 @@ def chat():
 def about():
     """Публичная страница с описанием и возможностями системы (для клиентов)"""
     return render_template('about.html', logged_in='user_id' in session, username=session.get('username', ''))
+
+
+# === Пользовательская документация (/docs) ===
+# Порядок страниц = порядок в боковом меню раздела. Файлы лежат в docs/*.md.
+DOCS_PAGES = [
+    ('index', 'Обзор системы'),
+    ('quickstart', 'Быстрый старт'),
+    ('chat', 'Чат с ассистентом'),
+    ('documents', 'Документы и база знаний'),
+    ('prices', 'Загрузка прайс-листа'),
+    ('prompt', 'Персональный промт'),
+    ('faq', 'Частые вопросы'),
+]
+_DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs')
+
+
+@app.route('/docs')
+@app.route('/docs/<page>')
+def docs(page='index'):
+    """Пользовательская документация (публичный раздел, без авторизации).
+
+    Контент — markdown-файлы в docs/, рендерятся собственным мини-рендерером
+    docs_renderer.py (без внешних зависимостей, одинаково на всех платформах).
+    """
+    if page not in dict(DOCS_PAGES):
+        abort(404)
+    doc_path = os.path.join(_DOCS_DIR, f'{page}.md')
+    try:
+        with open(doc_path, 'r', encoding='utf-8') as f:
+            md_text = f.read()
+    except OSError:
+        abort(404)
+    return render_template('docs.html',
+                           pages=DOCS_PAGES,
+                           current_page=page,
+                           page_title=dict(DOCS_PAGES)[page],
+                           content_html=docs_renderer.render(md_text),
+                           logged_in='user_id' in session,
+                           username=session.get('username', ''))
 
 
 @app.route('/ask', methods=['POST'])
