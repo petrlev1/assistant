@@ -507,7 +507,7 @@
             color: #999;
             margin-top: 2px;
         }
-        /* Технические RAG-файлы (TXT-дубликаты для эмбеддингов): мельче и серым */
+        /* Технические RAG-файлы (пользовательские TXT-дубликаты для улучшения индексации): мельче и серым */
         .docs-item.rag-helper { opacity: 0.8; }
         .docs-item.rag-helper .doc-name {
             font-size: 12.5px;
@@ -695,9 +695,9 @@
             <button class="btn-bulk-link" onclick="toggleSelectAll()" id="selectAllBtn">☑️ Выбрать все</button>
             <button class="btn-bulk-link" onclick="clearSelection()">Снять</button>
         </div>
-        <!-- Показ RAG-файлов (TXT для эмбеддингов): галочка снята = скрыты, нажата = показаны -->
+        <!-- Показ RAG-файлов (пользовательские TXT для улучшения индексации): галочка снята = скрыты, нажата = показаны -->
         <div class="docs-rag-row" id="docsRagRow">
-            <label class="docs-rag-toggle" title="Показать TXT-файлы, созданные для эмбеддингов (одноимённые с PDF/другими форматами)">
+            <label class="docs-rag-toggle" title="Показать TXT-файлы, добавленные вами для улучшения индексации (одноимённые с PDF/другими форматами)">
                 <input type="checkbox" id="docsShowRagToggle" onchange="setDocsShowRag(this.checked)">
                 📄 Показать RAG-файлы<span class="rag-hidden-count" id="ragHiddenCount"></span>
             </label>
@@ -1110,7 +1110,7 @@
                         `;
         }
 
-        // Показ RAG-файлов (TXT для эмбеддингов, одноимённых с другими форматами).
+        // Показ RAG-файлов (пользовательские TXT для улучшения индексации, одноимённых с другими форматами).
         // Галочка СНЯТА = скрыты (по умолчанию), НАЖАТА = показаны.
         function getDocsShowRag() {
             return localStorage.getItem('docsShowRag') === '1';
@@ -1141,7 +1141,7 @@
                             docs = docs.filter(d => !d.is_rag_helper);
                         }
                         if (docs.length === 0) {
-                            list.innerHTML = '<div class="docs-empty">Все документы — RAG-файлы (TXT для эмбеддингов). Отметьте «📄 Показать RAG-файлы», чтобы увидеть их.</div>';
+                            list.innerHTML = '<div class="docs-empty">Все документы — RAG-файлы (TXT для улучшения индексации). Отметьте «📄 Показать RAG-файлы», чтобы увидеть их.</div>';
                             updateBulkBar();
                             return;
                         }
