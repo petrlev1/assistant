@@ -1,7 +1,7 @@
-# run_cli.py - CLI-лаунчер RAG-системы (полный аналог run_ui.py без графического интерфейса)
+# run_cli.py - CLI-лаунчер RAG-системы (управление без графического интерфейса)
 """Управление RAG-системой из командной строки.
 
-Дублирует все функции стартовой панели run_ui.py:
+Дублирует все функции стартовой панели GUI-лаунчера (ранее run_ui.py, удалён):
   * настройки (LLM провайдер/модель, параметры поиска, OCR, Telegram, Caddy) —
     чтение и запись в БД (таблица app_settings);
   * запуск/остановка/перезапуск веб-интерфейса (режимы local / external_ip / domain);
@@ -50,8 +50,7 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 RUN_DIR = os.path.join(PROJECT_DIR, ".run_cli")  # PID-файлы и логи процессов
 os.makedirs(RUN_DIR, exist_ok=True)
 
-# Fallback-копия маппинга провайдеров (используется, только если run_ui.py недоступен).
-# Основной источник — PROVIDERS из run_ui.py (см. get_providers()).
+# Маппинг провайдеров LLM: base_url и доступные модели (единый источник для CLI)
 _PROVIDERS_FALLBACK = {
     "DashScope": {
         "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -70,7 +69,7 @@ _PROVIDERS_FALLBACK = {
 # Ключи, значения которых маскируются в выводе (секреты)
 _SECRET_KEYS = ("llm_api_key", "llm_provider_api_key", "llm_openrouter_api_key", "telegram_bot_token")
 
-# Дефолты настроек — зеркало run_ui.load_settings()
+# Дефолты настроек (как в GUI-лаунчере)
 _DEFAULTS = {
     "disable_llm_models": False,
     "disable_hybrid_search": False,
@@ -167,12 +166,8 @@ _TELEGRAM_RUNNER = (
 # =====================================================================
 
 def get_providers():
-    """Маппинг провайдеров — берём из run_ui.py (единый источник), при недоступности — fallback."""
-    try:
-        from run_ui import PROVIDERS
-        return PROVIDERS
-    except Exception:
-        return _PROVIDERS_FALLBACK
+    """Маппинг провайдеров LLM (base_url и доступные модели)."""
+    return _PROVIDERS_FALLBACK
 
 
 def mask_key(value):
@@ -195,7 +190,7 @@ def _parse_bool(value):
 
 
 def load_settings():
-    """Настройки из БД (app_settings) + дефолты для недостающих ключей (как в run_ui)."""
+    """Настройки из БД (app_settings) + дефолты для недостающих ключей."""
     defaults = dict(_DEFAULTS)
     try:
         from auth_db import get_all_settings
@@ -222,7 +217,7 @@ def save_settings(mapping):
 
 
 def validate_setting(key, value):
-    """Валидация значения настройки (зеркало validate_and_apply_settings из run_ui).
+    """Валидация значения настройки (зеркало validate_and_apply_settings GUI-лаунчера).
     Возвращает (нормализованное_значение, предупреждение_или_None).
     При неверном типе/диапазоне возвращает (None, ошибка) — значение не сохраняется."""
     if key in ("search_top_k", "max_context_fragments", "ocr_dpi"):
@@ -274,7 +269,7 @@ def validate_setting(key, value):
 
 
 def apply_key_routing(key, value):
-    """Куда реально ложится значение ключа llm_api_key — зеркало run_ui.validate_and_apply_settings:
+    """Куда реально ложится значение ключа llm_api_key — зеркало validate_and_apply_settings GUI-лаунчера:
     при провайдере DeepSeek → llm_provider_api_key, OpenRouter → llm_openrouter_api_key,
     иначе → llm_api_key. Остальные ключи сохраняются как есть."""
     if key != "llm_api_key":
@@ -412,7 +407,7 @@ def _print_log_tail(log_name, lines=15):
 
 
 def _resolve_web_python():
-    """(python, env) для запуска run_web.py — точная копия run_ui._resolve_web_python.
+    """(python, env) для запуска run_web.py — точная копия _resolve_web_python GUI-лаунчера.
     Windows: uv python с явным PYTHONPATH на site-packages venv проекта (+ hermes — там fitz).
     Linux: venv/bin/python."""
     env = dict(os.environ)
@@ -436,7 +431,7 @@ def _resolve_web_python():
 
 
 def is_web_server_running():
-    """True, если на порту 8077 отвечает веб-приложение (HTTP-проверка, как в run_ui)."""
+    """True, если на порту 8077 отвечает веб-приложение (HTTP-проверка)."""
     try:
         conn = http.client.HTTPConnection("127.0.0.1", 8077, timeout=1)
         try:
@@ -477,7 +472,7 @@ def _wait_for_web(timeout=90.0):
 
 
 # =====================================================================
-# Ленивая RAG-система (как self.rag_system в run_ui)
+# Ленивая RAG-система (как self.rag_system в GUI-лаунчере)
 # =====================================================================
 
 _rag = None
@@ -737,7 +732,7 @@ def _start_caddy():
 
 
 def cmd_web_start(mode, open_browser=False):
-    """Запуск веб-интерфейса в выбранном режиме (аналог launch_web в run_ui)."""
+    """Запуск веб-интерфейса в выбранном режиме."""
     if _running("web", "Веб-интерфейс"):
         return 0
     if is_web_server_running():
@@ -804,7 +799,7 @@ def cmd_web_restart(mode, open_browser=False):
 
 
 def cmd_rag_restart():
-    """Перезагрузка базы знаний (аналог restart_rag в run_ui)."""
+    """Перезагрузка базы знаний."""
     print("🔄 Перезагрузка базы знаний RAG...")
     print("   (Загружается RAG-система — эмбеддинг-модель ~2 ГБ, может занять 1–2 минуты)")
     try:
@@ -837,7 +832,7 @@ def cmd_telegram_status():
 
 
 def cmd_telegram_start():
-    """Запуск Telegram-бота в фоне (аналог start_telegram_bot в run_ui)."""
+    """Запуск Telegram-бота в фоне."""
     settings = load_settings()
     token = settings.get("telegram_bot_token") or ""
     if not token or len(token) < 20 or token == "YOUR_BOT_TOKEN_HERE":
@@ -870,7 +865,7 @@ def cmd_telegram_stop():
 
 
 def cmd_users_list():
-    """Список пользователей (аналог вкладки «Пользователи» в run_ui)."""
+    """Список пользователей."""
     try:
         from auth_db import get_all_users
         users = get_all_users()
@@ -935,7 +930,7 @@ def cmd_users_prompt_set(user_ref, text=None, path=None):
             print(f"❌ Не удалось прочитать файл {path}: {e}")
             return 1
     text = (text or "").strip()
-    # Текст стандартного промта = сброс к системному промту (как в run_ui)
+    # Текст стандартного промта = сброс к системному промту
     try:
         from auth_db import set_user_prompt
         from rag_core import DEFAULT_BASE_PROMPT
@@ -969,7 +964,7 @@ def cmd_users_prompt_reset(user_ref):
 
 
 def cmd_stop_all():
-    """Остановка всего: веб-интерфейс + Caddy + Telegram-бот (аналог stop_all в run_ui)."""
+    """Остановка всего: веб-интерфейс + Caddy + Telegram-бот."""
     stopped = []
     if _stop_process("web", "Веб-интерфейс"):
         stopped.append("Веб-интерфейс")
@@ -993,7 +988,7 @@ def cmd_stop_all():
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="run_cli.py",
-        description="CLI-лаунчер RAG-системы — полный аналог run_ui.py без графического интерфейса.",
+        description="CLI-лаунчер RAG-системы — управление без графического интерфейса.",
         epilog="Без аргументов запускается интерактивное меню (или shell — построчный режим). "
                "Рекомендуется запускать через venv: venv\\Scripts\\python.exe run_cli.py",
     )
@@ -1095,7 +1090,7 @@ def run_command(args):
     return 2
 
 
-_REPL_HELP = """Доступные команды (аналог run_ui.py):
+_REPL_HELP = """Доступные команды:
   status                    — общий статус системы
   settings                  — показать все настройки
   settings get <ключ>       — значение настройки
@@ -1120,7 +1115,7 @@ _REPL_HELP = """Доступные команды (аналог run_ui.py):
 
 def interactive_loop(parser):
     """Интерактивный режим: команды вводятся построчно."""
-    print("🚀 RAG-система — CLI-лаунчер (аналог run_ui.py)")
+    print("🚀 RAG-система — CLI-лаунчер")
     print("Введите help для списка команд, exit — для выхода.")
     print()
     interactive = sys.stdin.isatty()
