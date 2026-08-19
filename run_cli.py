@@ -31,6 +31,7 @@ import argparse
 import http.client
 import os
 import shlex
+import socket
 import subprocess
 import sys
 import time
@@ -448,6 +449,17 @@ def is_web_server_running():
         return False
 
 
+def is_caddy_admin_running():
+    """True, если админ-эндпоинт Caddy (127.0.0.1:2019) уже слушается —
+    значит Caddy запущен вне CLI (например, systemd на сервере)."""
+    try:
+        conn = socket.create_connection(("127.0.0.1", 2019), timeout=0.5)
+        conn.close()
+        return True
+    except OSError:
+        return False
+
+
 def _wait_for_web(timeout=90.0):
     """Ожидание ответа веб-сервера на порту 8077. Возвращает True/False.
     Эмбеддинг-модель при первом запуске грузится до минуты, поэтому таймаут щедрый."""
@@ -545,6 +557,10 @@ def cmd_status():
     caddy_pid = _read_pid("caddy")
     if caddy_pid and _pid_alive(caddy_pid):
         print(f"Caddy: 🟢 запущен (PID {caddy_pid})")
+    elif is_caddy_admin_running():
+        print("Caddy: 🟡 запущен ВНЕ CLI (админ-порт 127.0.0.1:2019 занят)")
+        if caddy_pid:
+            _remove_pid("caddy")
     else:
         if caddy_pid:
             _remove_pid("caddy")
@@ -682,6 +698,10 @@ def cmd_web_status():
     caddy_pid = _read_pid("caddy")
     if caddy_pid and _pid_alive(caddy_pid):
         print(f"Caddy: запущен, PID {caddy_pid}")
+    elif is_caddy_admin_running():
+        print("Caddy: запущен ВНЕ CLI (админ-порт 127.0.0.1:2019 занят)")
+        if caddy_pid:
+            _remove_pid("caddy")
     else:
         if caddy_pid:
             _remove_pid("caddy")
@@ -699,8 +719,19 @@ def _start_caddy():
         return None
     if _running("caddy", "Caddy"):
         return _read_pid("caddy")
+    # Caddy уже работает вне CLI (systemd на сервере / запущен вручную) —
+    # второй экземпляр упадёт на занятом админ-порту 2019, поэтому не запускаем дубль
+    if is_caddy_admin_running():
+        print("  ℹ️ Caddy уже запущен вне CLI (админ-порт 127.0.0.1:2019 занят) — используем существующий")
+        return "external"
     pid = _spawn([caddy_path, "run"], "caddy.log", cwd=caddy_dir)
     _write_pid("caddy", pid)
+    time.sleep(1.0)
+    if not _pid_alive(pid):
+        print(f"  ⚠️ Caddy завершился сразу после запуска (PID {pid}). Последние строки лога:")
+        _print_log_tail("caddy.log")
+        _remove_pid("caddy")
+        return None
     print(f"  Caddy запущен (PID {pid}), лог: {_log_path('caddy.log')}")
     return pid
 
@@ -756,6 +787,8 @@ def cmd_web_stop():
         stopped.append("Веб-интерфейс")
     if _stop_process("caddy", "Caddy"):
         stopped.append("Caddy")
+    elif is_caddy_admin_running():
+        print("  ℹ️ Caddy работает вне CLI — оставляем как есть")
     if is_web_server_running():
         print("  ⚠️ Порт 8077 всё ещё отвечает — веб-сервер запущен ВНЕ CLI. Остановите его вручную.")
     if not stopped:
