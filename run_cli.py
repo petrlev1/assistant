@@ -1191,6 +1191,77 @@ def _ask(prompt, default=None):
     return value if value else default
 
 
+def _input_edit(prompt, initial=""):
+    """Ввод строки с предзаполненным текущим значением — можно редактировать,
+    как в файловом менеджере: ←/→ — курсор, Home/End, Backspace/Delete,
+    ввод — вставка в позицию курсора, Enter — принять, Esc — отмена.
+    Если stdin — не терминал (скрипт/pipe): обычный ввод, Enter без текста = оставить как есть."""
+    if not sys.stdin.isatty():
+        try:
+            value = input(f"{prompt} (Enter — без изменений): ").strip()
+        except EOFError:
+            return None
+        return value if value else initial
+    _enable_vt()
+    buffer = list(str(initial))
+    cursor = len(buffer)
+    prompt_text = f"{prompt}: "
+
+    def render():
+        sys.stdout.write("\x1b[2K\r" + prompt_text + "".join(buffer))
+        sys.stdout.write(f"\x1b[{len(prompt_text) + cursor + 1}G")
+        sys.stdout.flush()
+
+    render()
+    try:
+        while True:
+            key = _key_getch()
+            if key == "enter":
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return "".join(buffer)
+            if key == "esc":
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return None
+            if key == "left":
+                if cursor > 0:
+                    cursor -= 1
+                    sys.stdout.write("\x1b[D")
+                    sys.stdout.flush()
+            elif key == "right":
+                if cursor < len(buffer):
+                    cursor += 1
+                    sys.stdout.write("\x1b[C")
+                    sys.stdout.flush()
+            elif key == "home":
+                cursor = 0
+                sys.stdout.write(f"\x1b[{len(prompt_text) + 1}G")
+                sys.stdout.flush()
+            elif key == "end":
+                cursor = len(buffer)
+                sys.stdout.write(f"\x1b[{len(prompt_text) + len(buffer) + 1}G")
+                sys.stdout.flush()
+            elif key == "backspace":
+                if cursor > 0:
+                    del buffer[cursor - 1]
+                    cursor -= 1
+                    render()
+            elif key == "delete":
+                if cursor < len(buffer):
+                    del buffer[cursor]
+                    render()
+            elif len(key) == 1:
+                buffer.insert(cursor, key)
+                cursor += 1
+                render()
+    except (KeyboardInterrupt, EOFError):
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        return None
+    return "".join(buffer)
+
+
 def _pause():
     """Пауза до нажатия Enter (чтобы вывод не улетал со экрана)."""
     try:
@@ -1246,9 +1317,12 @@ def _key_getch():
         if ch in ("\x00", "\xe0"):
             code = msvcrt.getwch()
             return {"H": "up", "P": "down", "K": "left", "M": "right",
-                    "G": "home", "O": "end", "I": "pgup", "Q": "pgdn"}.get(code, "")
+                    "G": "home", "O": "end", "I": "pgup", "Q": "pgdn",
+                    "S": "delete"}.get(code, "")
         if ch == "\r":
             return "enter"
+        if ch in ("\x08", "\x7f"):
+            return "backspace"
         if ch == "\x1b":
             return "esc"
         return ch
@@ -1277,9 +1351,13 @@ def _key_getch():
                 return "pgup"
             if seq == "[6~":
                 return "pgdn"
+            if seq == "[3~":
+                return "delete"
             return "esc"
         if ch == "\r":
             return "enter"
+        if ch in ("\x7f", "\x08"):
+            return "backspace"
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -1377,11 +1455,12 @@ def _pick_setting_key():
 
 
 def _ask_model_manual():
-    """Ручной ввод модели (для OpenRouter и нестандартных)."""
+    """Ручной ввод модели (для OpenRouter и нестандартных) — с предзаполнением текущей."""
     _clear_screen()
     print("Введите модель вручную (например: openai/gpt-4o, anthropic/claude-3.5-sonnet):")
-    value = _ask("Модель")
-    if not value:
+    current = (load_settings().get("llm_model") or "")
+    value = _input_edit("Модель", str(current))
+    if value is None:
         print("  (отменено)")
         return None
     return value.strip()
@@ -1422,12 +1501,14 @@ def _pick_value(key):
         if picked is None:
             return None
         return picked == "true"
-    # Числовые и текстовые настройки — ручной ввод (с подсказкой)
+    # Числовые и текстовые настройки — ручной ввод,
+    # в поле сразу подставляется текущее значение (можно редактировать)
     hint = _KEY_HINTS.get(key)
     print(f"Изменение настройки: {key}")
     if hint:
         print(f"  ({hint})")
-    value = _ask("Значение (Enter — отмена)")
+    current = settings.get(key, "")
+    value = _input_edit("Значение", str(current))
     if value is None:
         print("  (отменено)")
         return None
