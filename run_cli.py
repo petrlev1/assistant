@@ -341,9 +341,10 @@ def _running(name, label):
 
 
 def _spawn(cmd, log_name, cwd=None, env=None):
-    """Запуск фонового процесса: stdout/stderr → .run_cli/<log_name>, окно не показываем."""
+    """Запуск фонового процесса: stdout/stderr → .run_cli/<log_name>, окно не показываем.
+    Лог-файл перезаписывается с чистого листа при каждом запуске (не докапливается)."""
     log_path = os.path.join(RUN_DIR, log_name)
-    log_file = open(log_path, "ab")  # handle наследуется дочерним процессом
+    log_file = open(log_path, "wb")  # handle наследуется дочерним процессом
     flags = 0
     if os.name == "nt":
         flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
