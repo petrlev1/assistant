@@ -10,3 +10,4 @@ db_config.json
 .sync.ffs_db
 venv/
 start_web.bat
+.run_cli/
