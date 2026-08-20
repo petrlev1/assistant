@@ -601,14 +601,17 @@
             text-decoration: underline;
         }
         .btn-bulk-link:hover { color: #2b5ad1; }
-        /* Строка показа RAG-файлов у списка документов */
+        /* Строка фильтров: группировка, сортировка, показ RAG-файлов */
         .docs-rag-row {
             display: flex;
             align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
             padding: 8px 20px;
             border-bottom: 1px solid #eee;
             background: #fafbfd;
         }
+        .docs-rag-row .docs-rag-toggle { flex: 1; }
         .docs-rag-toggle {
             display: flex;
             align-items: center;
@@ -702,13 +705,7 @@
         .btn-docs-mobile:hover { background: rgba(255,255,255,0.3); }
         /* Кнопка закрытия панели документов — не нужна на десктопе (панель всегда открыта) */
         .docs-panel .btn-close { display: none; }
-        /* Строка-ссылка на окно с промтом в панели документов */
-        .docs-prompt-row {
-            display: flex;
-            padding: 8px 20px;
-            border-bottom: 1px solid #eee;
-            background: #fafbfd;
-        }
+        /* Ссылка на окно с промтом */
         .docs-prompt-link {
             background: none;
             border: none;
@@ -806,20 +803,9 @@
                 <div class="docs-header">
                     <h3>📄 Мои документы</h3>
                     <div style="display:flex;align-items:center;gap:10px;">
-                        <label class="docs-group-toggle" title="Сгруппировать документы по типу (инструкции, паспорта, прайсы и т.д.)">
-                            <input type="checkbox" id="docsGroupToggle" onchange="setDocsGrouped(this.checked)">
-                            🗂️ По группам
-                        </label>
-                        <select id="docsSort" class="docs-sort" onchange="setDocsSort(this.value)" title="Сортировка списка документов">
-                            <option value="date">По дате загрузки</option>
-                            <option value="name">По имени</option>
-                        </select>
+                        <button class="docs-prompt-link" onclick="togglePromptPanel()" title="Открыть окно с персональным промтом">📝 Мой промт</button>
+                        <button class="btn-close" onclick="toggleDocsPanel()">✕</button>
                     </div>
-                    <button class="btn-close" onclick="toggleDocsPanel()">✕</button>
-                </div>
-                <!-- Ссылка на окно с персональным промтом -->
-                <div class="docs-prompt-row">
-                    <button class="docs-prompt-link" onclick="togglePromptPanel()">📝 Мой промт</button>
                 </div>
                 <div class="docs-upload">
                     <div class="docs-dropzone" id="dropZone" title="Нажмите или перетащите файлы сюда">
@@ -841,8 +827,16 @@
                     <button class="btn-bulk-link" onclick="toggleSelectAll()" id="selectAllBtn">☑️ Выбрать все</button>
                     <button class="btn-bulk-link" onclick="clearSelection()">Снять</button>
                 </div>
-                <!-- Показ RAG-файлов (пользовательские TXT для улучшения индексации): галочка снята = скрыты, нажата = показаны -->
+                <!-- Строка фильтров: группировка, сортировка, показ RAG-файлов -->
                 <div class="docs-rag-row" id="docsRagRow">
+                    <label class="docs-group-toggle" title="Сгруппировать документы по типу (инструкции, паспорта, прайсы и т.д.)">
+                        <input type="checkbox" id="docsGroupToggle" onchange="setDocsGrouped(this.checked)">
+                        🗂️ По группам
+                    </label>
+                    <select id="docsSort" class="docs-sort" onchange="setDocsSort(this.value)" title="Сортировка списка документов">
+                        <option value="date">По дате загрузки</option>
+                        <option value="name">По имени</option>
+                    </select>
                     <label class="docs-rag-toggle" title="Показать TXT-файлы, добавленные вами для улучшения индексации (одноимённые с PDF/другими форматами)">
                         <input type="checkbox" id="docsShowRagToggle" onchange="setDocsShowRag(this.checked)">
                         📄 Показать RAG-файлы<span class="rag-hidden-count" id="ragHiddenCount"></span>
