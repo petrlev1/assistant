@@ -17,6 +17,7 @@ import openpyxl
 import requests
 import re
 import base64
+import io
 import threading
 
 # Настройка логирования
@@ -935,8 +936,7 @@ class RAGCore:
             logger.info(f"🔄 Найдён старый кэш-файл: {latest_old_cache.name}")
             
             try:
-                with open(latest_old_cache, 'rb') as f:
-                    old_embeddings = pickle.load(f)
+                old_embeddings = self._load_cache_pickle(latest_old_cache)
                 
                 # Проверяем формат
                 if isinstance(old_embeddings, dict) and 'embeddings' in old_embeddings:
@@ -946,6 +946,8 @@ class RAGCore:
                     # Старый формат — просто эмбеддинги
                     embeddings = old_embeddings
                     old_hash = 'old_format'
+                if isinstance(embeddings, torch.Tensor):
+                    embeddings = embeddings.to(self.model.device)
                 
                 logger.info(f"✅ Кэш-файл мигрирован: {latest_old_cache.name} -> {filename}.pkl")
                 
@@ -959,6 +961,38 @@ class RAGCore:
                 logger.error(f"⚠️ Ошибка при миграции кэша {latest_old_cache}: {e}")
         
         return None
+
+    def _load_cache_pickle(self, cache_path):
+        """Читает pkl-кэш эмбеддингов, перенося тензоры на CPU.
+
+        Кэш может быть создан на машине с GPU (например, сервер Чеба): внутри
+        лежат CUDA-тензоры, и обычный pickle.load на CPU-only машине падает
+        («Attempting to deserialize object on a CUDA device...»). Файлы кэша
+        создаются pickle.dump (не torch.save), поэтому даже torch.load с
+        map_location='cpu' не пробрасывает map_location во внутренний
+        _load_from_bytes (torch 2.13). Поэтому перехватываем
+        torch.storage._load_from_bytes кастомным Unpickler'ом и читаем байты
+        хранилища сразу на CPU.
+        """
+        class _CudaSafeUnpickler(pickle.Unpickler):
+            def find_class(self, module, name):
+                if module == 'torch.storage' and name == '_load_from_bytes':
+                    return lambda b: torch.load(
+                        io.BytesIO(b), map_location='cpu', weights_only=False)
+                return super().find_class(module, name)
+
+        with open(cache_path, 'rb') as f:
+            try:
+                return _CudaSafeUnpickler(f).load()
+            except Exception:
+                pass
+        with open(cache_path, 'rb') as f:
+            try:
+                return torch.load(f, map_location='cpu', weights_only=False)
+            except Exception:
+                pass
+        with open(cache_path, 'rb') as f:
+            return pickle.load(f)
 
     def _load_or_create_embeddings(self, file_path, knowledge_content):
         """Загружает эмбеддинги из кэша или создает их заново"""
@@ -989,13 +1023,14 @@ class RAGCore:
             # Проверяем, актуален ли кэш
             logger.info(f"💾 Проверка кэша для {os.path.basename(file_path)}...")
             try:
-                with open(cache_path, 'rb') as f:
-                    cached_data = pickle.load(f)
+                cached_data = self._load_cache_pickle(cache_path)
                 
                 # Проверяем структуру данных (поддержка старых кэшей без хэша)
                 if isinstance(cached_data, dict) and 'hash' in cached_data and 'embeddings' in cached_data:
                     cached_hash = cached_data['hash']
                     embeddings = cached_data['embeddings']
+                    if isinstance(embeddings, torch.Tensor):
+                        embeddings = embeddings.to(self.model.device)
                 elif isinstance(cached_data, dict) and 'hash' in cached_data:
                     # Старый формат с только хэшем и пустыми эмбеддингами
                     cached_hash = cached_data['hash']
