@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PROAI — Чат</title>
+    <title>Личный кабинет - RAGSTONE</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -757,11 +757,11 @@
 </head>
 <body>
     <div class="header">
-        <h1><a href="{{ url_for('index') }}" title="На главную">🤖 PROAI - ассистент</a></h1>
+        <h1><a href="{{ url_for('index') }}" title="На главную">RAGSTONE</a></h1>
         <div class="user-info">
             <span class="username">👤 {{ session.username }}</span>
             <a href="{{ url_for('logout') }}" class="btn-logout">Выйти</a>
-            <button class="btn-docs-mobile" onclick="toggleDocsPanel()" title="Мои документы">☰</button>
+            <button class="btn-docs-mobile" onClick="toggleDocsPanel()" title="Мои документы">☰</button>
         </div>
     </div>
 
@@ -770,7 +770,7 @@
         <div class="chat-side">
             <div class="chat-header">
                 <h3>💬 Чат</h3>
-                <button class="btn-clear-chat" onclick="clearChat()" title="Удалить всю историю чата">🗑️ Удалить весь чат</button>
+                <button class="btn-clear-chat" onClick="clearChat()" title="Удалить всю историю чата">🗑️ Удалить весь чат</button>
             </div>
             <div class="chat-container" id="chatContainer">
                 <div class="message bot">
@@ -787,8 +787,8 @@
             </div>
 
             <div class="input-area">
-                <textarea id="questionInput" placeholder="Введите ваш вопрос..." rows="1" onkeydown="if(event.key=='Enter'&&!event.shiftKey){event.preventDefault();sendQuestion()}"></textarea>
-                <button class="btn-send" id="sendBtn" onclick="sendQuestion()">Отправить</button>
+                <textarea id="questionInput" placeholder="Введите ваш вопрос..." rows="1" onKeyDown="if(event.key=='Enter'&&!event.shiftKey){event.preventDefault();sendQuestion()}"></textarea>
+                <button class="btn-send" id="sendBtn" onClick="sendQuestion()">Отправить</button>
             </div>
 
             <div class="status-bar" id="statusBar">
@@ -803,8 +803,8 @@
                 <div class="docs-header">
                     <h3>📄 Мои документы</h3>
                     <div style="display:flex;align-items:center;gap:10px;">
-                        <button class="docs-prompt-link" onclick="togglePromptPanel()" title="Открыть окно с персональным промтом">📝 Мой промт</button>
-                        <button class="btn-close" onclick="toggleDocsPanel()">✕</button>
+                        <button class="docs-prompt-link" onClick="togglePromptPanel()" title="Открыть окно с персональным промтом">📝 Мой промт</button>
+                        <button class="btn-close" onClick="toggleDocsPanel()">✕</button>
                     </div>
                 </div>
                 <div class="docs-upload">
@@ -821,24 +821,24 @@
                 <!-- Панель множественных действий (видна при выборе документов) -->
                 <div class="docs-bulkbar" id="bulkBar" style="display:none;">
                     <span class="bulk-count" id="bulkCount">Выбрано: 0</span>
-                    <button class="btn-bulk" onclick="downloadSelected()" title="Скачать выбранные файлы одним архивом">⬇️ Скачать выбранные</button>
-                    <button class="btn-bulk btn-bulk-danger" onclick="deleteSelected()" title="Удалить выбранные файлы">🗑️ Удалить выбранные</button>
+                    <button class="btn-bulk" onClick="downloadSelected()" title="Скачать выбранные файлы одним архивом">⬇️ Скачать выбранные</button>
+                    <button class="btn-bulk btn-bulk-danger" onClick="deleteSelected()" title="Удалить выбранные файлы">🗑️ Удалить выбранные</button>
                     <span style="flex:1"></span>
-                    <button class="btn-bulk-link" onclick="toggleSelectAll()" id="selectAllBtn">☑️ Выбрать все</button>
-                    <button class="btn-bulk-link" onclick="clearSelection()">Снять</button>
+                    <button class="btn-bulk-link" onClick="toggleSelectAll()" id="selectAllBtn">☑️ Выбрать все</button>
+                    <button class="btn-bulk-link" onClick="clearSelection()">Снять</button>
                 </div>
                 <!-- Строка фильтров: группировка, сортировка, показ RAG-файлов -->
                 <div class="docs-rag-row" id="docsRagRow">
                     <label class="docs-group-toggle" title="Сгруппировать документы по типу (инструкции, паспорта, прайсы и т.д.)">
-                        <input type="checkbox" id="docsGroupToggle" onchange="setDocsGrouped(this.checked)">
+                        <input type="checkbox" id="docsGroupToggle" onChange="setDocsGrouped(this.checked)">
                         🗂️ По группам
                     </label>
-                    <select id="docsSort" class="docs-sort" onchange="setDocsSort(this.value)" title="Сортировка списка документов">
+                    <select id="docsSort" class="docs-sort" onChange="setDocsSort(this.value)" title="Сортировка списка документов">
                         <option value="date">По дате загрузки</option>
                         <option value="name">По имени</option>
                     </select>
                     <label class="docs-rag-toggle" title="Показать TXT-файлы, добавленные вами для улучшения индексации (одноимённые с PDF/другими форматами)">
-                        <input type="checkbox" id="docsShowRagToggle" onchange="setDocsShowRag(this.checked)">
+                        <input type="checkbox" id="docsShowRagToggle" onChange="setDocsShowRag(this.checked)">
                         📄 Показать RAG-файлы<span class="rag-hidden-count" id="ragHiddenCount"></span>
                     </label>
                 </div>
@@ -850,13 +850,13 @@
     </div>
 
     <!-- Затемнение (мобильная версия: панель документов) -->
-    <div class="docs-overlay" id="docsOverlay" onclick="toggleDocsPanel()"></div>
+    <div class="docs-overlay" id="docsOverlay" onClick="toggleDocsPanel()"></div>
 
     <!-- Панель персонального промта -->
     <div class="prompt-panel" id="promptPanel">
         <div class="docs-header">
             <h3>📝 Мой промт</h3>
-            <button class="btn-close" onclick="togglePromptPanel()">✕</button>
+            <button class="btn-close" onClick="togglePromptPanel()">✕</button>
         </div>
         <div class="prompt-body">
             <textarea id="promptTextarea" placeholder="Введите ваш персональный промт..."></textarea>
@@ -865,13 +865,13 @@
                 Кнопка «Сбросить» вернёт стандартный промт системы.
             </div>
             <div class="prompt-actions">
-                <button class="btn-send" onclick="savePrompt()">💾 Сохранить</button>
-                <button class="btn-reset" onclick="resetPrompt()">↩️ Сбросить к стандартному</button>
+                <button class="btn-send" onClick="savePrompt()">💾 Сохранить</button>
+                <button class="btn-reset" onClick="resetPrompt()">↩️ Сбросить к стандартному</button>
                 <span class="prompt-status" id="promptStatus"></span>
             </div>
         </div>
     </div>
-    <div class="docs-overlay" id="promptOverlay" onclick="togglePromptPanel()"></div>
+    <div class="docs-overlay" id="promptOverlay" onClick="togglePromptPanel()"></div>
 
     <script>
         window.GREETING = {{ greeting|tojson }};
