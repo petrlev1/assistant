@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Админ-панель</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #0e1117;
+        color: #e6e6e6;
+        min-height: 100vh;
+    }
+    .login-wrap {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+    }
+    .card {
+        background: #161b24;
+        border: 1px solid #2a3242;
+        border-radius: 14px;
+        padding: 28px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+    }
+    .login { width: 360px; }
+    h1 { font-size: 20px; color: #fff; margin-bottom: 4px; }
+    .sub { color: #8b94a7; font-size: 13px; margin-bottom: 22px; }
+    .card label { display: block; margin-bottom: 14px; color: #aab3c5; font-size: 13px; }
+    .card input {
+        width: 100%; margin-top: 6px; padding: 10px 12px;
+        background: #0e1117; border: 1px solid #2a3242; border-radius: 8px;
+        color: #fff; font-size: 14px; outline: none;
+    }
+    .card input:focus { border-color: #e5484d; }
+    .btn {
+        width: 100%; padding: 11px; border: none; border-radius: 8px;
+        background: #e5484d; color: #fff; font-size: 14px; font-weight: 600;
+        cursor: pointer; transition: opacity .15s, transform .1s;
+    }
+    .btn:hover { opacity: .88; }
+    .btn:active { transform: scale(.98); }
+    .btn.small { width: auto; padding: 6px 12px; font-size: 12px; font-weight: 500; }
+    .btn.ghost { width: auto; padding: 8px 16px; background: #2a3242; font-weight: 500; }
+    .btn.danger { background: #e5484d; }
+    .btn.armed { background: #ffb224; color: #1a1a1a; }
+    .flash {
+        margin: 0 0 16px; padding: 10px 12px; border-radius: 8px;
+        font-size: 13px; background: #2a3242; color: #cfe3ff;
+    }
+    .flash.error { background: #4a2023; color: #ffb4b4; }
+    .flash.hidden { display: none; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    header h1 { font-size: 22px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    th {
+        text-align: left; padding: 10px 12px; color: #8b94a7;
+        font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em;
+        border-bottom: 1px solid #2a3242;
+    }
+    td { padding: 11px 12px; border-bottom: 1px solid #1f2530; color: #cfd5e0; }
+    tr:hover td { background: #141a24; }
+    .uname { color: #fff; font-weight: 600; }
+    .actions { white-space: nowrap; }
+    .actions .btn + .btn { margin-left: 8px; }
+    .empty { text-align: center; color: #8b94a7; padding: 30px; }
+    .foot { margin-top: 18px; color: #5c6577; font-size: 12px; }
+</style>
+</head>
+<body>
+{% if mode == 'login' %}
+    <div class="login-wrap">
+        <form class="card login" method="post" action="/admin" autocomplete="off">
+            <h1>Админ-панель</h1>
+            <p class="sub">Служебный вход</p>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
+            {% endwith %}
+            <label>Логин
+                <input type="text" name="username" autocomplete="username" required autofocus>
+            </label>
+            <label>Пароль
+                <input type="password" name="password" autocomplete="current-password" required>
+            </label>
+            <button class="btn" type="submit">Войти</button>
+        </form>
+    </div>
+{% else %}
+    <div class="wrap">
+        <header>
+            <h1>Админ-панель</h1>
+            <form method="post" action="/admin/logout"><button class="btn ghost" type="submit">Выйти</button></form>
+        </header>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
+        {% endwith %}
+        <div id="msg" class="flash hidden"></div>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th><th>Логин</th><th>Регистрация</th>
+                        <th>Документы</th><th>Прайс-позиции</th><th>Сообщения</th><th>Аналитика</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for u in users %}
+                    <tr data-id="{{ u.id }}">
+                        <td>{{ u.id }}</td>
+                        <td class="uname">{{ u.username }}</td>
+                        <td>{{ u.created_at.strftime('%d.%m.%Y %H:%M') if u.created_at else '—' }}</td>
+                        <td>{{ u.docs }}</td>
+                        <td>{{ u.prices }}</td>
+                        <td>{{ u.messages }}</td>
+                        <td>{{ u.analytics }}</td>
+                        <td class="actions">
+                            <button class="btn small danger" type="button" onclick="arm(this, 'del-user')">Удалить</button>
+                            <button class="btn small" type="button" onclick="arm(this, 'del-analytics')">Удалить аналитику</button>
+                        </td>
+                    </tr>
+                {% endfor %}
+                {% if not users %}
+                    <tr><td colspan="8" class="empty">Пользователей нет</td></tr>
+                {% endif %}
+                </tbody>
+            </table>
+        </div>
+        <p class="foot">Удаление пользователя стирает все его данные: документы, прайс-листы, историю чата, аналитику запросов, файлы и кэш эмбеддингов. Действие необратимо.</p>
+    </div>
+{% endif %}
+<script>
+const ARM_MS = 5000;
+function arm(btn, kind) {
+    if (btn.dataset.armed === '1') { fire(btn, kind); return; }
+    btn.dataset.armed = '1';
+    btn.classList.add('armed');
+    const old = btn.textContent;
+    btn.textContent = 'Точно удалить?';
+    setTimeout(() => {
+        if (btn.dataset.armed === '1') {
+            btn.dataset.armed = '0';
+            btn.classList.remove('armed');
+            btn.textContent = old;
+        }
+    }, ARM_MS);
+}
+function showMsg(text, isError) {
+    const msg = document.getElementById('msg');
+    msg.textContent = text;
+    msg.classList.toggle('error', !!isError);
+    msg.classList.remove('hidden');
+}
+async function fire(btn, kind) {
+    const tr = btn.closest('tr');
+    const userId = Number(tr.dataset.id);
+    const username = tr.querySelector('.uname').textContent;
+    const isUser = kind === 'del-user';
+    const body = isUser ? { user_id: userId, confirm: true } : { user_id: userId };
+    try {
+        const r = await fetch('/admin/api/' + (isUser ? 'delete-user' : 'delete-analytics'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        if (d.success) {
+            showMsg(d.message);
+            setTimeout(() => location.reload(), 800);
+        } else {
+            showMsg(d.error || 'Ошибка выполнения', true);
+        }
+    } catch (e) {
+        showMsg('Ошибка сети: ' + e, true);
+    }
+}
+</script>
+</body>
+</html>

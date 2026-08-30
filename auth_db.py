@@ -938,3 +938,69 @@ def get_analytics(user_id):
     except Exception as e:
         logger.error(f"Ошибка получения аналитики: {e}")
         return empty
+# === Админ-панель: удаление пользователей и аналитики ===
+
+def delete_user(user_id):
+    """Полное удаление пользователя из БД.
+
+    Все дочерние таблицы (user_documents, price_items, chat_history,
+    query_analytics) имеют ON DELETE CASCADE — каскад чистит их автоматически.
+    """
+    if not user_id:
+        return False, 0
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        if deleted:
+            logger.info(f"🗑️ Пользователь #{user_id} удалён из БД (каскад: документы/прайсы/чат/аналитика)")
+        return deleted > 0, deleted
+    except Exception as e:
+        logger.error(f"Ошибка удаления пользователя #{user_id}: {e}")
+        return False, 0
+
+
+def delete_user_analytics(user_id):
+    """Удаление аналитики запросов пользователя (только query_analytics)."""
+    if not user_id:
+        return 0
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM query_analytics WHERE user_id = %s", (user_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"🗑️ Аналитика пользователя #{user_id}: удалено {deleted} записей")
+        return deleted
+    except Exception as e:
+        logger.error(f"Ошибка удаления аналитики пользователя #{user_id}: {e}")
+        return 0
+
+
+def get_all_users_with_stats():
+    """Список всех пользователей со счётчиками данных (для админ-панели)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT u.id, u.username, u.created_at,
+                   (SELECT COUNT(*) FROM user_documents d WHERE d.user_id = u.id) AS docs,
+                   (SELECT COUNT(*) FROM price_items p WHERE p.user_id = u.id) AS prices,
+                   (SELECT COUNT(*) FROM chat_history c WHERE c.user_id = u.id) AS messages,
+                   (SELECT COUNT(*) FROM query_analytics q WHERE q.user_id = u.id) AS analytics
+            FROM users u
+            ORDER BY u.id
+        """)
+        users = [dict(r) for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return users
+    except Exception as e:
+        logger.error(f"Ошибка получения списка пользователей со счётчиками: {e}")
+        return []

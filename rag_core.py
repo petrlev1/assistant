@@ -1461,6 +1461,27 @@ def get_user_rag(user_id):
         return core
 
 
+def drop_user_rag(user_id):
+    """Выгрузить RAGCore пользователя из памяти (нужно при удалении пользователя).
+
+    Освобождает эмбеддинги/BM25/фрагменты БЗ — у активных пользователей это
+    гигабайты RAM. Общую модель эмбеддингов (синглтон) не трогаем.
+    """
+    with _user_cores_lock:
+        core = _user_cores.pop(user_id, None)
+    if core is None:
+        return
+    try:
+        core.my_knowledge = []
+        core.all_knowledge_dict = {}
+        core.fragment_sources = []
+        core.corpus_embeddings = None
+        core.bm25 = None
+        core.tokenized_corpus = None
+        logger.info(f"🧹 RAGCore пользователя #{user_id} выгружен из памяти")
+    except Exception as e:
+        logger.error(f"Ошибка выгрузки RAGCore пользователя #{user_id}: {e}")
+
 # Для тестирования и запуска интерфейса настроек
 if __name__ == "__main__":
     # Теперь вместо GUI можно просто показать настройки или запустить тест

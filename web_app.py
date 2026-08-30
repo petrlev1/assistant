@@ -8,9 +8,13 @@ import os
 import io
 import zipfile
 import time
-from rag_core import get_rag_system, get_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview
+import json
+import re
+import secrets
+import shutil
+from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 import docs_renderer
 
 # Настройка логирования
@@ -992,6 +996,161 @@ def telegram_stop():
     except Exception as e:
         logger.exception(f"Ошибка остановки Telegram бота: {e}")
         return jsonify({'success': False, 'error': 'Не удалось остановить бота'}), 500
+
+
+
+# === Админ-панель (скрытая страница /admin — ссылок на неё нигде нет) ===
+# Учётка админа НЕ в git: admin_config.json (gitignored, как db_config.json) либо
+# переменные окружения ADMIN_USERNAME / ADMIN_PASSWORD. Если ничего не задано —
+# вход в админку отключён (все попытки логина отклоняются).
+_ADMIN_CONFIG_FILE = "admin_config.json"
+
+
+def _load_admin_credentials():
+    """(username, password) админа: env → admin_config.json → (None, None)."""
+    env_user = os.environ.get("ADMIN_USERNAME", "").strip()
+    env_pass = os.environ.get("ADMIN_PASSWORD", "")
+    if env_user and env_pass:
+        return env_user, env_pass
+    try:
+        with open(_ADMIN_CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        user = (cfg.get("admin_username") or "").strip()
+        password = cfg.get("admin_password") or ""
+        if user and password:
+            return user, password
+    except OSError:
+        pass
+    except ValueError:
+        logger.error(f"⚠️ {_ADMIN_CONFIG_FILE} повреждён — вход в админ-панель отключён")
+    return None, None
+
+
+def _scrub_chat_logs(user_id):
+    """Вычитка строк пользователя из файловых логов чата (chat_logs/*.log).
+
+    Логи пишутся построчно с пометкой «(ID: N):». Перезапись через временный
+    файл + os.replace; при ошибке (файл занят) файл пропускается — best-effort.
+    """
+    pattern = re.compile(rf"\(ID: {user_id}\):")
+    removed = 0
+    log_dir = "chat_logs"
+    if not os.path.isdir(log_dir):
+        return 0
+    for fname in sorted(os.listdir(log_dir)):
+        if not fname.startswith("chat_") or not fname.endswith(".log"):
+            continue
+        path = os.path.join(log_dir, fname)
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        kept = [ln for ln in lines if not pattern.search(ln)]
+        if len(kept) == len(lines):
+            continue
+        removed += len(lines) - len(kept)
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.writelines(kept)
+            os.replace(tmp, path)
+        except OSError as e:
+            logger.warning(f"⚠️ Не удалось вычистить {fname}: {e} (файл занят?)")
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    if removed:
+        logger.info(f"🧹 Из chat_logs вычищено {removed} строк пользователя #{user_id}")
+    return removed
+
+
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+    """Скрытая админ-панель: вход по отдельной учётке + список пользователей.
+
+    Доступ только по прямому URL — ссылок на страницу нигде нет.
+    """
+    if request.method == 'POST':
+        # Rate-limit на попытки входа (10 за 5 минут)
+        if _rate_limited("admin_login", limit=10, window=300):
+            flash("Слишком много попыток входа. Подождите немного.", 'error')
+            return render_template('admin.html', mode='login'), 429
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        admin_user, admin_pass = _load_admin_credentials()
+        if (admin_user and admin_pass and username == admin_user
+                and secrets.compare_digest(password, admin_pass)):
+            session['admin'] = True
+            logger.info(f"🔐 Вход в админ-панель: {username}")
+            return redirect(url_for('admin'))
+        logger.warning(f"🚫 Неудачная попытка входа в админ-панель: {username}")
+        flash("Неверное имя пользователя или пароль", 'error')
+
+    if session.get('admin'):
+        users = get_all_users_with_stats()
+        return render_template('admin.html', mode='dashboard', users=users)
+    return render_template('admin.html', mode='login')
+
+
+@app.route('/admin/logout', methods=['POST'])
+def admin_logout():
+    """Выход из админ-панели (пользовательская сессия не трогается)."""
+    session.pop('admin', None)
+    return redirect(url_for('admin'))
+
+
+@app.route('/admin/api/delete-user', methods=['POST'])
+def admin_delete_user():
+    """Полное удаление пользователя и всех его данных (только для админа)."""
+    if not session.get('admin'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+    data = request.get_json(silent=True) or {}
+    user_id = data.get('user_id')
+    if (not isinstance(user_id, int) or isinstance(user_id, bool)
+            or user_id <= 0 or data.get('confirm') is not True):
+        return jsonify({'error': 'Некорректный запрос'}), 400
+
+    users = get_all_users_with_stats()
+    user = next((u for u in users if u['id'] == user_id), None)
+    if not user:
+        return jsonify({'error': 'Пользователь не найден'}), 404
+
+    # 1) Выгружаем RAGCore из памяти (эмбеддинги/BM25 — гигабайты RAM)
+    drop_user_rag(user_id)
+    # 2) БД: каскад ON DELETE CASCADE чистит документы, прайсы, чат, аналитику
+    ok, _ = delete_user(user_id)
+    if not ok:
+        return jsonify({'error': 'Ошибка удаления пользователя из БД'}), 500
+    # 3) Файлы пользователя и кэш эмбеддингов на диске
+    removed_dirs = []
+    for folder in (os.path.join('Database', f'user_{user_id}'),
+                   os.path.join('embeddings_cache', f'user_{user_id}')):
+        if os.path.isdir(folder):
+            shutil.rmtree(folder, ignore_errors=True)
+            removed_dirs.append(folder)
+    # 4) Вычитка строк пользователя из файловых логов чата
+    scrubbed = _scrub_chat_logs(user_id)
+    logger.info(f"🗑️ Админ удалил пользователя {user['username']} (#{user_id}): "
+                f"папки {removed_dirs}, строк логов: {scrubbed}")
+    return jsonify({'success': True,
+                    'message': f"Пользователь {user['username']} удалён со всеми данными",
+                    'removed_dirs': removed_dirs, 'log_lines_scrubbed': scrubbed})
+
+
+@app.route('/admin/api/delete-analytics', methods=['POST'])
+def admin_delete_analytics():
+    """Удаление аналитики запросов пользователя (сам пользователь сохраняется)."""
+    if not session.get('admin'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+    data = request.get_json(silent=True) or {}
+    user_id = data.get('user_id')
+    if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id <= 0:
+        return jsonify({'error': 'Некорректный запрос'}), 400
+    deleted = delete_user_analytics(user_id)
+    return jsonify({'success': True, 'deleted': deleted,
+                    'message': f'Удалено записей аналитики: {deleted}'})
 
 
 def create_app():
