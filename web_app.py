@@ -1,6 +1,7 @@
 # web_app.py - Веб-интерфейс для RAG-системы (с авторизацией)
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file, abort
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file, abort, make_response
 import threading
+import uuid
 import logging
 import asyncio
 import os
@@ -207,6 +208,18 @@ def init_auth():
         logger.error(f"Ошибка инициализации БД аутентификации: {e}")
 
 
+def _device_id():
+    """Идентификатор устройства (браузера) из cookie device_id.
+
+    Каждое устройство получает свой UUID при первом заходе — у каждого
+    устройства свой чат, а аналитика остаётся общей на логин.
+    """
+    did = request.cookies.get('device_id')
+    if not did or len(did) > 64:
+        did = uuid.uuid4().hex
+    return did
+
+
 # === Маршруты аутентификации ===
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -287,7 +300,10 @@ def chat():
     # Приветствие формируется из персонального промта: бот представляется своей ролью
     user_prompt = get_user_prompt(session['user_id'])
     greeting = build_greeting(user_prompt, session.get('username', 'Пользователь'))
-    return render_template('index.html', greeting=greeting)
+    did = _device_id()
+    resp = make_response(render_template('index.html', greeting=greeting))
+    resp.set_cookie('device_id', did, max_age=365 * 24 * 3600, samesite='Lax')
+    return resp
 
 
 @app.route('/about')
@@ -362,8 +378,9 @@ def ask_question():
 
         logger.info(f"Вопрос от {user_name}: {question}")
 
-        # Сохраняем вопрос в историю
-        user_msg_id = save_message(user_id, 'user', question)
+        # Сохраняем вопрос в историю (свой чат на каждом устройстве)
+        device_id = _device_id()
+        user_msg_id = save_message(user_id, 'user', question, device_id=device_id)
 
         # Логирование вопроса в файл чата (с провайдером и моделью)
         provider = user_rag.settings.get("llm_provider", "")
@@ -377,7 +394,7 @@ def ask_question():
         logger.info("Ответ сгенерирован успешно")
 
         # Сохраняем ответ в историю
-        assistant_msg_id = save_message(user_id, 'assistant', answer)
+        assistant_msg_id = save_message(user_id, 'assistant', answer, device_id=device_id)
 
         # Логирование ответа
         chat_logger.log_message("Бот", user_id, answer, is_bot=True, provider=provider, model=model)
@@ -385,7 +402,9 @@ def ask_question():
         # Сохраняем пару вопрос-ответ в аналитику (переживает очистку чата)
         save_query_analytics(user_id, question, answer)
 
-        return jsonify({'answer': answer, 'user_msg_id': user_msg_id, 'assistant_msg_id': assistant_msg_id})
+        resp = jsonify({'answer': answer, 'user_msg_id': user_msg_id, 'assistant_msg_id': assistant_msg_id})
+        resp.set_cookie('device_id', device_id, max_age=365 * 24 * 3600, samesite='Lax')
+        return resp
 
     except Exception as e:
         logger.exception(f"Ошибка обработки вопроса: {e}")  # полный traceback в лог
@@ -404,8 +423,11 @@ def get_chat_history():
     if 'user_id' not in session:
         return jsonify({'error': 'Необходима авторизация'}), 401
 
-    messages = get_history(session['user_id'])
-    return jsonify({'messages': messages})
+    did = _device_id()
+    messages = get_history(session['user_id'], device_id=did)
+    resp = jsonify({'messages': messages})
+    resp.set_cookie('device_id', did, max_age=365 * 24 * 3600, samesite='Lax')
+    return resp
 
 
 @app.route('/analytics')
@@ -423,10 +445,13 @@ def clear_chat():
     if 'user_id' not in session:
         return jsonify({'error': 'Необходима авторизация'}), 401
 
-    success = clear_chat_history(session['user_id'])
+    did = _device_id()
+    success = clear_chat_history(session['user_id'], device_id=did)
     if success:
-        logger.info(f"🗑️ Пользователь {session.get('username')} очистил историю чата")
-        return jsonify({'success': True, 'message': 'История чата очищена'})
+        logger.info(f"🗑️ Пользователь {session.get('username')} очистил историю чата (устройство {did[:8]}…)")
+        resp = jsonify({'success': True, 'message': 'История чата очищена'})
+        resp.set_cookie('device_id', did, max_age=365 * 24 * 3600, samesite='Lax')
+        return resp
     else:
         return jsonify({'error': 'Ошибка при очистке истории'}), 500
 

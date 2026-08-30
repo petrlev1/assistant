@@ -662,10 +662,18 @@ def init_chat_history():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Миграция: колонка устройства — у каждого устройства (браузера) свой чат.
+        # Старые записи получают метку 'web' и показываются, пока нет своей истории.
+        cur.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS device_id VARCHAR(64) DEFAULT 'web'")
         # Индекс для быстрой загрузки истории по пользователю
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_chat_history_user
             ON chat_history (user_id, created_at)
+        """)
+        # Индекс для быстрой загрузки истории по пользователю и устройству
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chat_history_device
+            ON chat_history (user_id, device_id, created_at)
         """)
         conn.commit()
         cur.close()
@@ -706,16 +714,17 @@ def init_query_analytics():
 
 
 
-def save_message(user_id, role, message):
-    """Сохранение сообщения в историю чата, возвращает id сообщения"""
+def save_message(user_id, role, message, device_id='web'):
+    """Сохранение сообщения в историю чата, возвращает id сообщения.
+    device_id — идентификатор устройства (браузера); у каждого устройства свой чат."""
     if not user_id or not message:
         return None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO chat_history (user_id, role, message) VALUES (%s, %s, %s) RETURNING id",
-            (user_id, role, message),
+            "INSERT INTO chat_history (user_id, role, message, device_id) VALUES (%s, %s, %s, %s) RETURNING id",
+            (user_id, role, message, device_id),
         )
         msg_id = cur.fetchone()[0]
         conn.commit()
@@ -747,15 +756,21 @@ def save_query_analytics(user_id, question, answer=None):
         return None
 
 
-def get_history(user_id, limit=50):
-    """Загрузка истории чата пользователя"""
+def get_history(user_id, limit=50, device_id='web'):
+    """Загрузка истории чата пользователя для конкретного устройства.
+
+    Пока у пользователя нет записей со своих устройств (device_id != 'web'),
+    показывается «наследственная» история (device_id='web') — данные не теряются.
+    """
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
             "SELECT id, role, message, created_at FROM chat_history "
-            "WHERE user_id = %s ORDER BY created_at ASC LIMIT %s",
-            (user_id, limit),
+            "WHERE user_id = %s AND (device_id = %s OR (device_id = 'web' AND NOT EXISTS ("
+            "    SELECT 1 FROM chat_history c2 WHERE c2.user_id = %s AND c2.device_id <> 'web'"
+            "))) ORDER BY created_at ASC LIMIT %s",
+            (user_id, device_id, user_id, limit),
         )
         messages = cur.fetchall()
         cur.close()
@@ -766,19 +781,27 @@ def get_history(user_id, limit=50):
         return []
 
 
-def clear_chat_history(user_id):
-    """Очистка истории чата пользователя"""
+def clear_chat_history(user_id, device_id=None):
+    """Очистка истории чата: для конкретного устройства (device_id) или всей, если не задан"""
     if not user_id:
         return False
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("DELETE FROM chat_history WHERE user_id = %s", (user_id,))
+        if device_id:
+            cur.execute(
+                "DELETE FROM chat_history WHERE user_id = %s AND device_id = %s",
+                (user_id, device_id),
+            )
+            log_note = f"устройства {device_id}"
+        else:
+            cur.execute("DELETE FROM chat_history WHERE user_id = %s", (user_id,))
+            log_note = "всех устройств"
         deleted = cur.rowcount
         conn.commit()
         cur.close()
         conn.close()
-        logger.info(f"🗑️ История чата пользователя #{user_id} очищена (удалено {deleted} записей)")
+        logger.info(f"🗑️ История чата пользователя #{user_id} очищена ({log_note}, удалено {deleted} записей)")
         return True
     except Exception as e:
         logger.error(f"Ошибка очистки истории чата: {e}")
