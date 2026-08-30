@@ -325,6 +325,7 @@ DOCS_PAGES = [
     ('documents', 'Документы и база знаний'),
     ('prices', 'Загрузка прайс-листа'),
     ('prompt', 'Персональный промт'),
+    ('analytics', 'Аналитика запросов'),
     ('faq', 'Частые вопросы'),
 ]
 _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs')
