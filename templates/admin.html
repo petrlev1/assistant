@@ -65,6 +65,8 @@
     td { padding: 11px 12px; border-bottom: 1px solid #1f2530; color: #cfd5e0; }
     tr:hover td { background: #141a24; }
     .uname { color: #fff; font-weight: 600; }
+    .folder { font-family: Consolas, Menlo, monospace; font-size: 12.5px; color: #9fb3d9; }
+    .missing { color: #e5484d; font-size: 11px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
     .actions { white-space: nowrap; }
     .actions .btn + .btn { margin-left: 8px; }
     .empty { text-align: center; color: #8b94a7; padding: 30px; }
@@ -103,7 +105,7 @@
             <table>
                 <thead>
                     <tr>
-                        <th>ID</th><th>Логин</th><th>Регистрация</th>
+                        <th>ID</th><th>Логин</th><th>Папка БЗ</th><th>Регистрация</th>
                         <th>Документы</th><th>Прайс-позиции</th><th>Сообщения</th><th>Аналитика</th>
                         <th>Действия</th>
                     </tr>
@@ -113,6 +115,7 @@
                     <tr data-id="{{ u.id }}">
                         <td>{{ u.id }}</td>
                         <td class="uname">{{ u.username }}</td>
+                        <td class="folder">{{ u.kb_folder }}{% if not u.kb_folder_exists %} <span class="missing">(нет на диске)</span>{% endif %}</td>
                         <td>{{ u.created_at.strftime('%d.%m.%Y %H:%M') if u.created_at else '—' }}</td>
                         <td>{{ u.docs }}</td>
                         <td>{{ u.prices }}</td>
@@ -125,7 +128,7 @@
                     </tr>
                 {% endfor %}
                 {% if not users %}
-                    <tr><td colspan="8" class="empty">Пользователей нет</td></tr>
+                    <tr><td colspan="9" class="empty">Пользователей нет</td></tr>
                 {% endif %}
                 </tbody>
             </table>

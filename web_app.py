@@ -1090,6 +1090,10 @@ def admin():
 
     if session.get('admin'):
         users = get_all_users_with_stats()
+        # Название папки БЗ пользователя на диске (справка для админа; локально)
+        for u in users:
+            u['kb_folder'] = os.path.join('Database', f"user_{u['id']}")
+            u['kb_folder_exists'] = os.path.isdir(u['kb_folder'])
         return render_template('admin.html', mode='dashboard', users=users)
     return render_template('admin.html', mode='login')
 
