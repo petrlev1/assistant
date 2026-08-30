@@ -676,6 +676,35 @@ def init_chat_history():
         logger.error(f"Ошибка инициализации chat_history: {e}")
         return False
 
+def init_query_analytics():
+    """Создание таблицы аналитики запросов (кнопка «Удалить весь чат» её не очищает)"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS query_analytics (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                question TEXT NOT NULL,
+                answer TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Индекс для быстрой выборки аналитики по пользователю
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_query_analytics_user
+            ON query_analytics (user_id, created_at)
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("Таблица query_analytics инициализирована")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка инициализации query_analytics: {e}")
+        return False
+
+
 
 def save_message(user_id, role, message):
     """Сохранение сообщения в историю чата, возвращает id сообщения"""
@@ -695,6 +724,26 @@ def save_message(user_id, role, message):
         return msg_id
     except Exception as e:
         logger.error(f"Ошибка сохранения сообщения: {e}")
+        return None
+
+
+def save_query_analytics(user_id, question, answer=None):
+    """Сохранение пары вопрос-ответ в аналитику (не удаляется при очистке чата)"""
+    if not user_id or not question:
+        return None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO query_analytics (user_id, question, answer) VALUES (%s, %s, %s)",
+            (user_id, question, answer),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения аналитики запроса: {e}")
         return None
 
 
@@ -805,3 +854,64 @@ def delete_message_pair(assistant_id, user_id):
     except Exception as e:
         logger.error(f"Ошибка удаления пары сообщений: {e}")
         return False, []
+
+def get_analytics(user_id):
+    """Аналитика запросов текущего пользователя (только свои данные)"""
+    empty = {
+        "total": 0,
+        "top_questions": [],
+        "activity": [],
+        "unanswered": [],
+        "recent": [],
+    }
+    if not user_id:
+        return empty
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cur.execute("SELECT COUNT(*) AS c FROM query_analytics WHERE user_id = %s", (user_id,))
+        total = cur.fetchone()["c"]
+
+        cur.execute(
+            "SELECT question, COUNT(*) AS c FROM query_analytics "
+            "WHERE user_id = %s GROUP BY question ORDER BY c DESC LIMIT 10",
+            (user_id,),
+        )
+        top_questions = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            "SELECT DATE(created_at) AS d, COUNT(*) AS c FROM query_analytics "
+            "WHERE user_id = %s GROUP BY DATE(created_at) ORDER BY d DESC LIMIT 30",
+            (user_id,),
+        )
+        activity = [dict(r) for r in cur.fetchall()]
+        activity.reverse()
+
+        cur.execute(
+            "SELECT question, created_at FROM query_analytics "
+            "WHERE user_id = %s AND (answer IS NULL OR BTRIM(answer) = '') "
+            "ORDER BY created_at DESC LIMIT 20",
+            (user_id,),
+        )
+        unanswered = [dict(r) for r in cur.fetchall()]
+
+        cur.execute(
+            "SELECT question, answer, created_at FROM query_analytics "
+            "WHERE user_id = %s ORDER BY created_at DESC LIMIT 10",
+            (user_id,),
+        )
+        recent = [dict(r) for r in cur.fetchall()]
+
+        cur.close()
+        conn.close()
+        return {
+            "total": total,
+            "top_questions": top_questions,
+            "activity": activity,
+            "unanswered": unanswered,
+            "recent": recent,
+        }
+    except Exception as e:
+        logger.error(f"Ошибка получения аналитики: {e}")
+        return empty

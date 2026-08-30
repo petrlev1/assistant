@@ -689,6 +689,18 @@
             transition: background 0.2s;
         }
         .btn-clear-chat:hover { background: rgba(244,67,54,0.2); }
+        .btn-analytics {
+            background: rgba(79,70,229,0.08);
+            color: #4f46e5;
+            border: 1px solid rgba(79,70,229,0.3);
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 13px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.2s;
+        }
+        .btn-analytics:hover { background: rgba(79,70,229,0.15); }
         /* Кнопка открытия панели документов в шапке — видна только на мобильных */
         .btn-docs-mobile {
             display: none;
@@ -770,7 +782,10 @@
         <div class="chat-side">
             <div class="chat-header">
                 <h3>💬 Чат</h3>
-                <button class="btn-clear-chat" onClick="clearChat()" title="Удалить всю историю чата">🗑️ Удалить весь чат</button>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <a href="{{ url_for('analytics') }}" class="btn-analytics" title="Статистика ваших запросов">📊 Аналитика</a>
+                    <button class="btn-clear-chat" onClick="clearChat()" title="Удалить всю историю чата">🗑️ Удалить весь чат</button>
+                </div>
             </div>
             <div class="chat-container" id="chatContainer">
                 <div class="message bot">

@@ -9,7 +9,7 @@ import zipfile
 import time
 from rag_core import get_rag_system, get_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics
 import docs_renderer
 
 # Настройка логирования
@@ -201,6 +201,7 @@ def init_auth():
     try:
         init_db()
         init_chat_history()
+        init_query_analytics()
         logger.info("База данных аутентификации инициализирована")
     except Exception as e:
         logger.error(f"Ошибка инициализации БД аутентификации: {e}")
@@ -381,10 +382,19 @@ def ask_question():
         # Логирование ответа
         chat_logger.log_message("Бот", user_id, answer, is_bot=True, provider=provider, model=model)
 
+        # Сохраняем пару вопрос-ответ в аналитику (переживает очистку чата)
+        save_query_analytics(user_id, question, answer)
+
         return jsonify({'answer': answer, 'user_msg_id': user_msg_id, 'assistant_msg_id': assistant_msg_id})
 
     except Exception as e:
         logger.exception(f"Ошибка обработки вопроса: {e}")  # полный traceback в лог
+        # Вопрос сохраняется в аналитику даже при ошибке (пустой ответ = кандидат в пробелы базы)
+        try:
+            if 'user_id' in locals() and 'question' in locals() and question:
+                save_query_analytics(user_id, question, None)
+        except Exception:
+            pass
         return jsonify({'error': 'Внутренняя ошибка при обработке вопроса. Попробуйте ещё раз.'}), 500
 
 
@@ -396,6 +406,15 @@ def get_chat_history():
 
     messages = get_history(session['user_id'])
     return jsonify({'messages': messages})
+
+
+@app.route('/analytics')
+def analytics():
+    """Страница аналитики запросов — только данные текущего пользователя"""
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    stats = get_analytics(session['user_id'])
+    return render_template('analytics.html', stats=stats)
 
 
 @app.route('/api/chat/clear', methods=['POST'])
