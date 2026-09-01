@@ -24,6 +24,14 @@ import threading
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# === Исправления ответов пользователем (Вариант B) ===
+# Кнопка «✏️» у ответа в чате: неверный ответ правится, пара Вопрос-Ответ
+# сохраняется в Database/user_{id}/newdatabase.csv (CSV: «Вопрос,Ответ»). При повторном похожем
+# вопросе отвечаем исправлением напрямую (без LLM).
+QA_CORRECTION_FILE = "newdatabase.csv"
+QA_CORRECTION_THRESHOLD = 0.92  # мин. косинусная схожесть вопроса с исправлением (e5 даёт высокий базовый фон)
+QA_CORRECTION_MARGIN = 0.025  # мин. отрыв лучшего исправления от второго (при нескольких исправлениях)
+
 # === Парсер прайс-листов ===
 
 # Ключевые слова колонок прайс-листа (по подстроке, в нижнем регистре)
@@ -402,6 +410,28 @@ _EMBEDDING_MODEL = None
 _EMBEDDING_MODEL_LOCK = threading.Lock()
 
 
+def parse_qa_pairs_file(file_path):
+    """Парсит файл исправлений (newdatabase.csv) → список [вопрос, ответ].
+
+    CSV с заголовком «Вопрос,Ответ» (utf-8-sig — переживает BOM от Excel).
+    Ответ может содержать запятые и переносы строк — он в кавычках.
+    """
+    pairs = []
+    if not file_path or not os.path.isfile(file_path):
+        return pairs
+    try:
+        with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                q = (row.get("Вопрос") or "").strip()
+                a = (row.get("Ответ") or "").strip()
+                if q or a:
+                    pairs.append([q, a])
+    except Exception as e:
+        logger.error(f"❌ Ошибка чтения {file_path}: {e}")
+    return pairs
+
+
 def _get_embedding_model():
     """Возвращает общий экземпляр модели эмбеддингов (лениво, потокобезопасно)."""
     global _EMBEDDING_MODEL
@@ -426,6 +456,7 @@ class RAGCore:
         self.settings = RAGSettings()
         self.current_user_id = user_id  # None = общая база знаний
         self._state_lock = threading.RLock()  # защита reload/search от гонок внутри одного core
+        self.qa_corrections = []  # пары Вопрос-Ответ из newdatabase.txt (исправления пользователя)
         
         # Переинициализация клиента с актуальными настройками
         self._setup_client()
@@ -1079,6 +1110,7 @@ class RAGCore:
             
             # Загрузка знаний
             self.all_knowledge_dict = self.load_knowledge_from_txt(user_id=user_id)
+            self._load_qa_corrections()
             
             # Получаем список текущих файлов (по имени без пути)
             current_file_names = set()
@@ -1239,6 +1271,79 @@ class RAGCore:
         answer += "\n\n" + self._format_sources_note(sources)
         return answer
 
+    def _load_qa_corrections(self):
+        """Загрузка исправлений Вопрос-Ответ из newdatabase.csv пользователя.
+
+        Вызывается при каждой пересборке БЗ. Эмбеддинги вопросов считаются заранее,
+        чтобы при ответе не гонять модель на каждый вопрос.
+        """
+        self.qa_corrections = []
+        if self.current_user_id is None:
+            return
+        path = os.path.join("Database", f"user_{self.current_user_id}", QA_CORRECTION_FILE)
+        pairs = [p for p in parse_qa_pairs_file(path) if p[0].strip() and p[1].strip()]
+        if not pairs:
+            return
+        try:
+            q_embs = self.model.encode([q for q, a in pairs], convert_to_tensor=True)
+            if q_embs.dim() == 1:
+                q_embs = q_embs.unsqueeze(0)
+            self.qa_corrections = [
+                {"question": q, "answer": a, "embedding": emb}
+                for (q, a), emb in zip(pairs, q_embs)
+            ]
+            logger.info(f"✅ Загружено исправлений Вопрос-Ответ: {len(self.qa_corrections)} ({QA_CORRECTION_FILE})")
+        except Exception as e:
+            logger.error(f"❌ Ошибка эмбеддинга исправлений {QA_CORRECTION_FILE}: {e}")
+
+    def _try_qa_correction(self, question):
+        """Вариант B: ищем вопрос среди сохранённых исправлений пользователя.
+
+        Три уровня:
+          1) точное совпадение после нормализации (регистр/пробелы) → ответ однозначно;
+          2) иначе косинусная схожесть: best ≥ порог И, если исправлений несколько,
+             отрыв от второго лучшего ≥ маржи (e5 даёт высокий фон для любых вопросов);
+          3) иначе None → обычный RAG-путь (фрагменты newdatabase.csv всё равно в БЗ).
+        """
+        if not self.qa_corrections or not question:
+            return None
+        try:
+            norm_q = " ".join(question.lower().split())
+            for c in self.qa_corrections:
+                if " ".join(c["question"].lower().split()) == norm_q:
+                    logger.info("✅ Исправление: точное совпадение вопроса")
+                    return self._format_correction_answer(c["answer"])
+
+            q_emb = self.model.encode(question, convert_to_tensor=True)
+            matrix = torch.stack([c["embedding"] for c in self.qa_corrections])
+            scores = util.cos_sim(q_emb, matrix)[0]
+            best_idx = int(scores.argmax())
+            best_score = float(scores[best_idx])
+            threshold = self.settings.get("qa_correction_threshold", QA_CORRECTION_THRESHOLD)
+            if best_score < threshold:
+                logger.info(f"ℹ️ Исправление не применено: макс. схожесть {best_score:.3f} < {threshold}")
+                return None
+            if len(self.qa_corrections) > 1:
+                sorted_scores, _ = torch.sort(scores, descending=True)
+                margin = float(sorted_scores[0] - sorted_scores[1])
+                margin_need = self.settings.get("qa_correction_margin", QA_CORRECTION_MARGIN)
+                if margin < margin_need:
+                    logger.info(f"ℹ️ Исправление не применено: маржа {margin:.3f} < {margin_need}")
+                    return None
+            corr = self.qa_corrections[best_idx]
+            logger.info(f"✅ Применено исправление (схожесть {best_score:.3f}): {corr['question']}")
+            return self._format_correction_answer(corr["answer"])
+        except Exception as e:
+            logger.error(f"❌ Ошибка поиска исправления: {e}")
+            return None
+
+    def _format_correction_answer(self, answer):
+        """Исправленный ответ + ссылка на источник newdatabase.csv (или None)."""
+        answer = (answer or "").strip()
+        if not answer:
+            return None
+        return answer + "\n\n" + self._format_sources_note([QA_CORRECTION_FILE])
+
     @staticmethod
     def _format_price(price):
         """12500.0 → '12 500 ₽'; None → 'цена не указана'"""
@@ -1337,6 +1442,13 @@ class RAGCore:
                 price_answer += "\n\n⚠️ Отправка запросов к LLM моделям отключена."
             return price_answer
         
+        # Вариант B: пользователь исправил ответ → пара Вопрос-Ответ в newdatabase.txt.
+        # Похожий вопрос → отвечаем исправлением напрямую (без LLM и поиска по БЗ).
+        if not self.settings.get("disable_qa_corrections", False):
+            correction_answer = self._try_qa_correction(question)
+            if correction_answer:
+                return correction_answer
+
         # Проверяем настройку отключения поиска в базе знаний
         disable_kb_search = self.settings.get("disable_knowledge_base_search", False)
         

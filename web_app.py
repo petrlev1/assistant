@@ -12,7 +12,8 @@ import json
 import re
 import secrets
 import shutil
-from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview
+import csv
+from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 import docs_renderer
@@ -708,6 +709,74 @@ def upload_document():
         message += f'. Прайс-листы: {total_price} позиций'
     return jsonify({'success': True, 'message': message, 'results': results,
                     'is_price_list': any_price, 'price_count': total_price})
+
+
+@app.route('/api/kb/qa-correction', methods=['POST'])
+def save_qa_correction():
+    """Сохранение исправленного ответа в базу знаний (newdatabase.csv).
+
+    Тело: {question, answer}. Тот же вопрос уже исправляли → обновляем ответ,
+    иначе добавляем новую пару. После записи — фоновая переиндексация БЗ.
+    """
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    data = request.get_json() or {}
+    question = (data.get('question') or '').strip()
+    answer = (data.get('answer') or '').strip()
+    if not question or not answer:
+        return jsonify({'error': 'Вопрос и ответ не могут быть пустыми'}), 400
+
+    user_id = session['user_id']
+    user_folder = os.path.join('Database', f'user_{user_id}')
+    os.makedirs(user_folder, exist_ok=True)
+    file_path = os.path.join(user_folder, QA_CORRECTION_FILE)
+
+    pairs = parse_qa_pairs_file(file_path)
+
+    def _norm(s):
+        return ' '.join(s.lower().split())
+
+    norm_q = _norm(question)
+    replaced = False
+    for p in pairs:
+        if _norm(p[0]) == norm_q:
+            p[1] = answer
+            replaced = True
+            break
+    if not replaced:
+        pairs.append([question, answer])
+
+    # Атомарная запись: временный файл + переименование (без половинок файла).
+    # utf-8-sig (BOM) — чтобы Excel открывал файл без кракозябр.
+    tmp_path = file_path + '.tmp'
+    try:
+        with open(tmp_path, 'w', encoding='utf-8-sig', newline='') as f:
+            writer = csv.writer(f, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(['Вопрос', 'Ответ'])
+            for q, a in pairs:
+                writer.writerow([q, a])
+        os.replace(tmp_path, file_path)
+    except Exception as e:
+        logger.error(f"❌ Ошибка записи {file_path}: {e}")
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        return jsonify({'error': 'Не удалось сохранить исправление'}), 500
+
+    # Запись о документе — для списка «Документы» и ссылки-источника в чате
+    existing = get_user_documents(user_id)
+    if not any(d['filename'] == QA_CORRECTION_FILE for d in existing):
+        add_document(user_id, QA_CORRECTION_FILE, QA_CORRECTION_FILE, doc_group='✅ Исправления')
+
+    if rag_ready:
+        _reindex_user_async(user_id)
+
+    action = 'обновлено' if replaced else 'добавлено'
+    logger.info(f"✏️ Пользователь {session.get('username')} {action} исправление: {question[:80]}")
+    return jsonify({'success': True, 'message': f'Исправление {action} в базе знаний'})
 
 
 @app.route('/api/documents/delete/<int:doc_id>', methods=['POST'])

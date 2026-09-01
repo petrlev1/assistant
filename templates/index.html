@@ -149,6 +149,83 @@
             background: #ffebee;
             color: #f44336;
         }
+        /* Edit button on bot messages: correct answer → save Q-A pair to KB */
+        .message .btn-msg-edit {
+            position: absolute;
+            top: 4px;
+            right: 28px;
+            background: rgba(0,0,0,0.05);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 2px 6px;
+            opacity: 0;
+            transition: opacity 0.2s;
+            color: #999;
+            line-height: 1;
+        }
+        .message.bot:hover .btn-msg-edit {
+            opacity: 1;
+        }
+        .message .btn-msg-edit:hover {
+            background: #e3f2fd;
+            color: #1565c0;
+        }
+        /* Modal: correct answer and save to KB */
+        .qa-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .qa-modal-box {
+            background: white;
+            border-radius: 10px;
+            padding: 20px 24px;
+            width: min(640px, 92vw);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+        }
+        .qa-modal-box h3 { margin: 0 0 12px; color: #333; }
+        .qa-modal-box label { display: block; font-size: 13px; color: #666; margin: 10px 0 4px; }
+        .qa-modal-question {
+            background: #f5f5f5;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 14px;
+            color: #333;
+            max-height: 120px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .qa-modal-box textarea {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 140px;
+        }
+        .qa-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+        .qa-modal-actions button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        #qaModalSave { background: #764ba2; color: white; }
+        #qaModalSave:hover { background: #5f3b85; }
+        #qaModalCancel { background: #eee; color: #333; }
+        #qaModalCancel:hover { background: #ddd; }
+        #qaModalSave:disabled { opacity: 0.5; cursor: default; }
         /* Input area */
         .input-area {
             background: white;
@@ -888,6 +965,20 @@
     </div>
     <div class="docs-overlay" id="promptOverlay" onClick="togglePromptPanel()"></div>
 
+    <!-- Модалка: исправить ответ и сохранить в базу знаний -->
+    <div class="qa-modal" id="qaModal" onClick="if (event.target === this) closeQaModal()">
+        <div class="qa-modal-box">
+            <h3>✏️ Исправить ответ</h3>
+            <label>Вопрос</label>
+            <div class="qa-modal-question" id="qaModalQuestion"></div>
+            <label>Ответ — сохранится в базу знаний (newdatabase.csv)</label>
+            <textarea id="qaModalAnswer" placeholder="Исправленный ответ..."></textarea>
+            <div class="qa-modal-actions">
+                <button id="qaModalCancel" onClick="closeQaModal()">Отмена</button>
+                <button id="qaModalSave" onClick="saveQaCorrection()">💾 Сохранить в базу знаний</button>
+            </div>
+        </div>
+    </div>
     <script>
         window.GREETING = {{ greeting|tojson }};
         const chatContainer = document.getElementById('chatContainer');
@@ -930,7 +1021,7 @@
             div.innerHTML = `
                 <div class="label">${isUser ? 'Вы' : 'Бот'}</div>
                 <div class="content">${renderMessageContent(text)}</div>
-                ${(!isUser && msgId) ? `<button class="btn-msg-delete" onclick="deleteMessagePair(${msgId}, this)" title="Удалить вопрос + ответ">✕</button>` : ''}
+                ${(!isUser && msgId) ? `<button class="btn-msg-edit" onclick="openEditModal(${msgId}, this)" title="Исправить ответ и сохранить в БЗ">✏️</button><button class="btn-msg-delete" onclick="deleteMessagePair(${msgId}, this)" title="Удалить вопрос + ответ">✕</button>` : ''}
             `;
             chatContainer.insertBefore(div, typingIndicator);
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -983,7 +1074,7 @@
                             div.innerHTML = `
                                 <div class="label">${label}</div>
                                 <div class="content">${renderMessageContent(msg.message)}</div>
-                                ${(!isUser) ? `<button class="btn-msg-delete" onclick="deleteMessagePair(${msg.id}, this)" title="Удалить вопрос + ответ">✕</button>` : ''}
+                                ${(!isUser) ? `<button class="btn-msg-edit" onclick="openEditModal(${msg.id}, this)" title="Исправить ответ и сохранить в БЗ">✏️</button><button class="btn-msg-delete" onclick="deleteMessagePair(${msg.id}, this)" title="Удалить вопрос + ответ">✕</button>` : ''}
                             `;
                             chatContainer.insertBefore(div, typingIndicator);
                         });
@@ -1545,6 +1636,61 @@
                     if (hasUserMsg) userMsg.style.opacity = '1';
                     alert('Ошибка соединения с сервером');
                 });
+        }
+        function openEditModal(msgId, btn) {
+            const botMsg = btn.closest('.message');
+            if (!botMsg) return;
+            // Ответ без блока «Источники:»
+            let answerText = (botMsg.querySelector('.content').innerText || '').trim();
+            const srcIdx = answerText.indexOf('Источники:');
+            if (srcIdx >= 0) answerText = answerText.slice(0, srcIdx).trim();
+            // Вопрос — предыдущее сообщение пользователя
+            const userMsg = botMsg.previousElementSibling;
+            const hasUserMsg = userMsg && userMsg.classList.contains('message') && userMsg.classList.contains('user');
+            if (!hasUserMsg) {
+                alert('Не удалось определить вопрос к этому ответу');
+                return;
+            }
+            document.getElementById('qaModalQuestion').textContent = userMsg.querySelector('.content').innerText.trim();
+            document.getElementById('qaModalAnswer').value = answerText;
+            window._qaEdit = { botMsg: botMsg, userMsg: userMsg };
+            document.getElementById('qaModal').style.display = 'flex';
+            document.getElementById('qaModalAnswer').focus();
+        }
+
+        function closeQaModal() {
+            document.getElementById('qaModal').style.display = 'none';
+        }
+
+        function saveQaCorrection() {
+            const question = document.getElementById('qaModalQuestion').textContent.trim();
+            const answer = document.getElementById('qaModalAnswer').value.trim();
+            if (!question || !answer) {
+                alert('Вопрос и ответ не могут быть пустыми');
+                return;
+            }
+            const saveBtn = document.getElementById('qaModalSave');
+            saveBtn.disabled = true;
+            fetch('/api/kb/qa-correction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: question, answer: answer })
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        const edit = window._qaEdit;
+                        if (edit && edit.botMsg) {
+                            edit.botMsg.querySelector('.content').innerHTML = renderMessageContent(answer);
+                        }
+                        closeQaModal();
+                        alert('✅ ' + (data.message || 'Сохранено в базу знаний'));
+                    } else {
+                        alert('Ошибка: ' + (data.error || 'Не удалось сохранить'));
+                    }
+                })
+                .catch(() => alert('Ошибка соединения с сервером'))
+                .finally(() => { saveBtn.disabled = false; });
         }
     </script>
 </body>
