@@ -136,7 +136,7 @@ _KEY_HINTS = {
 _WEB_MODES = [
     ("local", "Локальный (localhost:8077)"),
     ("external_ip", "Внешний IP (85.234.31.16:8077)"),
-    ("domain", "Внешний домен (assistant.proaibro.ru) — Caddy"),
+    ("domain", "Внешний домен (ragstone.ru) — Caddy"),
 ]
 
 # Булевы настройки (в меню выбираются стрелками true/false)
@@ -755,7 +755,7 @@ def cmd_web_start(mode, open_browser=False):
     urls = {
         "local": "http://localhost:8077",
         "external_ip": "http://85.234.31.16:8077",
-        "domain": "https://assistant.proaibro.ru",
+        "domain": "https://ragstone.ru",
     }
     mode_labels = {"local": "Локальный", "external_ip": "Внешний IP", "domain": "Внешний домен"}
     ok = _wait_for_web(timeout=10)
@@ -1013,7 +1013,7 @@ def build_parser():
     web_sub = wsp.add_subparsers(dest="web_action", required=True)
     ws = web_sub.add_parser("start", help="Запустить веб-интерфейс (режим по умолчанию: local)")
     ws.add_argument("--mode", choices=["local", "external_ip", "domain"], default="local",
-                    help="local — localhost:8077; external_ip — 85.234.31.16:8077; domain — Caddy + assistant.proaibro.ru")
+                    help="local — localhost:8077; external_ip — 85.234.31.16:8077; domain — Caddy + ragstone.ru")
     ws.add_argument("--open", action="store_true", help="Открыть браузер после запуска")
     wr = web_sub.add_parser("restart", help="Перезапустить веб-интерфейс (stop + start)")
     wr.add_argument("--mode", choices=["local", "external_ip", "domain"], default="local")
