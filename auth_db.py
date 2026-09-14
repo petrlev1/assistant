@@ -6,6 +6,7 @@ import logging
 import json
 import re
 import os
+import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -981,6 +982,211 @@ def delete_user_analytics(user_id):
     except Exception as e:
         logger.error(f"Ошибка удаления аналитики пользователя #{user_id}: {e}")
         return 0
+
+
+
+# ============================================================
+# Сайт-виджеты: чат-бот для встраивания на сайт клиента
+# ============================================================
+
+def init_widgets():
+    """Таблицы виджетов: настройки (widgets) + счётчик дневных обращений (widget_hits)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS widgets (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name VARCHAR(100) NOT NULL,
+                key VARCHAR(64) UNIQUE NOT NULL,
+                allowed_domains TEXT DEFAULT '',
+                theme_color VARCHAR(9) DEFAULT '#667eea',
+                daily_limit INTEGER DEFAULT 200,
+                active BOOLEAN DEFAULT TRUE,
+                total_requests INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TIMESTAMP
+            )
+        """)
+        # Счётчик обращений по дням: дневной лимит снимается атомарно (widget_consume)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS widget_hits (
+                widget_id INTEGER NOT NULL REFERENCES widgets(id) ON DELETE CASCADE,
+                day DATE NOT NULL,
+                hits INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (widget_id, day)
+            )
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("Таблицы виджетов инициализированы")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка инициализации widgets: {e}")
+        return False
+
+
+def create_widget(user_id, name, allowed_domains='', daily_limit=200, theme_color='#667eea'):
+    """Создать виджет. Возвращает (ok, строка-виджет с ключом)."""
+    try:
+        key = secrets.token_urlsafe(16)
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "INSERT INTO widgets (user_id, name, key, allowed_domains, theme_color, daily_limit) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+            (user_id, name, key, (allowed_domains or '').strip().lower(), theme_color, int(daily_limit)),
+        )
+        row = dict(cur.fetchone())
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"Создан виджет «{name}» (#{row['id']}) для пользователя {user_id}")
+        return True, row
+    except Exception as e:
+        logger.error(f"Ошибка создания виджета: {e}")
+        return False, None
+
+
+def get_widget_by_key(key):
+    """Виджет по публичному ключу."""
+    if not key or len(key) > 64:
+        return None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM widgets WHERE key = %s", (key,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Ошибка получения виджета: {e}")
+        return None
+
+
+def list_user_widgets(user_id):
+    """Все виджеты пользователя + счётчик обращений за сегодня."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT w.*, COALESCE(h.hits, 0) AS today_hits
+            FROM widgets w
+            LEFT JOIN widget_hits h ON h.widget_id = w.id AND h.day = CURRENT_DATE
+            WHERE w.user_id = %s
+            ORDER BY w.created_at DESC
+        """, (user_id,))
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.error(f"Ошибка списка виджетов: {e}")
+        return []
+
+
+_WIDGET_COLS = {'name', 'allowed_domains', 'daily_limit', 'theme_color', 'active'}
+
+
+def update_widget(user_id, widget_id, fields):
+    """Точечное обновление виджета (только своего и только белых колонок)."""
+    fields = {k: v for k, v in fields.items() if k in _WIDGET_COLS}
+    if not fields:
+        return False
+    try:
+        sets = ', '.join(f"{k} = %s" for k in fields)
+        vals = list(fields.values()) + [widget_id, user_id]
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(f"UPDATE widgets SET {sets} WHERE id = %s AND user_id = %s", vals)
+        changed = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        conn.close()
+        return changed
+    except Exception as e:
+        logger.error(f"Ошибка обновления виджета: {e}")
+        return False
+
+
+def delete_widget(user_id, widget_id):
+    """Удаление своего виджета (обращения каскадно удаляются)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM widgets WHERE id = %s AND user_id = %s", (widget_id, user_id))
+        deleted = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        conn.close()
+        return deleted
+    except Exception as e:
+        logger.error(f"Ошибка удаления виджета: {e}")
+        return False
+
+
+def widget_consume(widget_id):
+    """Атомарно снять единицу дневного лимита. True — запрос разрешён, False — лимит исчерпан."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO widget_hits (widget_id, day, hits)
+            VALUES (%s, CURRENT_DATE, 1)
+            ON CONFLICT (widget_id, day) DO UPDATE
+                SET hits = widget_hits.hits + 1
+            WHERE widget_hits.hits < (SELECT daily_limit FROM widgets WHERE widgets.id = %s)
+        """, (widget_id, widget_id))
+        consumed = cur.rowcount > 0
+        if consumed:
+            cur.execute(
+                "UPDATE widgets SET total_requests = total_requests + 1, last_used_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (widget_id,),
+            )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return consumed
+    except Exception as e:
+        logger.error(f"Ошибка учёта обращений виджета: {e}")
+        return False
+
+
+def get_widget_history(user_id, device_scope, limit=100):
+    """История чата одного посетителя виджета (строго своя область, без fallback на 'web')."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT id, role, message, created_at FROM chat_history "
+            "WHERE user_id = %s AND device_id = %s ORDER BY created_at ASC LIMIT %s",
+            (user_id, device_scope, limit),
+        )
+        messages = [dict(m) for m in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return messages
+    except Exception as e:
+        logger.error(f"Ошибка загрузки истории виджета: {e}")
+        return []
+
+
+def clear_widget_history(user_id, device_scope):
+    """Очистка истории чата одного посетителя виджета."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM chat_history WHERE user_id = %s AND device_id = %s", (user_id, device_scope))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка очистки истории виджета: {e}")
+        return False
 
 
 def get_all_users_with_stats():

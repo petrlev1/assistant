@@ -16,6 +16,9 @@ import csv
 from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
+from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
+                     delete_widget, widget_consume, get_widget_by_key, get_widget_history,
+                     clear_widget_history)
 import docs_renderer
 
 # Настройка логирования
@@ -208,6 +211,7 @@ def init_auth():
         init_db()
         init_chat_history()
         init_query_analytics()
+        init_widgets()
         logger.info("База данных аутентификации инициализирована")
     except Exception as e:
         logger.error(f"Ошибка инициализации БД аутентификации: {e}")
@@ -327,6 +331,7 @@ DOCS_PAGES = [
     ('prices', 'Загрузка прайс-листа'),
     ('prompt', 'Персональный промт'),
     ('analytics', 'Аналитика запросов'),
+    ('widget', 'Виджет на сайт'),
     ('faq', 'Частые вопросы'),
 ]
 _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs')
@@ -1225,6 +1230,256 @@ def admin_delete_analytics():
     deleted = delete_user_analytics(user_id)
     return jsonify({'success': True, 'deleted': deleted,
                     'message': f'Удалено записей аналитики: {deleted}'})
+
+
+
+# ============================================================
+# Сайт-виджет: чат-бот для встраивания на сайт клиента
+# ============================================================
+# Модель: на сайт клиента ставится <script src="https://.../widget.js" data-key="КЛЮЧ">.
+# Загрузчик рисует плавающий бабл; по клику открывается iframe на /widget/<key>.
+# Вся переписка идёт ВНУТРИ iframe — то есть это same-origin запросы к /api/widget/*:
+# не нужны ни CORS, ни third-party cookies (которые режут Safari/Chrome).
+# Идентичность посетителя — visitor_id в localStorage iframe; история каждого
+# посетителя хранится в chat_history с device_id='wid:<widget>:<visitor>'.
+# Ключ виджета = настоящий контроль доступа; allowed_domains — мягкая проверка
+# (заявленный родительский Origin): отсекает случайное «скопировали и вставили»,
+# но не злоумышленника с curl — поэтому дневной лимит запросов обязателен.
+
+_WIDGET_SOURCES_RE = re.compile(r'\n*Источники:.*$', re.S)
+_WIDGET_HEX_RE = re.compile(r'#[0-9a-fA-F]{6}')
+
+
+def _widget_domain_ok(w, site_origin):
+    """Мягкая проверка домена: пустой список = разрешено любое размещение.
+
+    Поддерживаются точные хосты (shop.ru) и поддомены (*.shop.ru).
+    """
+    raw = (w.get('allowed_domains') or '').replace(',', '\n')
+    allowed = [d.strip().lower() for d in raw.split('\n') if d.strip()]
+    if not allowed:
+        return True
+    if not site_origin:
+        return False
+    from urllib.parse import urlparse
+    host = (urlparse(str(site_origin)).hostname or '').lower()
+    if not host:
+        return False
+    for d in allowed:
+        d = d.replace('https://', '').replace('http://', '').strip('/').lstrip('*.')
+        if d and (host == d or host.endswith('.' + d)):
+            return True
+    return False
+
+
+def _widget_or_404(key):
+    w = get_widget_by_key((key or '').strip())
+    if not w or not w.get('active'):
+        abort(404)
+    return w
+
+
+def _widget_scope(w, visitor):
+    """device_id посетителя виджета: своя изолированная история чата."""
+    return ('wid:%s:%s' % (w['id'], visitor))[:64]
+
+
+def _widget_guard(data):
+    """Общие проверки запроса от iframe виджета: (w, visitor, err_response)."""
+    key = (data.get('key') or '').strip()
+    w = get_widget_by_key(key)
+    if not w or not w.get('active'):
+        return None, None, (jsonify({'error': 'Виджет не найден.'}), 404)
+    visitor = data.get('visitor_id') or ''
+    if not re.fullmatch(r'[0-9a-zA-Z_-]{8,64}', visitor):
+        return None, None, (jsonify({'error': 'Некорректный посетитель.'}), 400)
+    if not _widget_domain_ok(w, data.get('site') or ''):
+        return None, None, (jsonify({'error': 'Виджет не настроен для этого сайта.'}), 403)
+    return w, visitor, None
+
+
+# --- Публичные эндпоинты виджета (без логина; доступ = ключ виджета) ---
+
+@app.route('/widget.js')
+def widget_loader():
+    """JS-загрузчик встраиваемого виджета (ставится на сайт клиента)."""
+    try:
+        with open(os.path.join(app.static_folder, 'widget.js'), 'r', encoding='utf-8') as f:
+            body = f.read()
+    except OSError:
+        abort(404)
+    resp = make_response(body)
+    resp.headers['Content-Type'] = 'application/javascript; charset=utf-8'
+    resp.headers['Cache-Control'] = 'public, max-age=3600'
+    return resp
+
+
+@app.route('/api/widget/meta')
+def widget_meta():
+    """Публичная карточка виджета для загрузчика: название и цвет бабла."""
+    w = _widget_or_404(request.args.get('key'))
+    return jsonify({'name': w['name'], 'color': w.get('theme_color') or '#667eea'})
+
+
+@app.route('/widget/<key>')
+def widget_page(key):
+    """Страница чата внутри iframe виджета."""
+    w = _widget_or_404(key)
+    site = (request.args.get('o') or '')[:200]
+    if not _widget_domain_ok(w, site):
+        return make_response(
+            render_template('widget_frame.html', error='Этот ассистент не настроен для данного сайта.'),
+            403)
+    greeting = build_greeting(get_user_prompt(w['user_id']), 'гость')
+    resp = make_response(render_template('widget_frame.html', w=w, key=w['key'], site=site, greeting=greeting))
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@app.route('/api/widget/history')
+def widget_history_api():
+    """История чата конкретного посетителя виджета."""
+    w, visitor, err = _widget_guard(request.args)
+    if err:
+        return err
+    return jsonify({'messages': get_widget_history(w['user_id'], _widget_scope(w, visitor))})
+
+
+@app.route('/api/widget/ask', methods=['POST'])
+def widget_ask():
+    """Вопрос посетителя сайта через виджет (доступ по ключу, без логина)."""
+    data = request.get_json(silent=True) or {}
+    w, visitor, err = _widget_guard(data)
+    if err:
+        return err
+    question = (data.get('question') or '').strip()[:2000]
+    if not question:
+        return jsonify({'error': 'Пустой вопрос'}), 400
+    # 10 сообщений/мин на посетителя + дневной лимит на виджет (за каждым — платный LLM-вызов)
+    if _rate_limited('wg:%s:%s' % (w['key'], visitor), limit=10, window=60):
+        return jsonify({'error': 'Слишком много сообщений. Подождите минуту.'}), 429
+    if not widget_consume(w['id']):
+        return jsonify({'answer': 'К сожалению, дневной лимит вопросов ассистенту исчерпан. Попробуйте завтра.'})
+    if not rag_ready:
+        return jsonify({'answer': 'Ассистент ещё просыпается. Попробуйте через минуту...'})
+    try:
+        scope = _widget_scope(w, visitor)
+        user_rag = get_user_rag(w['user_id'])
+        save_message(w['user_id'], 'user', question, device_id=scope)
+        provider = user_rag.settings.get("llm_provider", "")
+        model = user_rag.settings.get("llm_model", "")
+        chat_logger.log_message("Виджет «%s»" % w['name'], w['user_id'], question,
+                                is_bot=False, provider=provider, model=model)
+        answer = user_rag.ask_model(question, user_prompt=get_user_prompt(w['user_id']))
+        # Публичному посетителю источники не показываем (файлы базы — внутренние)
+        answer = _WIDGET_SOURCES_RE.sub('', answer or '').strip()
+        if not answer:
+            answer = 'Не нашёл ответа в базе знаний. Попробуйте переформулировать вопрос.'
+        save_message(w['user_id'], 'assistant', answer, device_id=scope)
+        chat_logger.log_message("Бот (виджет)", w['user_id'], answer, is_bot=True,
+                                provider=provider, model=model)
+        # Аналитика общая с владельцем: он видит, что спрашивают клиенты, и пробелы в БЗ
+        save_query_analytics(w['user_id'], question, answer)
+        return jsonify({'answer': answer})
+    except Exception as e:
+        logger.exception(f"Ошибка виджет-запроса: {e}")
+        return jsonify({'error': 'Ассистент временно недоступен. Попробуйте ещё раз.'}), 500
+
+
+@app.route('/api/widget/clear', methods=['POST'])
+def widget_clear():
+    """Посетитель очищает свою историю чата в виджете."""
+    data = request.get_json(silent=True) or {}
+    w, visitor, err = _widget_guard(data)
+    if err:
+        return err
+    return jsonify({'success': bool(clear_widget_history(w['user_id'], _widget_scope(w, visitor)))})
+
+
+# --- Кабинет виджетов (страница /widgets и API — нужен логин владельца) ---
+
+@app.route('/widgets')
+def widgets_page():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    return render_template('widgets.html', username=session.get('username', ''))
+
+
+def _widget_sanitize_fields(body):
+    """Белый список полей + валидация (возвращает (fields, ошибка))."""
+    out = {}
+    if 'name' in body:
+        name = str(body.get('name') or '').strip()[:100]
+        if not name:
+            return None, 'Название не может быть пустым'
+        out['name'] = name
+    if 'allowed_domains' in body:
+        out['allowed_domains'] = str(body.get('allowed_domains') or '').strip().lower()[:500]
+    if 'daily_limit' in body:
+        try:
+            limit = int(body.get('daily_limit'))
+        except (TypeError, ValueError):
+            return None, 'Дневной лимит — целое число'
+        out['daily_limit'] = max(1, min(limit, 10000))
+    if 'theme_color' in body:
+        c = str(body.get('theme_color') or '').strip()
+        if not _WIDGET_HEX_RE.fullmatch(c):
+            return None, 'Цвет должен быть в формате #RRGGBB'
+        out['theme_color'] = c
+    if 'active' in body:
+        out['active'] = bool(body.get('active'))
+    return out, None
+
+
+@app.route('/api/widgets')
+def widgets_list():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    return jsonify({'widgets': list_user_widgets(session['user_id'])})
+
+
+@app.route('/api/widgets/create', methods=['POST'])
+def widgets_create():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    body = request.get_json(silent=True) or {}
+    fields, err = _widget_sanitize_fields({'name': body.get('name', ''),
+                                          'allowed_domains': body.get('allowed_domains', ''),
+                                          'daily_limit': body.get('daily_limit', 200),
+                                          'theme_color': body.get('theme_color', '#667eea')})
+    if err:
+        return jsonify({'error': err}), 400
+    ok, w = create_widget(session['user_id'], fields['name'],
+                          allowed_domains=fields['allowed_domains'],
+                          daily_limit=fields['daily_limit'],
+                          theme_color=fields['theme_color'])
+    if not ok:
+        return jsonify({'error': 'Не удалось создать виджет'}), 500
+    return jsonify({'widget': w})
+
+
+@app.route('/api/widgets/<int:widget_id>', methods=['POST'])
+def widgets_update(widget_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    body = request.get_json(silent=True) or {}
+    fields, err = _widget_sanitize_fields(body)
+    if err:
+        return jsonify({'error': err}), 400
+    if not fields:
+        return jsonify({'error': 'Нет изменений'}), 400
+    if not update_widget(session['user_id'], widget_id, fields):
+        return jsonify({'error': 'Виджет не найден или ошибка сохранения'}), 404
+    return jsonify({'success': True})
+
+
+@app.route('/api/widgets/delete/<int:widget_id>', methods=['POST'])
+def widgets_delete(widget_id):
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    if not delete_widget(session['user_id'], widget_id):
+        return jsonify({'error': 'Виджет не найден'}), 404
+    return jsonify({'success': True})
 
 
 def create_app():
