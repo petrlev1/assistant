@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Виджет на сайт - RAGSTONE</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f0f2f5; min-height: 100vh; display: flex; flex-direction: column;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white; padding: 14px 30px;
+            display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+        }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header h1 a { color: inherit; text-decoration: none; transition: opacity .15s; }
+        .header h1 a:hover { opacity: 0.8; }
+        .header .user-info { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+        .header .username { background: rgba(255,255,255,0.2); padding: 4px 12px; border-radius: 20px; }
+        .btn-logout {
+            background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3);
+            padding: 6px 16px; border-radius: 20px; cursor: pointer; font-size: 13px;
+            text-decoration: none; transition: background 0.2s;
+        }
+        .btn-logout:hover { background: rgba(255,255,255,0.3); }
+
+        .wrap { max-width: 980px; width: 100%; margin: 0 auto; padding: 28px 20px 60px; }
+        .page-title { font-size: 22px; font-weight: 700; color: #1f2937; margin-bottom: 4px; }
+        .page-sub { font-size: 14px; color: #6b7280; margin-bottom: 22px; }
+
+        .panel { background: white; border-radius: 12px; padding: 20px 22px;
+                 box-shadow: 0 1px 3px rgba(0,0,0,0.07); margin-bottom: 22px; }
+        .panel h3 { font-size: 16px; color: #1f2937; margin-bottom: 14px; }
+        .panel h3 .hint { font-size: 12.5px; color: #9ca3af; font-weight: 400; margin-left: 8px; }
+
+        .w-card { border: 1px solid #eef0f4; border-radius: 12px; padding: 16px 18px; margin-bottom: 14px; }
+        .w-card.off { opacity: .55; }
+        .w-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+        .w-dot { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; }
+        .w-name { font-size: 15.5px; font-weight: 700; color: #1f2937; }
+        .w-stats { margin-left: auto; font-size: 12.5px; color: #6b7280; }
+        .w-stats b { color: #4f46e5; }
+        .w-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-bottom: 12px; }
+        @media (max-width: 700px) { .w-form { grid-template-columns: 1fr; } }
+        label { font-size: 12px; color: #6b7280; display: block; margin-bottom: 3px; }
+        input[type=text], input[type=number] {
+            width: 100%; border: 1px solid #d8dbe6; border-radius: 8px; padding: 8px 10px;
+            font: inherit; font-size: 13.5px; outline: none; background: #fbfbfe;
+        }
+        input:focus { border-color: #667eea; background: #fff; }
+        .w-code { grid-column: 1 / -1; }
+        .codebox { display: flex; gap: 8px; align-items: stretch; }
+        .codebox pre {
+            flex: 1; background: #1f2430; color: #d7dce8; border-radius: 8px; padding: 10px 12px;
+            font-size: 12px; overflow-x: auto; white-space: pre; line-height: 1.5;
+            font-family: Consolas, Menlo, monospace;
+        }
+        .btn { border: none; border-radius: 8px; padding: 9px 16px; font-size: 13px; cursor: pointer;
+               background: linear-gradient(135deg,#667eea,#764ba2); color: #fff; white-space: nowrap; }
+        .btn:hover { filter: brightness(1.08); }
+        .btn.sec { background: #eef0f7; color: #374151; }
+        .btn.danger { background: #fde8e8; color: #b91c1c; }
+        .btn.small { padding: 7px 12px; font-size: 12.5px; }
+        .w-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .w-actions .spacer { flex: 1; }
+        .created-ok { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46;
+                      border-radius: 10px; padding: 10px 14px; font-size: 13.5px; margin-bottom: 14px; display: none; }
+        .empty { color: #9ca3af; font-size: 14px; padding: 8px 0; }
+        .back-link { display: inline-block; margin-top: 4px; color: #4f46e5; text-decoration: none; font-size: 14px; }
+        .back-link:hover { text-decoration: underline; }
+        .howto { font-size: 13.5px; color: #4b5563; line-height: 1.65; }
+        .howto code { background: #f3f4f6; padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
+        .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+                 background: #1f2430; color: #fff; padding: 10px 18px; border-radius: 10px;
+                 font-size: 13.5px; opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 99; }
+        .toast.show { opacity: 1; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1><a href="{{ url_for('index') }}" title="На главную">RAGSTONE</a></h1>
+        <div class="user-info">
+            <span class="username">👤 {{ username }}</span>
+            <a href="{{ url_for('logout') }}" class="btn-logout">Выйти</a>
+        </div>
+    </div>
+
+    <div class="wrap">
+        <div class="page-title">🪶 Виджет чата на сайт</div>
+        <div class="page-sub">Ваш ИИ-ассистент по базе знаний — прямо на сайте компании. Создайте виджет и скопируйте код вставки.</div>
+
+        <div class="panel">
+            <h3>Новый виджет</h3>
+            <div class="w-form">
+                <div>
+                    <label>Название (видно посетителям)</label>
+                    <input type="text" id="newName" maxlength="100" placeholder="Например: Помощник ООО «Ромашка»">
+                </div>
+                <div>
+                    <label>Цвет кнопки</label>
+                    <input type="color" id="newColor" value="#667eea" style="width:100%;height:37px;border:1px solid #d8dbe6;border-radius:8px;background:#fff;cursor:pointer">
+                </div>
+            </div>
+            <button class="btn" onclick="createWidget()">➕ Создать виджет</button>
+            <div class="created-ok" id="createdOk"></div>
+        </div>
+
+        <div class="panel">
+            <h3>Мои виджеты<span class="hint">настройки сохраняются по кнопке «Сохранить»</span></h3>
+            <div id="list"><div class="empty">Загрузка…</div></div>
+        </div>
+
+        <div class="panel">
+            <h3>Как вставить на сайт</h3>
+            <div class="howto">
+                1. Скопируйте код из карточки виджета (кнопка «Копировать»).<br>
+                2. Вставьте его в HTML вашего сайта <b>перед закрывающим тегом <code>&lt;/body&gt;</code></b> —
+                на WordPress это редактор темы/блок «Пользовательский HTML», на Tilda — блок «HTML-код», на любом другом — в шаблон страницы.<br>
+                3. В правом нижнем углу сайта появится кнопка чата. Посетители общаются с ассистентом без регистрации,
+                ответы берутся из вашей базы знаний, источники файлов им не показываются.<br>
+                4. Все вопросы посетителей попадают к вам в <a href="{{ url_for('analytics') }}">аналитику</a> — как и вопросы из основного чата.
+            </div>
+        </div>
+
+        <a class="back-link" href="{{ url_for('chat') }}">← Вернуться в чат</a>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+<script>
+var ORIGIN = location.origin;
+function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+function toast(msg) {
+    var t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
+    setTimeout(function () { t.classList.remove('show'); }, 2200);
+}
+function embedCode(w) {
+    return '<script src="' + ORIGIN + '/widget.js" data-key="' + w.key + '" data-color="' + (w.theme_color || '#667eea') + '" async><\/script>';
+}
+function fmtDate(s) {
+    if (!s) return '—';
+    var d = new Date(s);
+    return isNaN(d) ? '—' : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function load() {
+    fetch('/api/widgets').then(function (r) { return r.json(); }).then(function (data) {
+        var list = document.getElementById('list');
+        var ws = window._ws = data.widgets || [];
+        if (!ws.length) {
+            list.innerHTML = '<div class="empty">Виджетов пока нет — создайте первый выше ☝️</div>';
+            return;
+        }
+        list.innerHTML = ws.map(function (w) {
+            return '<div class="w-card' + (w.active ? '' : ' off') + '" id="w' + w.id + '">'
+                + '<div class="w-top">'
+                +   '<span class="w-dot" style="background:' + esc(w.theme_color) + '"></span>'
+                +   '<span class="w-name">' + esc(w.name) + '</span>'
+                +   '<span class="w-stats">сегодня <b>' + (w.today_hits || 0) + '/' + w.daily_limit + '</b> · всего ' + w.total_requests
+                +     ' · последн. ' + fmtDate(w.last_used_at) + '</span>'
+                + '</div>'
+                + '<div class="w-form">'
+                +   '<div><label>Название</label><input type="text" value="' + esc(w.name) + '" data-f="name" maxlength="100"></div>'
+                +   '<div><label>Дневной лимит вопросов (всех посетителей)</label><input type="number" value="' + w.daily_limit + '" data-f="daily_limit" min="1" max="10000"></div>'
+                +   '<div><label>Разрешённые домены (через запятую; пусто = любой сайт; *.shop.ru — с поддоменами)</label>'
+                +     '<input type="text" value="' + esc(w.allowed_domains) + '" data-f="allowed_domains" placeholder="example.ru, *.shop.ru"></div>'
+                +   '<div><label>Цвет кнопки</label><input type="color" value="' + esc(w.theme_color) + '" data-f="theme_color" style="width:100%;height:37px;border:1px solid #d8dbe6;border-radius:8px;background:#fff;cursor:pointer"></div>'
+                +   '<div class="w-code"><label>Код вставки на сайт</label>'
+                +     '<div class="codebox"><pre>' + esc(embedCode(w)) + '</pre>'
+                +       '<button class="btn small" onclick="copyCode(this,' + w.id + ')">📋 Копировать</button></div></div>'
+                + '</div>'
+                + '<div class="w-actions">'
+                +   '<button class="btn small" onclick="saveWidget(' + w.id + ')">💾 Сохранить</button>'
+                +   '<button class="btn sec small" onclick="toggleActive(' + w.id + ',' + (w.active ? 'false' : 'true') + ')">'
+                +     (w.active ? '⏸️ Отключить' : '▶️ Включить') + '</button>'
+                +   '<span class="spacer"></span>'
+                +   '<button class="btn danger small" onclick="delWidget(' + w.id + ')">🗑️ Удалить</button>'
+                + '</div></div>';
+        }).join('');
+    });
+}
+
+function collect(id) {
+    var card = document.getElementById('w' + id);
+    var out = {};
+    card.querySelectorAll('[data-f]').forEach(function (inp) {
+        out[inp.dataset.f] = inp.type === 'number' ? inp.value : inp.value;
+    });
+    return out;
+}
+
+function createWidget() {
+    var name = document.getElementById('newName').value.trim();
+    if (!name) { toast('Укажите название виджета'); return; }
+    fetch('/api/widgets/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, theme_color: document.getElementById('newColor').value })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.error) { toast(d.error); return; }
+        document.getElementById('newName').value = '';
+        load();
+        var box = document.getElementById('createdOk');
+        box.style.display = 'block';
+        box.textContent = '✅ Виджет «' + d.widget.name + '» создан — скопируйте код вставки в карточке ниже.';
+    });
+}
+
+function saveWidget(id) {
+    fetch('/api/widgets/' + id, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(collect(id))
+    }).then(function (r) { return r.json(); }).then(function (d) {
+        toast(d.success ? 'Сохранено' : (d.error || 'Ошибка'));
+        if (d.success) load();
+    });
+}
+
+function toggleActive(id, val) {
+    fetch('/api/widgets/' + id, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: val })
+    }).then(function (r) { return r.json(); }).then(function () { load(); });
+}
+
+function delWidget(id) {
+    if (!confirm('Удалить виджет? Код на сайте перестанет работать, история посетителей останется.')) return;
+    fetch('/api/widgets/delete/' + id, { method: 'POST' })
+        .then(function (r) { return r.json(); }).then(function () { load(); });
+}
+
+function copyCode(btn, id) {
+    var code = embedCode((window._ws || []).find(function (w) { return w.id === id; }) || { key: '' });
+    navigator.clipboard.writeText(code).then(function () { toast('Код скопирован — вставьте в HTML сайта'); });
+}
+
+load();
+</script>
+</body>
+</html>
