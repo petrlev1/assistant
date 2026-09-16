@@ -19,7 +19,11 @@ from auth_db import init_db, register_user, login_user, init_chat_history, save_
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
                      clear_widget_history)
+from auth_db import (init_max_channels, get_max_channel, get_max_channel_by_hook,
+                     list_active_max_channels, save_max_channel, update_max_channel,
+                     delete_max_channel, max_consume)
 import docs_renderer
+import max_bot
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -212,6 +216,7 @@ def init_auth():
         init_chat_history()
         init_query_analytics()
         init_widgets()
+        init_max_channels()
         logger.info("База данных аутентификации инициализирована")
     except Exception as e:
         logger.error(f"Ошибка инициализации БД аутентификации: {e}")
@@ -332,6 +337,7 @@ DOCS_PAGES = [
     ('prompt', 'Персональный промт'),
     ('analytics', 'Аналитика запросов'),
     ('widget', 'Виджет на сайт'),
+    ('max', 'Бот в мессенджере MAX'),
     ('faq', 'Частые вопросы'),
 ]
 _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs')
@@ -1250,6 +1256,37 @@ _WIDGET_SOURCES_RE = re.compile(r'\n*Источники:.*$', re.S)
 _WIDGET_HEX_RE = re.compile(r'#[0-9a-fA-F]{6}')
 
 
+def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_sources=True):
+    """Единый путь ответа внешнему собеседнику: виджет на сайте и чат-бот в MAX.
+
+    Диалог изолирован по device_id=scope — у каждого собеседника своя лента,
+    без fallback на основной чат владельца ('web').
+    Возвращает (answer, err): при ошибке answer=None, err — текст для собеседника.
+    """
+    try:
+        user_rag = get_user_rag(user_id)
+        provider = user_rag.settings.get("llm_provider", "")
+        model = user_rag.settings.get("llm_model", "")
+        save_message(user_id, 'user', question, device_id=scope)
+        chat_logger.log_message(label, user_id, question, is_bot=False,
+                                provider=provider, model=model)
+        answer = user_rag.ask_model(question, user_prompt=get_user_prompt(user_id))
+        # Внешнему собеседнику источники не показываем (файлы базы — внутренние)
+        if strip_sources:
+            answer = _WIDGET_SOURCES_RE.sub('', answer or '').strip()
+        if not answer:
+            answer = 'Не нашёл ответа в базе знаний. Попробуйте переформулировать вопрос.'
+        save_message(user_id, 'assistant', answer, device_id=scope)
+        chat_logger.log_message(bot_label, user_id, answer, is_bot=True,
+                                provider=provider, model=model)
+        # Аналитика общая с владельцем: он видит, что спрашивают собеседники, и пробелы в базе
+        save_query_analytics(user_id, question, answer)
+        return answer, None
+    except Exception as e:
+        logger.exception(f"Ошибка ответа собеседнику ({label}): {e}")
+        return None, 'Ассистент временно недоступен. Попробуйте ещё раз.'
+
+
 def _widget_domain_ok(w, site_origin):
     """Мягкая проверка домена: пустой список = разрешено любое размещение.
 
@@ -1362,28 +1399,12 @@ def widget_ask():
         return jsonify({'answer': 'К сожалению, дневной лимит вопросов ассистенту исчерпан. Попробуйте завтра.'})
     if not rag_ready:
         return jsonify({'answer': 'Ассистент ещё просыпается. Попробуйте через минуту...'})
-    try:
-        scope = _widget_scope(w, visitor)
-        user_rag = get_user_rag(w['user_id'])
-        save_message(w['user_id'], 'user', question, device_id=scope)
-        provider = user_rag.settings.get("llm_provider", "")
-        model = user_rag.settings.get("llm_model", "")
-        chat_logger.log_message("Виджет «%s»" % w['name'], w['user_id'], question,
-                                is_bot=False, provider=provider, model=model)
-        answer = user_rag.ask_model(question, user_prompt=get_user_prompt(w['user_id']))
-        # Публичному посетителю источники не показываем (файлы базы — внутренние)
-        answer = _WIDGET_SOURCES_RE.sub('', answer or '').strip()
-        if not answer:
-            answer = 'Не нашёл ответа в базе знаний. Попробуйте переформулировать вопрос.'
-        save_message(w['user_id'], 'assistant', answer, device_id=scope)
-        chat_logger.log_message("Бот (виджет)", w['user_id'], answer, is_bot=True,
-                                provider=provider, model=model)
-        # Аналитика общая с владельцем: он видит, что спрашивают клиенты, и пробелы в БЗ
-        save_query_analytics(w['user_id'], question, answer)
-        return jsonify({'answer': answer})
-    except Exception as e:
-        logger.exception(f"Ошибка виджет-запроса: {e}")
-        return jsonify({'error': 'Ассистент временно недоступен. Попробуйте ещё раз.'}), 500
+    answer, err_msg = _visitor_answer(w['user_id'], question, _widget_scope(w, visitor),
+                                      "Виджет «%s»" % w['name'], bot_label='Бот (виджет)')
+    if err_msg:
+        logger.error(f"Виджет «{w['name']}»: {err_msg}")
+        return jsonify({'error': err_msg}), 500
+    return jsonify({'answer': answer})
 
 
 @app.route('/api/widget/clear', methods=['POST'])
@@ -1482,10 +1503,256 @@ def widgets_delete(widget_id):
     return jsonify({'success': True})
 
 
+
+# ============================================================
+# Канал MAX: тот же ассистент в мессенджере MAX (max.ru)
+# ============================================================
+# Личный бот пользователя: токен владелец вводит сам в кабинете (🤖 MAX-бот),
+# хранится он в PG (таблица max_channels), а не в файлах проекта.
+# События приходят вебхуком POST /max/hook/<hook_key> с секретом в заголовке
+# X-Max-Bot-Api-Secret. MAX ждёт ответ 200 в течение 30 секунд и повторяет
+# доставку до 10 раз — поэтому обработчик лишь ставит задачу в очередь, считает
+# её воркер, а повторные события отсекает дедупликация (max_bot.is_duplicate).
+# Переписка каждого собеседника — своя область chat_history:
+# device_id='max:<channel_id>:<max_user_id>'; источники файлов наружу не отдаём.
+# Если MAX не принял вебхук (нет публичного HTTPS), канал переходит на long
+# polling GET /updates — запасной транспорт, документация MAX его для прода не
+# рекомендует, поэтому он включается только как резерв.
+
+_max_queue = None
+_max_polling = None
+
+
+def _max_scope(channel_id, max_user_id):
+    """Область истории собеседника в MAX: у каждого пользователя своя лента."""
+    return ('max:%s:%s' % (channel_id, max_user_id))[:64]
+
+
+def _public_base_url():
+    """Публичный адрес сервиса. Внутренний запрос от Caddy идёт по http,
+    поэтому схему берём из X-Forwarded-Proto (иначе считаем https)."""
+    proto = (request.headers.get('X-Forwarded-Proto') or 'https').split(',')[0].strip() or 'https'
+    host = request.headers.get('X-Forwarded-Host') or request.host
+    return '%s://%s' % (proto, host)
+
+
+def _max_hook_url(channel):
+    return _public_base_url() + '/max/hook/' + (channel.get('hook_key') or '')
+
+
+def _max_send(channel, text, max_user_id):
+    """Отправить ответ собеседнику в MAX (длинный текст режется на части)."""
+    ok, err = max_bot.send_text(channel.get('token') or '', text, user_id=max_user_id)
+    if not ok:
+        logger.warning(f"MAX: сообщение не доставлено (канал #{channel.get('id')}): {err}")
+    return ok
+
+
+def _max_handle_update(channel, update):
+    """Обработка события MAX (в воркере): вопрос собеседника → ответ из базы знаний."""
+    utype = (update.get('update_type') or '').strip()
+    message = update.get('message') or {}
+    sender = (message.get('sender') or {}).get('user_id')
+    text = ((message.get('body') or {}).get('text') or '').strip()
+    if not sender:
+        return
+    if utype == 'bot_started':
+        _max_send(channel, build_greeting(get_user_prompt(channel['user_id']), 'гость'), sender)
+        return
+    if utype != 'message_created' or not text:
+        return
+    # 10 сообщений/мин на собеседника (каждый ответ — платный вызов LLM)
+    if _rate_limited('mx:%s:%s' % (channel['id'], sender), limit=10, window=60):
+        logger.info(f"MAX: слишком часто пишет пользователь {sender} (канал #{channel['id']})")
+        return
+    if not max_consume(channel['id']):
+        _max_send(channel, 'К сожалению, дневной лимит ответов ассистента исчерпан. Попробуйте завтра.', sender)
+        return
+    if not rag_ready:
+        _max_send(channel, 'Ассистент ещё просыпается. Попробуйте через минуту...', sender)
+        return
+    answer, err = _visitor_answer(channel['user_id'], text[:2000], _max_scope(channel['id'], sender),
+                                  "MAX «%s»" % (channel.get('bot_name') or 'бот'),
+                                  bot_label='Бот (MAX)')
+    _max_send(channel, answer or err or 'Не получилось ответить. Попробуйте ещё раз.', sender)
+
+
+@app.route('/max/hook/<hook_key>', methods=['GET', 'POST'])
+def max_webhook(hook_key):
+    """Вебхук MAX: принимаем событие, сразу отвечаем 200, обрабатываем в фоне.
+
+    GET поддерживается не для событий: MAX проверяет адрес подписки запросом
+    без тела (в логах видно такие проверки), поэтому отвечаем коротким 200.
+    """
+    channel = get_max_channel_by_hook((hook_key or '').strip())
+    if not channel or not channel.get('active'):
+        abort(404)
+    if request.method == 'GET':
+        return jsonify({'ok': True, 'bot': channel.get('bot_username') or ''})
+    secret = request.headers.get('X-Max-Bot-Api-Secret', '')
+    if not channel.get('hook_secret') or secret != channel['hook_secret']:
+        logger.warning(f"MAX: вебхук с неверным секретом отклонён (канал #{channel.get('id')})")
+        abort(403)
+    update = request.get_json(silent=True) or {}
+    if _max_queue is not None:
+        _max_queue.put(channel, update)
+    return jsonify({'ok': True})
+
+
+def _max_supervisor():
+    """Раз в минуту: держим long polling только у каналов с запасным транспортом."""
+    time.sleep(20)
+    while True:
+        try:
+            if _max_polling is not None:
+                for channel in list_active_max_channels():
+                    if (channel.get('mode') or 'webhook') == 'polling':
+                        _max_polling.ensure(channel)
+        except Exception as e:
+            logger.error(f"MAX: ошибка супервизора каналов: {e}")
+        time.sleep(60)
+
+
+def _max_status(channel):
+    """Состояние канала для кабинета (полный токен отдаёт отдельный эндпоинт)."""
+    if not channel:
+        return {'connected': False}
+    token = channel.get('token') or ''
+    return {
+        'connected': True,
+        'bot_name': channel.get('bot_name') or '',
+        'bot_username': channel.get('bot_username') or '',
+        'bot_user_id': channel.get('bot_user_id'),
+        'mode': channel.get('mode') or 'webhook',
+        'active': bool(channel.get('active')),
+        'daily_limit': channel.get('daily_limit') or 0,
+        'today_hits': channel.get('today_hits') or 0,
+        'total_requests': channel.get('total_requests') or 0,
+        'last_used_at': str(channel.get('last_used_at') or ''),
+        'token_masked': (token[:6] + chr(8230) + token[-4:]) if len(token) > 12 else chr(8230),
+        'hook_url': _max_hook_url(channel),
+        'bot_url': ('https://max.ru/' + channel['bot_username']) if channel.get('bot_username') else '',
+    }
+
+
+@app.route('/api/max')
+def max_status_api():
+    """Состояние подключения MAX для кабинета."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    return jsonify(_max_status(get_max_channel(session['user_id'])))
+
+
+@app.route('/api/max/token')
+def max_token_api():
+    """Полный токен своего бота — по явному запросу кабинета (кнопка «показать»)."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    channel = get_max_channel(session['user_id'])
+    if not channel:
+        return jsonify({'error': 'Бот не подключён'}), 404
+    return jsonify({'token': channel.get('token') or ''})
+
+
+@app.route('/api/max/connect', methods=['POST'])
+def max_connect():
+    """Подключение личного MAX-бота: проверка токена, подписка на вебхук, сохранение."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    user_id = session['user_id']
+    body = request.get_json(silent=True) or {}
+    channel = get_max_channel(user_id)
+    token = (body.get('token') or '').strip()
+    if not token and channel:
+        token = channel.get('token') or ''      # пустое поле = оставляем текущий токен
+    if not token:
+        return jsonify({'error': 'Вставьте токен бота: MAX для партнёров → Чат-боты → ⋮ → Настройки'}), 400
+    ok, me = max_bot.get_me(token)
+    if not ok:
+        return jsonify({'error': 'MAX не принял токен: %s' % (me.get('error') or 'неизвестная ошибка')}), 400
+    hook_key = (channel or {}).get('hook_key') or secrets.token_urlsafe(16)
+    hook_secret = (channel or {}).get('hook_secret') or secrets.token_urlsafe(24)
+    limit = (channel or {}).get('daily_limit') or 200
+    ok_save, saved = save_max_channel(user_id, token, me.get('user_id'), me.get('name') or '',
+                                      me.get('username') or '', hook_key, hook_secret, limit)
+    if not ok_save or not saved:
+        return jsonify({'error': 'Не удалось сохранить подключение'}), 500
+    hook_url = _public_base_url() + '/max/hook/' + hook_key
+    ok_hook, sub = max_bot.subscribe(token, hook_url, hook_secret)
+    update_max_channel(user_id, {'mode': 'webhook' if ok_hook else 'polling', 'active': True})
+    if _max_polling is not None:
+        if ok_hook:
+            _max_polling.stop(saved['id'])
+        else:
+            _max_polling.ensure(dict(saved, mode='polling'))
+    result = _max_status(get_max_channel(user_id))
+    if ok_hook:
+        result['message'] = 'Бот подключён: %s (@%s)' % (result['bot_name'], result['bot_username'])
+    else:
+        result['warning'] = ('MAX не принял вебхук (%s) — включён режим опроса (long polling). '
+                             'Для вебхука нужен публичный HTTPS-адрес на порту 443.'
+                             % (sub.get('error') or 'ошибка подписки'))
+    return jsonify(result)
+
+
+def _max_sanitize_fields(body):
+    """Белый список полей канала из кабинета."""
+    out = {}
+    if 'daily_limit' in body:
+        try:
+            out['daily_limit'] = max(1, min(int(body.get('daily_limit')), 10000))
+        except (TypeError, ValueError):
+            return None, 'Дневной лимит — целое число'
+    if 'active' in body:
+        out['active'] = bool(body.get('active'))
+    return out, None
+
+
+@app.route('/api/max/update', methods=['POST'])
+def max_update():
+    """Настройки канала: дневной лимит и включение бота."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    body = request.get_json(silent=True) or {}
+    fields, err = _max_sanitize_fields(body)
+    if err:
+        return jsonify({'error': err}), 400
+    if not fields:
+        return jsonify({'error': 'Нет изменений'}), 400
+    if not update_max_channel(session['user_id'], fields):
+        return jsonify({'error': 'Бот не подключён'}), 404
+    return jsonify({'success': True})
+
+
+@app.route('/api/max/disconnect', methods=['POST'])
+def max_disconnect():
+    """Отключение: снимаем подписку MAX и удаляем подключение."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    channel = get_max_channel(session['user_id'])
+    if not channel:
+        return jsonify({'error': 'Бот не подключён'}), 404
+    try:
+        max_bot.unsubscribe(channel.get('token') or '', _max_hook_url(channel))
+    except Exception as e:
+        logger.warning(f"MAX: не удалось снять подписку: {e}")
+    if _max_polling is not None:
+        _max_polling.stop(channel['id'])
+    delete_max_channel(session['user_id'])
+    return jsonify({'success': True})
+
+
 def create_app():
     """Создание Flask приложения"""
     # Инициализируем БД аутентификации
     init_auth()
+
+    # Канал MAX: очередь ответов (вебхук только принимает события) + резервный опрос
+    global _max_queue, _max_polling
+    _max_queue = max_bot.UpdateQueue(_max_handle_update)
+    _max_queue.start()
+    _max_polling = max_bot.PollingManager(_max_handle_update)
+    threading.Thread(target=_max_supervisor, daemon=True).start()
 
     # Запускаем инициализацию RAG-системы в отдельном потоке
     init_thread = threading.Thread(target=initialize_rag_system, daemon=True)
