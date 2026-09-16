@@ -1210,3 +1210,200 @@ def get_all_users_with_stats():
     except Exception as e:
         logger.error(f"Ошибка получения списка пользователей со счётчиками: {e}")
         return []
+
+
+# === MAX-каналы (чат-бот в мессенджере MAX) ===
+# Один бот на пользователя RAG: токен владелец вводит сам в кабинете, он лежит
+# в БД (не в файлах проекта). Переписка собеседников — в общей chat_history
+# с device_id='max:<channel_id>:<max_user_id>', поэтому аналитика и панель
+# работают теми же функциями, что и для сайт-виджета.
+
+def init_max_channels():
+    """Таблицы канала MAX: подключение (токен, ключ вебхука) и счётчик обращений."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS max_channels (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                token VARCHAR(200) NOT NULL,
+                bot_user_id BIGINT,
+                bot_name VARCHAR(100) DEFAULT '',
+                bot_username VARCHAR(100) DEFAULT '',
+                hook_key VARCHAR(64) UNIQUE NOT NULL,
+                hook_secret VARCHAR(64) NOT NULL,
+                mode VARCHAR(16) DEFAULT 'webhook',
+                daily_limit INTEGER DEFAULT 200,
+                active BOOLEAN DEFAULT TRUE,
+                total_requests INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TIMESTAMP
+            )
+        """)
+        # Счётчик ответов по дням: дневной лимит снимается атомарно (max_consume)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS max_hits (
+                channel_id INTEGER NOT NULL REFERENCES max_channels(id) ON DELETE CASCADE,
+                day DATE NOT NULL,
+                hits INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (channel_id, day)
+            )
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("Таблицы канала MAX инициализированы")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка инициализации таблиц MAX: {e}")
+        return False
+
+
+def get_max_channel(user_id):
+    """Подключение MAX пользователя + счётчик ответов за сегодня."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT c.*, COALESCE(h.hits, 0) AS today_hits
+            FROM max_channels c
+            LEFT JOIN max_hits h ON h.channel_id = c.id AND h.day = CURRENT_DATE
+            WHERE c.user_id = %s
+        """, (user_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Ошибка получения канала MAX: {e}")
+        return None
+
+
+def get_max_channel_by_hook(hook_key):
+    """Канал по ключу вебхука (публичный адрес /max/hook/<ключ>)."""
+    if not hook_key or len(hook_key) > 64:
+        return None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM max_channels WHERE hook_key = %s", (hook_key,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Ошибка получения канала MAX по ключу: {e}")
+        return None
+
+
+def list_active_max_channels():
+    """Все включённые каналы (для супервизора long polling)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM max_channels WHERE active = TRUE")
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.error(f"Ошибка списка каналов MAX: {e}")
+        return []
+
+
+def save_max_channel(user_id, token, bot_user_id, bot_name, bot_username,
+                     hook_key, hook_secret, daily_limit=200):
+    """Создать или обновить подключение MAX (один бот на пользователя)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            INSERT INTO max_channels
+                (user_id, token, bot_user_id, bot_name, bot_username, hook_key, hook_secret, daily_limit)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                token = EXCLUDED.token,
+                bot_user_id = EXCLUDED.bot_user_id,
+                bot_name = EXCLUDED.bot_name,
+                bot_username = EXCLUDED.bot_username,
+                daily_limit = EXCLUDED.daily_limit
+            RETURNING *
+        """, (user_id, token, bot_user_id, bot_name, bot_username, hook_key, hook_secret, int(daily_limit)))
+        row = dict(cur.fetchone())
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"MAX-канал сохранён для пользователя {user_id} (бот @{bot_username})")
+        return True, row
+    except Exception as e:
+        logger.error(f"Ошибка сохранения канала MAX: {e}")
+        return False, None
+
+
+_MAX_COLS = {'daily_limit', 'active', 'mode', 'bot_name', 'bot_username', 'token'}
+
+
+def update_max_channel(user_id, fields):
+    """Точечное обновление своего канала MAX (только белые колонки)."""
+    fields = {k: v for k, v in fields.items() if k in _MAX_COLS}
+    if not fields:
+        return False
+    try:
+        sets = ', '.join(f"{k} = %s" for k in fields)
+        vals = list(fields.values()) + [user_id]
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(f"UPDATE max_channels SET {sets} WHERE user_id = %s", vals)
+        changed = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        conn.close()
+        return changed
+    except Exception as e:
+        logger.error(f"Ошибка обновления канала MAX: {e}")
+        return False
+
+
+def delete_max_channel(user_id):
+    """Удалить подключение MAX (счётчики обращений удаляются каскадом)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM max_channels WHERE user_id = %s", (user_id,))
+        deleted = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        conn.close()
+        return deleted
+    except Exception as e:
+        logger.error(f"Ошибка удаления канала MAX: {e}")
+        return False
+
+
+def max_consume(channel_id):
+    """Атомарно снять единицу дневного лимита канала. False — лимит исчерпан."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO max_hits (channel_id, day, hits)
+            VALUES (%s, CURRENT_DATE, 1)
+            ON CONFLICT (channel_id, day) DO UPDATE
+                SET hits = max_hits.hits + 1
+            WHERE max_hits.hits < (SELECT daily_limit FROM max_channels WHERE max_channels.id = %s)
+        """, (channel_id, channel_id))
+        consumed = cur.rowcount > 0
+        if consumed:
+            cur.execute(
+                "UPDATE max_channels SET total_requests = total_requests + 1, "
+                "last_used_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (channel_id,),
+            )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return consumed
+    except Exception as e:
+        logger.error(f"Ошибка учёта обращений MAX: {e}")
+        return False
