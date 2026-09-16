@@ -1585,8 +1585,13 @@ def max_webhook(hook_key):
     без тела (в логах видно такие проверки), поэтому отвечаем коротким 200.
     """
     channel = get_max_channel_by_hook((hook_key or '').strip())
-    if not channel or not channel.get('active'):
+    if not channel:
         abort(404)
+    if not channel.get('active'):
+        # Бот выключен владельцем: событие не обрабатываем, но отвечаем 200 —
+        # иначе MAX будет повторять доставку до 10 раз (до 8 часов) без пользы.
+        logger.info(f"MAX: событие проигнорировано, бот выключен (канал #{channel.get('id')})")
+        return jsonify({'ok': True, 'skipped': 'bot_disabled'})
     if request.method == 'GET':
         return jsonify({'ok': True, 'bot': channel.get('bot_username') or ''})
     secret = request.headers.get('X-Max-Bot-Api-Secret', '')

@@ -1018,7 +1018,7 @@
                     <label class="max-label">Дневной лимит ответов</label>
                     <input type="number" id="maxLimit" min="1" max="10000" value="200">
                 </div>
-                <label class="max-check"><input type="checkbox" id="maxActive"> Бот отвечает собеседникам</label>
+                <label class="max-check"><input type="checkbox" id="maxActive" checked> Бот отвечает собеседникам</label>
             </div>
             <div class="prompt-actions">
                 <button class="btn-send" onClick="saveMax()">💾 Сохранить и подключить</button>
@@ -1336,6 +1336,9 @@
                     if (!d.connected) {
                         status.textContent = '⚠️ Бот не подключён';
                         status.style.color = '#f57c00';
+                        // По умолчанию подключение идёт с включённым ботом: снятая галка
+                        // в форме сохранения выключила бы канал сразу после connect.
+                        document.getElementById('maxActive').checked = true;
                         hint.innerHTML = 'Вставьте токен бота из раздела «Чат-боты» платформы ' +
                             '<a href="https://dev.max.ru" target="_blank" rel="noopener">MAX для партнёров</a> ' +
                             '(⋮ → Настройки → значок копирования) и нажмите «Сохранить и подключить».';
