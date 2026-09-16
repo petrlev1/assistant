@@ -387,6 +387,39 @@
             gap: 8px;
             align-items: center;
         }
+        /* Панель MAX-бота (каркас .prompt-panel) */
+        button.btn-analytics { border: none; cursor: pointer; font: inherit; }
+        .max-status {
+            font-size: 13px;
+            line-height: 1.45;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: #f6f7fb;
+            color: #333;
+        }
+        .max-label { font-size: 12.5px; color: #666; line-height: 1.35; }
+        .max-token-row { display: flex; gap: 8px; align-items: stretch; }
+        .max-token-row input {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 13px;
+            font-family: Consolas, 'Courier New', monospace;
+            box-sizing: border-box;
+        }
+        .max-token-row input:focus { outline: none; border-color: #2196f3; }
+        .max-eye { padding: 8px 12px; }
+        .max-row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+        .max-row input[type=number] {
+            width: 130px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 9px 12px;
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+        .max-check { font-size: 13px; color: #333; display: flex; align-items: center; gap: 6px; padding-bottom: 9px; }
         .btn-reset {
             background: rgba(244,67,54,0.1);
             color: #d32f2f;
@@ -861,6 +894,7 @@
                 <h3>💬 Чат</h3>
                 <div style="display:flex;gap:10px;align-items:center;">
                     <a href="{{ url_for('widgets_page') }}" class="btn-analytics" title="Виджет чата для вашего сайта">🪶 Виджет</a>
+                    <button class="btn-analytics" onClick="toggleMaxPanel()" title="Чат-бот в мессенджере MAX">🤖 MAX-бот</button>
                     <a href="{{ url_for('analytics') }}" class="btn-analytics" title="Статистика ваших запросов">📊 Аналитика</a>
                     <button class="btn-clear-chat" onClick="clearChat()" title="Удалить всю историю чата">🗑️ Удалить весь чат</button>
                 </div>
@@ -965,6 +999,36 @@
         </div>
     </div>
     <div class="docs-overlay" id="promptOverlay" onClick="togglePromptPanel()"></div>
+
+    <!-- Панель подключения личного чат-бота MAX -->
+    <div class="prompt-panel" id="maxPanel">
+        <div class="docs-header">
+            <h3>🤖 MAX-бот</h3>
+            <button class="btn-close" onClick="toggleMaxPanel()">✕</button>
+        </div>
+        <div class="prompt-body">
+            <div class="max-status" id="maxStatus">Проверка подключения...</div>
+            <label class="max-label">Токен бота — MAX для партнёров → Чат-боты → ⋮ → Настройки</label>
+            <div class="max-token-row">
+                <input type="password" id="maxToken" placeholder="Вставьте токен" autocomplete="off" spellcheck="false">
+                <button class="btn-reset max-eye" id="maxTokenEye" onClick="toggleMaxToken()" title="Показать токен">👁</button>
+            </div>
+            <div class="max-row">
+                <div>
+                    <label class="max-label">Дневной лимит ответов</label>
+                    <input type="number" id="maxLimit" min="1" max="10000" value="200">
+                </div>
+                <label class="max-check"><input type="checkbox" id="maxActive"> Бот отвечает собеседникам</label>
+            </div>
+            <div class="prompt-actions">
+                <button class="btn-send" onClick="saveMax()">💾 Сохранить и подключить</button>
+                <button class="btn-reset" onClick="disconnectMax()">Отключить</button>
+                <span class="prompt-status" id="maxSaveStatus"></span>
+            </div>
+            <div class="prompt-hint" id="maxHint"></div>
+        </div>
+    </div>
+    <div class="docs-overlay" id="maxOverlay" onClick="toggleMaxPanel()"></div>
 
     <!-- Модалка: исправить ответ и сохранить в базу знаний -->
     <div class="qa-modal" id="qaModal" onClick="if (event.target === this) closeQaModal()">
@@ -1239,6 +1303,122 @@
                 })
                 .catch(() => {
                     status.textContent = '❌ Ошибка сброса';
+                    status.style.color = '#d32f2f';
+                });
+        }
+
+        // === Подключение личного чат-бота MAX (мессенджер max.ru) ===
+        function toggleMaxPanel() {
+            const panel = document.getElementById('maxPanel');
+            const overlay = document.getElementById('maxOverlay');
+            const active = !panel.classList.contains('active');
+            panel.classList.toggle('active', active);
+            overlay.classList.toggle('active', active);
+            if (active) loadMax();
+        }
+
+        function maxStatusText(d) {
+            const mode = d.mode === 'webhook' ? 'вебхук' : 'длительный опрос';
+            return '✅ ' + escapeHtml(d.bot_name || 'бот') + ' (@' + escapeHtml(d.bot_username || '') + ')' +
+                ' · режим: ' + mode +
+                ' · сегодня ' + d.today_hits + '/' + d.daily_limit +
+                ' · всего ответов: ' + d.total_requests;
+        }
+
+        function loadMax() {
+            const status = document.getElementById('maxStatus');
+            const hint = document.getElementById('maxHint');
+            status.textContent = 'Проверка подключения...';
+            status.style.color = '#777';
+            fetch('/api/max')
+                .then(r => r.json())
+                .then(d => {
+                    if (!d.connected) {
+                        status.textContent = '⚠️ Бот не подключён';
+                        status.style.color = '#f57c00';
+                        hint.innerHTML = 'Вставьте токен бота из раздела «Чат-боты» платформы ' +
+                            '<a href="https://dev.max.ru" target="_blank" rel="noopener">MAX для партнёров</a> ' +
+                            '(⋮ → Настройки → значок копирования) и нажмите «Сохранить и подключить».';
+                        return;
+                    }
+                    status.textContent = maxStatusText(d);
+                    status.style.color = '#4caf50';
+                    document.getElementById('maxLimit').value = d.daily_limit;
+                    document.getElementById('maxActive').checked = d.active;
+                    hint.innerHTML = 'Ваш бот: <a href="' + d.bot_url + '" target="_blank" rel="noopener">' +
+                        escapeHtml(d.bot_url) + '</a> — ссылку можно дать клиентам или поставить кнопкой на сайт.<br>' +
+                        'Токен (маска): <code>' + escapeHtml(d.token_masked) + '</code>' +
+                        (d.mode === 'webhook' ? '' : '<br>⚠️ Работает резервный режим опроса: MAX не принял вебхук.');
+                })
+                .catch(() => {
+                    status.textContent = '❌ Не удалось получить состояние';
+                    status.style.color = '#d32f2f';
+                });
+            // Текущий токен подставляем в поле (тип password — виден только по 👁)
+            fetch('/api/max/token')
+                .then(r => r.ok ? r.json() : null)
+                .then(d => { if (d && d.token) document.getElementById('maxToken').value = d.token; })
+                .catch(() => {});
+        }
+
+        function toggleMaxToken() {
+            const input = document.getElementById('maxToken');
+            const show = input.type === 'password';
+            input.type = show ? 'text' : 'password';
+            document.getElementById('maxTokenEye').textContent = show ? '🙈' : '👁';
+        }
+
+        function saveMax() {
+            const status = document.getElementById('maxSaveStatus');
+            const payload = {
+                token: document.getElementById('maxToken').value.trim(),
+                daily_limit: document.getElementById('maxLimit').value,
+                active: document.getElementById('maxActive').checked
+            };
+            status.textContent = 'Проверяю токен в MAX...';
+            status.style.color = '#777';
+            fetch('/api/max/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+                .then(r => r.json())
+                .then(d => {
+                    if (d.error) {
+                        status.textContent = '❌ ' + d.error;
+                        status.style.color = '#d32f2f';
+                        return;
+                    }
+                    // Лимит и включение бота сохраняем тем же действием
+                    return fetch('/api/max/update', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ daily_limit: payload.daily_limit, active: payload.active })
+                    }).then(() => {
+                        status.textContent = d.warning ? ('⚠️ ' + d.warning) : ('✅ ' + (d.message || 'Подключено'));
+                        status.style.color = d.warning ? '#f57c00' : '#4caf50';
+                        loadMax();
+                    });
+                })
+                .catch(() => {
+                    status.textContent = '❌ Ошибка соединения';
+                    status.style.color = '#d32f2f';
+                });
+        }
+
+        function disconnectMax() {
+            if (!confirm('Отключить MAX-бота? Он перестанет отвечать в мессенджере.')) return;
+            const status = document.getElementById('maxSaveStatus');
+            fetch('/api/max/disconnect', { method: 'POST' })
+                .then(r => r.json())
+                .then(d => {
+                    status.textContent = d.success ? '✅ Отключено' : ('❌ ' + (d.error || 'Ошибка'));
+                    status.style.color = d.success ? '#4caf50' : '#d32f2f';
+                    document.getElementById('maxToken').value = '';
+                    loadMax();
+                })
+                .catch(() => {
+                    status.textContent = '❌ Ошибка соединения';
                     status.style.color = '#d32f2f';
                 });
         }
