@@ -751,9 +751,26 @@ class RAGCore:
             if resp.status_code != 200:
                 logger.error(f"❌ OCR ошибка ({resp.status_code}): {resp.text[:200]}")
                 return None
-            text = resp.json()["choices"][0]["message"]["content"]
-            if text:
-                cache_path.write_text(text, encoding='utf-8')
+            # Разбираем ответ аккуратно: на странице без текста (пустая форма, графика)
+            # qwen-vl-ocr отдаёт 200, finish_reason=stop и message ВООБЩЕ БЕЗ поля content.
+            # Прямой доступ ["content"] падал с KeyError и попадал в лог как «Ошибка OCR»,
+            # а страница не кэшировалась — API вызывался заново при каждой загрузке базы.
+            data = resp.json()
+            choices = data.get("choices") or []
+            if not choices:
+                logger.error(f"❌ OCR: ответ без choices (HTTP {resp.status_code}): {resp.text[:200]}")
+                return None
+            message = choices[0].get("message") or {}
+            text = message.get("content")
+            if isinstance(text, list):     # часть моделей отдаёт content списком частей
+                text = "\n".join(p.get("text", "") for p in text if isinstance(p, dict))
+            text = (text or "").strip()
+            if not text:
+                logger.info(f"ℹ️ OCR не распознал текст на странице {page_num+1} ({base_name}) — "
+                            f"пустая или графическая страница; повторно не запрашиваем")
+                cache_path.write_text("", encoding='utf-8')   # маркер: не тратить API-вызовы снова
+                return None
+            cache_path.write_text(text, encoding='utf-8')
             return text
         except Exception as e:
             logger.error(f"❌ Ошибка OCR страницы {page_num+1} ({base_name}): {e}")
