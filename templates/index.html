@@ -226,6 +226,108 @@
         #qaModalCancel { background: #eee; color: #333; }
         #qaModalCancel:hover { background: #ddd; }
         #qaModalSave:disabled { opacity: 0.5; cursor: default; }
+        /* Модалка: правка текстового документа из списка документов */
+        .docs-item .btn-edit {
+            background: none;
+            border: none;
+            color: #7e57c2;
+            cursor: pointer;
+            padding: 4px 8px;
+            font-size: 16px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .docs-item .btn-edit:hover { background: #ede7f6; }
+        .edit-modal-box {
+            width: min(900px, 94vw);
+            display: flex;
+            flex-direction: column;
+            max-height: 90vh;
+            overflow: hidden;
+        }
+        /* flex-shrink: 0 у всего, кроме textarea: иначе при нехватке высоты
+           панель версий и плашка предупреждения сжимаются в полоску */
+        .edit-modal-box h3,
+        .edit-file-meta,
+        .edit-warn,
+        .edit-foot,
+        .edit-versions,
+        .edit-modal-box .qa-modal-actions { flex-shrink: 0; }
+        .edit-file-meta {
+            font-size: 12px;
+            color: #888;
+            margin: -6px 0 10px;
+            word-break: break-word;
+        }
+        .edit-warn {
+            background: #fff8e1;
+            border: 1px solid #ffe0a3;
+            color: #8a6100;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+        .edit-modal-box textarea#editTextarea {
+            flex: 1 1 auto;
+            min-height: 240px;
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            padding: 10px;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 13px;
+            line-height: 1.45;
+            white-space: pre;
+            overflow: auto;
+            resize: vertical;
+        }
+        .edit-foot {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 8px;
+            font-size: 12px;
+            color: #666;
+        }
+        .edit-foot .edit-status { flex: 1; }
+        .edit-foot .edit-status.ok { color: #2e7d32; }
+        .edit-foot .edit-status.err { color: #c62828; }
+        .edit-versions {
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            margin-top: 10px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .edit-versions .ver-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 10px;
+            font-size: 13px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .edit-versions .ver-row:last-child { border-bottom: none; }
+        .edit-versions .ver-date { flex: 1; }
+        .edit-versions .ver-size { color: #999; font-size: 12px; }
+        .edit-versions .ver-restore {
+            padding: 4px 10px;
+            border: none;
+            border-radius: 5px;
+            background: #eef2ff;
+            color: #3346b3;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .edit-versions .ver-restore:hover { background: #dde4ff; }
+        .edit-versions .edit-empty { padding: 8px 10px; font-size: 13px; color: #999; }
+        #editVersionsBtn, #editReload, #editCancel { background: #eee; color: #333; }
+        #editVersionsBtn:hover, #editReload:hover, #editCancel:hover { background: #ddd; }
+        #editSave { background: #764ba2; color: white; }
+        #editSave:hover { background: #5f3b85; }
+        #editSave:disabled { opacity: 0.5; cursor: default; }
         /* Input area */
         .input-area {
             background: white;
@@ -1044,6 +1146,27 @@
             </div>
         </div>
     </div>
+    <!-- Модалка: правка текстового документа (TXT/CSV) прямо из списка -->
+    <div class="qa-modal" id="editModal" onClick="if (event.target === this) closeEditModal()">
+        <div class="qa-modal-box edit-modal-box">
+            <h3>✏️ <span id="editModalTitle">Редактирование файла</span></h3>
+            <div class="edit-file-meta" id="editFileMeta"></div>
+            <div class="edit-warn" id="editWarn" style="display:none;"></div>
+            <textarea id="editTextarea" spellcheck="false" placeholder="Загрузка текста..."></textarea>
+            <div class="edit-foot">
+                <span class="edit-status" id="editStatus"></span>
+                <span id="editCounter"></span>
+            </div>
+            <div class="edit-versions" id="editVersions" style="display:none;"></div>
+            <div class="qa-modal-actions">
+                <button id="editVersionsBtn" onClick="toggleVersions()">🕓 Версии</button>
+                <button id="editReload" onClick="reloadEditedText()" title="Перечитать файл с сервера">🔄 Перезагрузить текст</button>
+                <button id="editCancel" onClick="closeEditModal()">Отмена</button>
+                <button id="editSave" onClick="saveEditedDocument()" disabled>💾 Сохранить</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         window.GREETING = {{ greeting|tojson }};
         const chatContainer = document.getElementById('chatContainer');
@@ -1514,6 +1637,7 @@
                                     <div class="doc-date">${new Date(doc.created_at).toLocaleString('ru-RU')}</div>
                                 </div>
                                 <div style="display:flex;gap:4px;">
+                                    ${doc.can_edit ? `<button class="btn-edit" onclick="editDocument(${doc.id})" title="Редактировать текст">✏️</button>` : ''}
                                     <button class="btn-download" onclick="downloadDocument(${doc.id})" title="Скачать">⬇️</button>
                                     <button class="btn-delete" onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_name)}')">🗑️</button>
                                 </div>
@@ -1693,6 +1817,193 @@
         function downloadDocument(docId) {
             window.location.href = `/api/documents/download/${docId}`;
         }
+
+        // === Редактор текстовых документов (TXT/CSV) из списка ===
+        const EDITABLE_EXT = ['.txt', '.csv'];
+        let editState = null;          // {id, filename, etag, original, dirty}
+        let editVersionsList = [];     // последний полученный список версий
+
+        function isEditableName(name) {
+            const n = (name || '').toLowerCase();
+            return EDITABLE_EXT.some(ext => n.endsWith(ext));
+        }
+
+        function editStatus(text, cls) {
+            const el = document.getElementById('editStatus');
+            el.textContent = text || '';
+            el.className = 'edit-status' + (cls ? ' ' + cls : '');
+        }
+
+        function editCounter() {
+            const ta = document.getElementById('editTextarea');
+            const el = document.getElementById('editCounter');
+            if (!ta || !el) return;
+            el.textContent = `${ta.value.length} символов` + (editState && editState.dirty ? ' • есть несохранённые правки' : '');
+        }
+
+        function showEditWarn(text) {
+            const w = document.getElementById('editWarn');
+            if (!text) { w.style.display = 'none'; w.textContent = ''; return; }
+            w.textContent = text;
+            w.style.display = 'block';
+        }
+
+        function editDocument(docId) {
+            editState = null;
+            editVersionsList = [];
+            const ta = document.getElementById('editTextarea');
+            ta.value = '';
+            ta.disabled = true;
+            document.getElementById('editVersions').style.display = 'none';
+            document.getElementById('editVersions').innerHTML = '';
+            document.getElementById('editWarn').style.display = 'none';
+            document.getElementById('editFileMeta').textContent = '';
+            document.getElementById('editSave').disabled = true;
+            document.getElementById('editModalTitle').textContent = 'Редактирование файла';
+            editStatus('Загрузка...');
+            editCounter();
+            document.getElementById('editModal').style.display = 'flex';
+
+            fetch(`/api/documents/${docId}/text`)
+                .then(r => r.json().then(d => ({ ok: r.ok, d })))
+                .then(({ ok, d }) => {
+                    if (!ok || !d.success) {
+                        editStatus(d.error || 'Не удалось открыть файл', 'err');
+                        return;
+                    }
+                    editState = { id: docId, filename: d.filename, etag: d.etag, original: d.text, dirty: false };
+                    ta.value = d.text;
+                    ta.disabled = false;
+                    document.getElementById('editModalTitle').textContent = d.filename;
+                    document.getElementById('editFileMeta').textContent =
+                        `${d.encoding} • переводы строк ${d.newline} • ${(d.size / 1024).toFixed(1)} КБ` +
+                        (d.is_price_list ? ` • прайс-лист: ${d.price_count} позиций` : '');
+                    if (d.is_rag_helper) {
+                        showEditWarn('Это технический TXT-файл для эмбеддингов: правится только текст, по которому строится индекс. ' +
+                                     'По ссылке из чата скачивается оригинал в другом формате — он останется прежним.');
+                    }
+                    document.getElementById('editSave').disabled = false;
+                    editStatus('');
+                    editCounter();
+                    ta.focus();
+                })
+                .catch(() => editStatus('Ошибка соединения с сервером', 'err'));
+        }
+
+        function reloadEditedText() {
+            if (!editState) return;
+            const id = editState.id;
+            if (editState.dirty && !confirm('Несохранённые правки будут потеряны. Перечитать файл с сервера?')) return;
+            editDocument(id);
+        }
+
+        function closeEditModal(force) {
+            const modal = document.getElementById('editModal');
+            if (!modal || modal.style.display !== 'flex') return;
+            if (!force && editState && editState.dirty &&
+                !confirm('Изменения не сохранены. Закрыть без сохранения?')) return;
+            modal.style.display = 'none';
+            editState = null;
+            editVersionsList = [];
+        }
+
+        function saveEditedDocument() {
+            if (!editState) return;
+            const ta = document.getElementById('editTextarea');
+            const btn = document.getElementById('editSave');
+            btn.disabled = true;
+            editStatus('Сохранение...');
+            fetch(`/api/documents/${editState.id}/save`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: ta.value, etag: editState.etag })
+            })
+                .then(r => r.json().then(d => ({ status: r.status, d })))
+                .then(({ status, d }) => {
+                    if (status === 409) {
+                        editStatus(d.error || 'Файл изменён в другой вкладке', 'err');
+                        showEditWarn('Файл был изменён в другой вкладке или сессии. Скопируйте свои правки и нажмите ' +
+                                     '«Перезагрузить текст», либо сохраните ещё раз — тогда перезапишется версия с сервера.');
+                        btn.disabled = false;
+                        return;
+                    }
+                    if (!d.success) {
+                        editStatus(d.error || 'Ошибка сохранения', 'err');
+                        btn.disabled = false;
+                        return;
+                    }
+                    editState.etag = d.etag;
+                    editState.original = ta.value;
+                    editState.dirty = false;
+                    showEditWarn('');
+                    editStatus(d.message || 'Файл сохранён', 'ok');
+                    editCounter();
+                    btn.disabled = false;
+                    loadDocuments();
+                })
+                .catch(() => { editStatus('Ошибка соединения с сервером', 'err'); btn.disabled = false; });
+        }
+
+        function toggleVersions() {
+            if (!editState) return;
+            const box = document.getElementById('editVersions');
+            if (box.style.display === 'block') { box.style.display = 'none'; return; }
+            box.innerHTML = '<div class="edit-empty">Загрузка...</div>';
+            box.style.display = 'block';
+            fetch(`/api/documents/${editState.id}/versions`)
+                .then(r => r.json())
+                .then(d => {
+                    if (!d.success || !d.versions || d.versions.length === 0) {
+                        box.innerHTML = '<div class="edit-empty">Сохранённых версий пока нет — они появятся после первой правки.</div>';
+                        return;
+                    }
+                    editVersionsList = d.versions;
+                    box.innerHTML = d.versions.map((v, i) => `
+                        <div class="ver-row">
+                            <span class="ver-date">${escapeHtml(v.saved_at)}</span>
+                            <span class="ver-size">${(v.size / 1024).toFixed(1)} КБ</span>
+                            <button class="ver-restore" onclick="restoreVersion(${i})">↩️ Восстановить</button>
+                        </div>`).join('');
+                })
+                .catch(() => { box.innerHTML = '<div class="edit-empty">Ошибка загрузки версий</div>'; });
+        }
+
+        function restoreVersion(index) {
+            if (!editState || !editVersionsList[index]) return;
+            if (!confirm('Восстановить эту версию? Текущее содержимое тоже сохранится как версия.')) return;
+            editStatus('Восстановление...');
+            fetch(`/api/documents/${editState.id}/versions/restore`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ version: editVersionsList[index].version })
+            })
+                .then(r => r.json())
+                .then(d => {
+                    if (!d.success) { editStatus(d.error || 'Ошибка восстановления', 'err'); return; }
+                    const id = editState.id;
+                    loadDocuments();
+                    editDocument(id);
+                    editStatus(d.message || 'Версия восстановлена', 'ok');
+                })
+                .catch(() => editStatus('Ошибка соединения с сервером', 'err'));
+        }
+
+        (function initEditorKeys() {
+            const ta = document.getElementById('editTextarea');
+            ta.addEventListener('input', () => {
+                if (editState) editState.dirty = ta.value !== editState.original;
+                editCounter();
+            });
+            ta.addEventListener('keydown', (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                    e.preventDefault();
+                    if (!document.getElementById('editSave').disabled) saveEditedDocument();
+                }
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') closeEditModal();
+            });
+        })();
 
         // === Множественный выбор / удаление / скачивание ===
         function getSelectedDocIds() {
