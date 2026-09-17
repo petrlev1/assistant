@@ -268,6 +268,63 @@ def detect_price_intent(question):
     return bool(_PRICE_INTENT_RE.search(question or ""))
 
 
+# === Память диалога (вариант B) ===
+# История уходит в messages (модель видит предыдущие ходы), а поиск по базе знаний —
+# по «осмысленному» запросу: прошлые вопросы пользователя + текущий. Это лечит follow-up
+# («а второй сколько стоит?»), по которому гибридный поиск сам по себе не находит ничего.
+_SOURCES_BLOCK_RE = re.compile(r'\n*Источники:.*$', re.S)
+
+
+def _norm_question(text):
+    """Нормализация вопроса для сравнения (регистр и пробелы)."""
+    return ' '.join((text or '').lower().split())
+
+
+def _prepare_chat_history(history, question):
+    """История диалога для промпта: [{'role','message'}] в хронологическом порядке.
+
+    * Текущий вопрос уже сохранён в chat_history до вызова модели (так работает и веб-чат,
+      и виджет) — последнюю запись с тем же текстом убираем, иначе вопрос дублируется.
+    * Из ответов бота вырезаем блок «Источники: …» — это внутренняя служебная информация,
+      в промпте она только мешает (и модель начинала бы перечислять файлы базы).
+    """
+    if not history:
+        return []
+    items = [{'role': str(h.get('role') or ''), 'message': h.get('message') or ''}
+             for h in history if h and (h.get('message') or '').strip()]
+    if items and items[-1]['role'] == 'user' and _norm_question(items[-1]['message']) == _norm_question(question):
+        items.pop()
+    out = []
+    for it in items:
+        text = it['message']
+        if it['role'] == 'assistant':
+            text = _SOURCES_BLOCK_RE.sub('', text).strip()
+            if not text:
+                continue
+            out.append({'role': 'assistant', 'message': text})
+        else:
+            out.append({'role': 'user', 'message': text})
+    return out
+
+
+def _context_search_query(history, question, max_questions=2):
+    """Поисковый запрос с учётом диалога: последние вопросы пользователя + текущий.
+
+    None — истории нет: поиск идёт по исходному вопросу, поведение системы не меняется.
+    """
+    if not history:
+        return None
+    try:
+        n = max(1, int(max_questions))
+    except (TypeError, ValueError):
+        n = 2
+    prev = [h['message'] for h in history if h.get('role') == 'user'][-n:]
+    if not prev:
+        return None
+    joined = ' '.join(prev + [question or '']).strip()
+    return joined or None
+
+
 class RAGSettings:
     """Класс для управления настройками RAG-системы.
     Настройки хранятся в PostgreSQL (таблица app_settings). Файл rag_settings.json
@@ -289,6 +346,14 @@ class RAGSettings:
             "search_alpha": 0.7,
             "relevance_threshold": 0.2,
             "max_context_fragments": 100,
+            # Память диалога: история уходит в messages, а поиск по БЗ при промахе
+            # повторяется по склейке последних вопросов (вариант B, без доп. LLM-вызова)
+            "chat_memory_enabled": True,         # веб-чат
+            "chat_memory_external": True,        # виджет на сайте и чат-бот MAX
+            "chat_memory_max_messages": 20,      # сколько последних сообщений берём в промпт
+            "chat_memory_max_chars": 4000,       # бюджет символов на историю в промпте
+            "chat_memory_ttl_minutes": 120,      # разрыв: старше N минут от последнего — не берём
+            "chat_memory_context_questions": 2,  # сколько прошлых вопросов склеивать для поиска
             # Настройки OCR для сканированных PDF (DashScope qwen-vl-ocr)
             "ocr_enabled": False,
             "ocr_model": "qwen-vl-ocr",
@@ -1359,13 +1424,27 @@ class RAGCore:
             s = f"{val:,.2f}".replace(",", " ").replace(".", ",")
         return f"{s} ₽"
 
-    def find_relevant_info(self, query, top_k=None, alpha=None):
-        """Гибридный поиск (потокобезопасно: читает согласованный снимок БЗ)."""
-        with self._state_lock:
-            return self._find_relevant_info_impl(query, top_k, alpha)
+    def find_relevant_info(self, query, top_k=None, alpha=None, alt_query=None):
+        """Гибридный поиск (потокобезопасно: читает согласованный снимок БЗ).
 
-    def _find_relevant_info_impl(self, query, top_k=None, alpha=None):
-        """Гибридный поиск"""
+        alt_query — тот же вопрос, переформулированный с учётом диалога (прошлые вопросы
+        пользователя + текущий). Если по исходному запросу релевантность ниже порога,
+        повторяем поиск по нему: follow-up вроде «а второй сколько стоит?» без этого
+        находит пустоту, хотя тема была названа в предыдущем сообщении.
+        """
+        with self._state_lock:
+            text, files, score = self._search_once(query, top_k, alpha)
+            if alt_query and alt_query.strip() != (query or '').strip():
+                threshold = self.settings.get("relevance_threshold", 0.2)
+                if score < threshold:
+                    logger.info(f"🔁 Повторный поиск с учётом диалога: \"{alt_query}\"")
+                    text2, files2, score2 = self._search_once(alt_query, top_k, alpha)
+                    if score2 > score:
+                        return text2, files2
+            return text, files
+
+    def _search_once(self, query, top_k=None, alpha=None):
+        """Один проход гибридного поиска: (контекст, файлы-источники, лучший скор)."""
         # Используем значения из настроек, если не переданы другие
         actual_top_k = top_k if top_k is not None else self.settings.get("search_top_k", 10)
         actual_alpha = alpha if alpha is not None else self.settings.get("search_alpha", 0.7)
@@ -1376,14 +1455,14 @@ class RAGCore:
         if self.settings.get("disable_hybrid_search", False):
             logger.info("🔤 Гибридный поиск отключен. Передаем всю базу знаний.")
             indices = list(range(min(len(self.my_knowledge), max_context_fragments)))
-            return "\n".join(self.my_knowledge[:max_context_fragments]), self._get_source_files(indices)
+            return "\n".join(self.my_knowledge[:max_context_fragments]), self._get_source_files(indices), 1.0
         
         logger.info(f"\n🔍 Поиск релевантной информации для запроса: \"{query}\"")
         
         if not self.my_knowledge or self.corpus_embeddings is None or self.bm25 is None:
             logger.warning("⚠️ База знаний не загружена.")
-            return "База знаний не загружена.", []
-        
+            return "База знаний не загружена.", [], 0.0
+
         # Семантический поиск
         logger.info("🧠 Выполнение семантического поиска...")
         query_embedding = self.model.encode(query, convert_to_tensor=True)
@@ -1418,25 +1497,41 @@ class RAGCore:
         best_score = combined_scores[top_indices[0]] if top_indices else 0
         if best_score < relevance_threshold:  # <-- Используем настраиваемый порог
             logger.warning(f"⚠️ Низкая релевантность найденных данных (скор: {best_score:.3f}).")
-            return "Я не знаю ответа на этот вопрос.", []
+            return "Я не знаю ответа на этот вопрос.", [], best_score
 
         result = [self.my_knowledge[idx] for idx in top_indices]
         source_files = self._get_source_files(top_indices)
         logger.info(f"✅ Найдено {len(result)} релевантных фрагментов (лучший скор: {best_score:.3f})")
-        return "\n".join(result), source_files
+        return "\n".join(result), source_files, best_score
     
-    def ask_model(self, question, user_prompt=None):
+    def ask_model(self, question, user_prompt=None, history=None):
         """Отправка запроса ко всем доступным моделям
+
         user_prompt: персональный системный промт пользователя (если задан — используется вместо системного по умолчанию)
+        history: предыдущие сообщения диалога [{'role','message'}] — их даёт канал (веб-чат,
+            виджет, MAX). Модель видит их как обычные ходы, а поиск по базе знаний при
+            низкой релевантности повторяется по склейке прошлых вопросов с текущим (вариант B).
         """
         # Перечитываем настройки из файла — изменения из лаунчера применяются без рестарта сервера
         self.settings.reload()
         # Обновляем клиент с актуальными настройками
         self._setup_client()
 
+        # Память диалога: чистим пришедшую историю и готовим поисковый запрос с её учётом
+        history = _prepare_chat_history(history, question)
+        ctx_query = _context_search_query(history, question,
+                                          self.settings.get("chat_memory_context_questions", 2))
+        if history:
+            logger.info(f"🧠 Память диалога: {len(history)} сообщ. (поисковый запрос: \"{ctx_query}\")")
+        else:
+            ctx_query = None
+
         # Точный путь: ценовой вопрос → поиск по прайс-листу (PostgreSQL).
         # Если найдено — отвечаем фактами из таблицы без LLM.
         price_answer = self._try_price_answer(question)
+        if not price_answer and ctx_query:
+            # Follow-up про цену («а второй сколько стоит?») — ищем по склейке с прошлым вопросом
+            price_answer = self._try_price_answer(ctx_query)
         if price_answer:
             if self.settings.get("disable_llm_models", False):
                 price_answer += "\n\n⚠️ Отправка запросов к LLM моделям отключена."
@@ -1446,6 +1541,8 @@ class RAGCore:
         # Похожий вопрос → отвечаем исправлением напрямую (без LLM и поиска по БЗ).
         if not self.settings.get("disable_qa_corrections", False):
             correction_answer = self._try_qa_correction(question)
+            if not correction_answer and ctx_query:
+                correction_answer = self._try_qa_correction(ctx_query)
             if correction_answer:
                 return correction_answer
 
@@ -1460,7 +1557,8 @@ class RAGCore:
             search_top_k = self.settings.get("search_top_k", 10)
             search_alpha = self.settings.get("search_alpha", 0.7)
             
-            context_result = self.find_relevant_info(question, top_k=search_top_k, alpha=search_alpha)
+            context_result = self.find_relevant_info(question, top_k=search_top_k, alpha=search_alpha,
+                                                     alt_query=ctx_query)
             if isinstance(context_result, tuple):
                 context, source_files = context_result
             else:
@@ -1504,6 +1602,11 @@ class RAGCore:
             logger.info("⚠️ Найден символ \\u2026 в question, заменяю...")
         question = self._sanitize_text(question)
         
+        # История диалога — между системным промтом и текущим вопросом
+        messages = [{"role": "system", "content": system_prompt}]
+        messages += [{"role": h["role"], "content": h["message"]} for h in history]
+        messages.append({"role": "user", "content": question})
+
         # Единственная активная модель — из настроек (раньше был цикл по AVAILABLE_MODELS,
         # но список содержал одну модель и только путал: фактически всегда бралась llm_model).
         active_model = self.settings.get("llm_model", "deepseek-v4-flash")
@@ -1518,10 +1621,7 @@ class RAGCore:
                 },
                 json={
                     "model": active_model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": question},
-                    ],
+                    "messages": messages,
                 },
                 timeout=60,
             )
