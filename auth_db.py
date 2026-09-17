@@ -676,6 +676,16 @@ def init_chat_history():
             CREATE INDEX IF NOT EXISTS idx_chat_history_device
             ON chat_history (user_id, device_id, created_at)
         """)
+        # Границы диалога: кнопка «Новый диалог» поднимает started_at, и модель
+        # перестаёт видеть сообщения до этой метки (история в чате остаётся целиком).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                device_id VARCHAR(64) NOT NULL,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, device_id)
+            )
+        """)
         conn.commit()
         cur.close()
         conn.close()
@@ -780,6 +790,108 @@ def get_history(user_id, limit=50, device_id='web'):
     except Exception as e:
         logger.error(f"Ошибка загрузки истории: {e}")
         return []
+
+
+def get_session_start(user_id, device_id='web'):
+    """Начало текущего диалога для (пользователя, устройства).
+
+    None — пользователь ещё не нажимал «Новый диалог»: границей считается вся история.
+    """
+    if not user_id or not device_id:
+        return None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT started_at FROM chat_sessions WHERE user_id = %s AND device_id = %s",
+            (user_id, device_id),
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row else None
+    except Exception as e:
+        logger.error(f"Ошибка чтения границы диалога: {e}")
+        return None
+
+
+def start_new_chat_session(user_id, device_id='web'):
+    """«Новый диалог»: модель начинает с чистого листа, история остаётся для показа.
+
+    Сообщения не удаляются — сдвигается только граница, от которой читается контекст.
+    """
+    if not user_id or not device_id:
+        return False
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO chat_sessions (user_id, device_id, started_at) VALUES (%s, %s, CURRENT_TIMESTAMP) "
+            "ON CONFLICT (user_id, device_id) DO UPDATE SET started_at = CURRENT_TIMESTAMP",
+            (user_id, device_id),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"🆕 Пользователь #{user_id}: начат новый диалог (устройство {device_id})")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка начала нового диалога: {e}")
+        return False
+
+
+def get_prompt_context(user_id, device_id, limit=20, max_chars=4000, ttl_minutes=120):
+    """Сообщения, которые отдаём модели как контекст диалога (это НЕ показ истории).
+
+    Правила (вариант B):
+      * только своя область device_id — без наследственной истории 'web' (иначе
+        посетитель виджета увидел бы чужой диалог в промпте);
+      * только после метки «Новый диалог» (chat_sessions.started_at);
+      * последние `limit` сообщений;
+      * не старше `ttl_minutes` от самого свежего сообщения — старая переписка не тянется;
+      * бюджет `max_chars` символов: при переполнении отбрасываем самые старые.
+
+    Возвращает [{'role','message'}] в хронологическом порядке.
+    """
+    if not user_id or not device_id:
+        return []
+    ttl = int(ttl_minutes or 0)
+    if ttl <= 0:                     # 0 = без ограничения по времени (не рекомендовано)
+        ttl = 52560000               # ~100 лет: тот же SQL, просто условие не срабатывает
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            WITH scope AS (
+                SELECT role, message, created_at FROM chat_history
+                WHERE user_id = %s AND device_id = %s
+                  AND created_at >= COALESCE(
+                      (SELECT started_at FROM chat_sessions WHERE user_id = %s AND device_id = %s),
+                      TIMESTAMP '1970-01-01')
+                ORDER BY created_at DESC
+                LIMIT %s
+            )
+            SELECT role, message FROM scope
+            WHERE created_at >= (SELECT max(created_at) FROM scope) - (%s * INTERVAL '1 minute')
+            ORDER BY created_at ASC
+        """, (user_id, device_id, user_id, device_id, int(limit or 20), ttl))
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Ошибка загрузки контекста диалога: {e}")
+        return []
+
+    # Бюджет по символам: идём от свежих к старым, лишнее (старое) отбрасываем
+    out, total = [], 0
+    for row in reversed(rows):
+        text = row.get('message') or ''
+        if out and total + len(text) > max_chars:
+            break
+        out.append({'role': row['role'], 'message': text})
+        total += len(text)
+    out.reverse()
+    return out
 
 
 def clear_chat_history(user_id, device_id=None):
