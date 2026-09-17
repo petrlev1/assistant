@@ -16,7 +16,7 @@ import csv
 from datetime import datetime
 from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_all_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
                      clear_widget_history)
@@ -235,6 +235,48 @@ def _device_id():
     return did
 
 
+def _with_ts(messages):
+    """Добавляет сообщениям epoch-метку 'ts' (клиенту нужен разделитель «новый диалог»).
+
+    Дата берётся в серверном времени — так же, как chat_sessions.started_at, поэтому
+    сравнение на клиенте не зависит от таймзоны браузера.
+    """
+    out = []
+    for m in messages or []:
+        m = dict(m)
+        created = m.get('created_at')
+        m['ts'] = created.timestamp() if hasattr(created, 'timestamp') else 0
+        out.append(m)
+    return out
+
+
+def _chat_context(user_id, device_id, external=False):
+    """История диалога для модели (память диалога, вариант B).
+
+    Пусто, если память выключена настройками. external=True — виджет на сайте и MAX:
+    там своя область device_id (без наследственной истории владельца 'web') и отдельный
+    выключатель: у внешних собеседников — чужие люди, а не владелец базы.
+    """
+    key = "chat_memory_external" if external else "chat_memory_enabled"
+    try:
+        st = get_all_settings() or {}
+    except Exception as e:
+        logger.error(f"Не удалось прочитать настройки памяти диалога: {e}")
+        return []
+    if not st.get(key, True):
+        return []
+    try:
+        return get_prompt_context(
+            user_id, device_id,
+            limit=int(st.get("chat_memory_max_messages", 20) or 20),
+            max_chars=int(st.get("chat_memory_max_chars", 4000) or 4000),
+            ttl_minutes=int(st.get("chat_memory_ttl_minutes", 120) or 0),
+        )
+    except (TypeError, ValueError) as e:
+        logger.error(f"Некорректные настройки памяти диалога: {e}")
+        return get_prompt_context(user_id, device_id)
+
+
 # === Маршруты аутентификации ===
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -408,7 +450,10 @@ def ask_question():
         # Персональный промт пользователя (если задан — заменит системный промт по умолчанию)
         user_prompt = get_user_prompt(user_id)
 
-        answer = user_rag.ask_model(question, user_prompt=user_prompt)
+        # Память диалога: последние сообщения ЭТОГО устройства (см. chat_memory_* в настройках)
+        history = _chat_context(user_id, device_id)
+
+        answer = user_rag.ask_model(question, user_prompt=user_prompt, history=history)
         logger.info("Ответ сгенерирован успешно")
 
         # Сохраняем ответ в историю
@@ -443,7 +488,9 @@ def get_chat_history():
 
     did = _device_id()
     messages = get_history(session['user_id'], device_id=did)
-    resp = jsonify({'messages': messages})
+    started = get_session_start(session['user_id'], did)
+    resp = jsonify({'messages': _with_ts(messages),
+                    'session_started_at': started.timestamp() if started else 0})
     resp.set_cookie('device_id', did, max_age=365 * 24 * 3600, samesite='Lax')
     return resp
 
@@ -472,6 +519,24 @@ def clear_chat():
         return resp
     else:
         return jsonify({'error': 'Ошибка при очистке истории'}), 500
+
+
+@app.route('/api/chat/new', methods=['POST'])
+def new_chat_dialogue():
+    """«Новый диалог»: модель перестаёт видеть прошлые сообщения (они остаются в истории).
+
+    Ничего не удаляется — сдвигается граница, от которой читается контекст диалога.
+    """
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    did = _device_id()
+    if not start_new_chat_session(session['user_id'], did):
+        return jsonify({'error': 'Не удалось начать новый диалог'}), 500
+    logger.info(f"🆕 Пользователь {session.get('username')} начал новый диалог (устройство {did[:8]}…)")
+    resp = jsonify({'success': True})
+    resp.set_cookie('device_id', did, max_age=365 * 24 * 3600, samesite='Lax')
+    return resp
 
 
 @app.route('/api/chat/delete/<int:message_id>', methods=['POST'])
@@ -1625,7 +1690,8 @@ def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_s
         save_message(user_id, 'user', question, device_id=scope)
         chat_logger.log_message(label, user_id, question, is_bot=False,
                                 provider=provider, model=model)
-        answer = user_rag.ask_model(question, user_prompt=get_user_prompt(user_id))
+        history = _chat_context(user_id, scope, external=True)
+        answer = user_rag.ask_model(question, user_prompt=get_user_prompt(user_id), history=history)
         # Внешнему собеседнику источники не показываем (файлы базы — внутренние)
         if strip_sources:
             answer = _WIDGET_SOURCES_RE.sub('', answer or '').strip()
@@ -1734,7 +1800,10 @@ def widget_history_api():
     w, visitor, err = _widget_guard(request.args)
     if err:
         return err
-    return jsonify({'messages': get_widget_history(w['user_id'], _widget_scope(w, visitor))})
+    scope = _widget_scope(w, visitor)
+    started = get_session_start(w['user_id'], scope)
+    return jsonify({'messages': _with_ts(get_widget_history(w['user_id'], scope)),
+                    'session_started_at': started.timestamp() if started else 0})
 
 
 @app.route('/api/widget/ask', methods=['POST'])
@@ -1760,6 +1829,17 @@ def widget_ask():
         logger.error(f"Виджет «{w['name']}»: {err_msg}")
         return jsonify({'error': err_msg}), 500
     return jsonify({'answer': answer})
+
+
+@app.route('/api/widget/new', methods=['POST'])
+def widget_new_dialogue():
+    """Посетитель виджета начинает новый диалог: контекст модели очищается, лента остаётся."""
+    data = request.get_json(silent=True) or {}
+    w, visitor, err = _widget_guard(data)
+    if err:
+        return err
+    ok = start_new_chat_session(w['user_id'], _widget_scope(w, visitor))
+    return jsonify({'success': bool(ok)})
 
 
 @app.route('/api/widget/clear', methods=['POST'])
@@ -1878,6 +1958,11 @@ _max_queue = None
 _max_polling = None
 
 
+def _norm_command(text):
+    """Нормализация текстовой команды собеседника («Новый диалог!» → 'новый диалог')."""
+    return ' '.join((text or '').strip().lower().rstrip('!.,').split())
+
+
 def _max_scope(channel_id, max_user_id):
     """Область истории собеседника в MAX: у каждого пользователя своя лента."""
     return ('max:%s:%s' % (channel_id, max_user_id))[:64]
@@ -1915,6 +2000,11 @@ def _max_handle_update(channel, update):
         _max_send(channel, build_greeting(get_user_prompt(channel['user_id']), 'гость'), sender)
         return
     if utype != 'message_created' or not text:
+        return
+    # Команда «новый диалог»: контекст модели очищается, ответа от LLM не требуется
+    if _norm_command(text) in ('/new', '/новый', '/начать', 'новый диалог', 'начать заново'):
+        start_new_chat_session(channel['user_id'], _max_scope(channel['id'], sender))
+        _max_send(channel, 'Начали новый диалог. Слушаю ваш вопрос.', sender)
         return
     # 10 сообщений/мин на собеседника (каждый ответ — платный вызов LLM)
     if _rate_limited('mx:%s:%s' % (channel['id'], sender), limit=10, window=60):

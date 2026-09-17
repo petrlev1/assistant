@@ -82,6 +82,12 @@ _DEFAULTS = {
     "search_alpha": 0.7,
     "relevance_threshold": 0.1,
     "max_context_fragments": 100,
+    "chat_memory_enabled": True,
+    "chat_memory_external": True,
+    "chat_memory_max_messages": 20,
+    "chat_memory_max_chars": 4000,
+    "chat_memory_ttl_minutes": 120,
+    "chat_memory_context_questions": 2,
     "telegram_bot_token": "",
     "llm_provider_api_key": "",
     "llm_openrouter_api_key": "",
@@ -101,6 +107,9 @@ _OCR_MODELS = ["qwen-vl-ocr", "qwen-vl-plus", "qwen-vl-max"]
 SETTINGS_GROUPS = [
     ("Основные", ["disable_llm_models", "disable_hybrid_search", "disable_knowledge_base_search"]),
     ("Поиск", ["search_top_k", "search_alpha", "relevance_threshold", "max_context_fragments"]),
+    ("Память диалога", ["chat_memory_enabled", "chat_memory_external", "chat_memory_max_messages",
+                        "chat_memory_max_chars", "chat_memory_ttl_minutes",
+                        "chat_memory_context_questions"]),
     ("API (LLM)", ["llm_provider", "llm_model", "llm_base_url", "llm_api_key",
                    "llm_provider_api_key", "llm_openrouter_api_key"]),
     ("OCR", ["ocr_enabled", "ocr_model", "ocr_base_url", "ocr_dpi"]),
@@ -114,6 +123,12 @@ _KEY_HINTS = {
     "search_alpha": "число от 0.0 до 1.0 (0 — только ключевые слова, 1 — только семантика)",
     "relevance_threshold": "число от 0.0 до 1.0 (рекомендуется 0.1–0.3)",
     "max_context_fragments": "целое число от 10 до 500",
+    "chat_memory_enabled": "true/false — бот учитывает прошлые сообщения (веб-чат)",
+    "chat_memory_external": "true/false — память диалога для виджета на сайте и MAX-бота",
+    "chat_memory_max_messages": "целое 2–80: сколько последних сообщений уходит в промпт",
+    "chat_memory_max_chars": "целое 500–20000: бюджет символов на историю в промпте",
+    "chat_memory_ttl_minutes": "целое 0–10080: разрыв диалога (0 — не разрывать по времени)",
+    "chat_memory_context_questions": "целое 0–5: сколько прошлых вопросов склеивать для поиска по БЗ",
     "ocr_dpi": "целое число от 50 до 600 (рекомендуется 150)",
     "disable_llm_models": "true/false",
     "disable_hybrid_search": "true/false",
@@ -140,7 +155,8 @@ _WEB_MODES = [
 ]
 
 # Булевы настройки (в меню выбираются стрелками true/false)
-_BOOL_KEYS = ("disable_llm_models", "disable_hybrid_search", "disable_knowledge_base_search", "ocr_enabled")
+_BOOL_KEYS = ("disable_llm_models", "disable_hybrid_search", "disable_knowledge_base_search", "ocr_enabled",
+              "chat_memory_enabled", "chat_memory_external")
 
 # Код, который исполняется в отдельном процессе Telegram-бота (токен читается из БД,
 # чтобы не передавать секрет через аргументы командной строки)
@@ -220,7 +236,9 @@ def validate_setting(key, value):
     """Валидация значения настройки (зеркало validate_and_apply_settings GUI-лаунчера).
     Возвращает (нормализованное_значение, предупреждение_или_None).
     При неверном типе/диапазоне возвращает (None, ошибка) — значение не сохраняется."""
-    if key in ("search_top_k", "max_context_fragments", "ocr_dpi"):
+    if key in ("search_top_k", "max_context_fragments", "ocr_dpi",
+               "chat_memory_max_messages", "chat_memory_max_chars",
+               "chat_memory_ttl_minutes", "chat_memory_context_questions"):
         try:
             v = int(str(value).strip())
         except (TypeError, ValueError):
@@ -231,6 +249,14 @@ def validate_setting(key, value):
             return None, "максимум фрагментов должен быть от 10 до 500"
         if key == "ocr_dpi" and not (50 <= v <= 600):
             return None, "OCR DPI должен быть от 50 до 600"
+        if key == "chat_memory_max_messages" and not (2 <= v <= 80):
+            return None, "память диалога: число сообщений должно быть от 2 до 80"
+        if key == "chat_memory_max_chars" and not (500 <= v <= 20000):
+            return None, "память диалога: бюджет символов должен быть от 500 до 20000"
+        if key == "chat_memory_ttl_minutes" and not (0 <= v <= 10080):
+            return None, "память диалога: разрыв должен быть от 0 до 10080 минут (0 — без разрыва)"
+        if key == "chat_memory_context_questions" and not (0 <= v <= 5):
+            return None, "память диалога: прошлых вопросов для поиска — от 0 до 5"
         return v, None
     if key in ("search_alpha", "relevance_threshold"):
         try:
@@ -240,7 +266,7 @@ def validate_setting(key, value):
         if not (0.0 <= v <= 1.0):
             return None, "значение должно быть в диапазоне 0.0–1.0"
         return v, None
-    if key in ("disable_llm_models", "disable_hybrid_search", "disable_knowledge_base_search", "ocr_enabled"):
+    if key in _BOOL_KEYS:
         v = _parse_bool(value)
         if v is None:
             return None, "ожидается true/false (1/0, yes/no, on/off)"

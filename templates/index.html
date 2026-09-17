@@ -890,6 +890,11 @@
             flex-shrink: 0;
         }
         .chat-header h3 { font-size: 16px; color: #333; }
+        .btn-new-chat { background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe;
+            border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 13px; }
+        .btn-new-chat:hover { background: #e0e7ff; }
+        .dialogue-divider { text-align: center; color: #9aa3b5; font-size: 12px;
+            margin: 14px 0 6px; letter-spacing: .04em; user-select: none; }
         .btn-clear-chat {
             background: rgba(244,67,54,0.1);
             color: #d32f2f;
@@ -998,6 +1003,7 @@
                     <a href="{{ url_for('widgets_page') }}" class="btn-analytics" title="Виджет чата для вашего сайта">🪶 Виджет</a>
                     <button class="btn-analytics" onClick="toggleMaxPanel()" title="Чат-бот в мессенджере MAX">🤖 MAX-бот</button>
                     <a href="{{ url_for('analytics') }}" class="btn-analytics" title="Статистика ваших запросов">📊 Аналитика</a>
+                    <button class="btn-new-chat" onClick="newDialogue()" title="Новый диалог: бот перестанет учитывать прошлые сообщения (они останутся в истории)">🆕 Новый диалог</button>
                     <button class="btn-clear-chat" onClick="clearChat()" title="Удалить всю историю чата">🗑️ Удалить весь чат</button>
                 </div>
             </div>
@@ -1253,7 +1259,14 @@
                         if (welcomeMsg && welcomeMsg.querySelector('.label').textContent === 'СИСТЕМА') {
                             welcomeMsg.remove();
                         }
-                        data.messages.forEach(msg => {
+                        // Разделитель «новый диалог»: сообщения выше бот уже не учитывает
+                        const startTs = Number(data.session_started_at) || 0;
+                        let dividerDone = false;
+                        data.messages.forEach((msg, idx) => {
+                            if (!dividerDone && startTs && Number(msg.ts) >= startTs && idx > 0) {
+                                dividerDone = true;
+                                chatContainer.insertBefore(newDialogueDivider(), typingIndicator);
+                            }
                             const label = msg.role === 'user' ? 'Вы' : 'Бот';
                             const isUser = msg.role === 'user';
                             const div = document.createElement('div');
@@ -2077,6 +2090,28 @@
                 return;
             }
             window.location.href = '/api/documents/download-bulk?ids=' + ids.join(',');
+        }
+
+        function newDialogueDivider() {
+            const div = document.createElement('div');
+            div.className = 'dialogue-divider';
+            div.textContent = '— новый диалог —';
+            return div;
+        }
+
+        // «Новый диалог»: сообщения не удаляются, но бот перестаёт их учитывать
+        function newDialogue() {
+            fetch('/api/chat/new', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        chatContainer.insertBefore(newDialogueDivider(), typingIndicator);
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                    } else {
+                        alert('Ошибка: ' + (data.error || 'Не удалось начать новый диалог'));
+                    }
+                })
+                .catch(() => alert('Ошибка соединения с сервером'));
         }
 
         function clearChat() {

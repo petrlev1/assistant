@@ -57,6 +57,7 @@
     <div class="hd">
         <div class="ava">🤖</div>
         <div class="ttl"><b>{{ w.name }}</b><span>Онлайн — спросите</span></div>
+        <button id="newBtn" title="Новый диалог">🆕</button>
         <button id="clearBtn" title="Очистить переписку">🗑️</button>
         <button id="closeBtn" title="Закрыть чат">✕</button>
     </div>
@@ -123,7 +124,15 @@
     api('/api/widget/history?' + new URLSearchParams(pack())).then(function (d) {
         if (d.messages && d.messages.length) {
             chat.querySelector('.msg.bot').remove();
-            d.messages.forEach(function (m) { add(m.message, m.role === 'user' ? 'user' : 'bot'); });
+            // Разделитель: сообщения выше бот уже не учитывает (кнопка «Новый диалог»)
+            var startTs = Number(d.session_started_at) || 0, done = false;
+            d.messages.forEach(function (m, idx) {
+                if (!done && startTs && Number(m.ts) >= startTs && idx > 0) {
+                    done = true;
+                    add('— новый диалог —', null, 'sys');
+                }
+                add(m.message, m.role === 'user' ? 'user' : 'bot');
+            });
         }
     }).catch(function () {});
 
@@ -149,6 +158,10 @@
     });
     q.addEventListener('input', function () {
         q.style.height = 'auto'; q.style.height = Math.min(q.scrollHeight, 110) + 'px';
+    });
+    document.getElementById('newBtn').addEventListener('click', function () {
+        if (!confirm('Начать новый диалог? Прошлые сообщения останутся в ленте, но ассистент их учитывать не будет.')) return;
+        api('/api/widget/new', pack()).then(function () { location.reload(); });
     });
     document.getElementById('clearBtn').addEventListener('click', function () {
         if (!confirm('Очистить переписку с ассистентом?')) return;
