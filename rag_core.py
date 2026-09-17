@@ -508,6 +508,23 @@ def _get_embedding_model():
         return _EMBEDDING_MODEL
 
 
+# Порог «значимого» фрагмента текста при извлечении из PDF/DOCX.
+# Всё, что короче, — подписи к рисункам, заголовки таблиц, колонтитулы — раньше
+# отбрасывалось (порог был 50) вместе с осмысленными заголовками разделов:
+# на реальной базе (48 PDF, 760 страниц) фильтр выбрасывал 4540 фрагментов против
+# 3803 оставленных, причём 2/3 отброшенного лежало на страницах с обычным текстом.
+MIN_FRAGMENT_CHARS = 20
+# «На странице есть настоящий текстовый слой» — по этому признаку решается, нужен ли OCR.
+# Порог держим ОТДЕЛЬНО от MIN_FRAGMENT_CHARS: у страниц-чертежей в текстовом слое только
+# 50-символьный колонтитул, и если считать такие страницы «текстовыми», OCR перестанет
+# вытаскивать текст с картинок.
+OCR_TRIGGER_MIN_CHARS = 50
+# Короткие фрагменты-повторы в пределах одного файла оставляем один раз
+# («Руководство по монтажу и наладке» встречается в файле до 89 раз — это колонтитул,
+# 89 одинаковых векторов только засоряют индекс).
+DEDUPE_SHORT_MAX_CHARS = 100
+
+
 class RAGCore:
     def __init__(self, user_id=None):
         """Инициализация RAG-системы"""
@@ -776,13 +793,60 @@ class RAGCore:
             logger.error(f"❌ Ошибка OCR страницы {page_num+1} ({base_name}): {e}")
             return None
 
+    def _page_fragments(self, paragraphs):
+        """Отбор фрагментов страницы из сырых блоков текста.
+
+        Возвращает (fragments, long_chars):
+          * fragments — тексты, пригодные для базы знаний (> MIN_FRAGMENT_CHARS и не мусор),
+            в исходном порядке;
+          * long_chars — сколько символов дал «настоящий» текстовый слой. По этому числу
+            решается, нужен ли OCR: короткие колонтитулы и подписи в базе теперь есть,
+            но страницу-чертёж они «текстовой» не делают.
+
+        Многострочные блоки склеиваются в один пробел (для PDF это абзац).
+        """
+        fragments, long_chars = [], 0
+        for paragraph in paragraphs or []:
+            paragraph = " ".join(line.strip() for line in (paragraph or "").split('\n') if line.strip())
+            if not paragraph or self._is_garbage_text(paragraph):
+                continue
+            if len(paragraph) > OCR_TRIGGER_MIN_CHARS:
+                long_chars += len(paragraph)
+            if len(paragraph) > MIN_FRAGMENT_CHARS:
+                fragments.append(paragraph)
+        return fragments, long_chars
+
+    @staticmethod
+    def _dedupe_key(paragraph):
+        """Ключ дедупликации коротких фрагментов (None — длинные не дедуплицируем).
+
+        Короткие блоки («Руководство по монтажу и наладке», «Аэрационная колонна | Паспорт»)
+        повторяются на каждой странице: один такой вектор в индексе полезен, десятки
+        одинаковых — шум. Длинные абзацы оставляем: одинаковый текст в разных местах
+        документа обычно несёт разный контекст.
+        """
+        if len(paragraph) > DEDUPE_SHORT_MAX_CHARS:
+            return None
+        return ' '.join(paragraph.lower().split())
+
     def _extract_pdf_text(self, file_path):
         """Извлечение текста из PDF: PyMuPDF (качественный) с фолбэком на PyPDF2.
-        Пустые/мусорные страницы (сканы) распознаются через OCR (fal.ai), если он включён.
+        Пустые/содержащие только картинки страницы распознаются через OCR, если он включён.
         Возвращает список фрагментов с префиксом источника."""
         base_name = os.path.basename(file_path)
         pdf_knowledge = []
+        seen_short = set()   # короткие фрагменты, уже добавленные из этого файла
         ocr_enabled = bool(self.settings.get("ocr_enabled", False))
+
+        def add_fragment(paragraph, page_num):
+            """Добавить фрагмент страницы, отсекая повторы коротких (колонтитулы)."""
+            key = self._dedupe_key(paragraph)
+            if key is not None:
+                if key in seen_short:
+                    return False
+                seen_short.add(key)
+            pdf_knowledge.append(f"[{base_name}, стр. {page_num}] {paragraph}")
+            return True
 
         try:
             import fitz  # PyMuPDF
@@ -791,30 +855,24 @@ class RAGCore:
                 logger.info(f"📄 Обработка PDF (PyMuPDF): {base_name} (всего страниц: {len(doc)})")
                 for page_num in range(len(doc)):
                     page = doc[page_num]
-                    page_fragments = []
                     # blocks + sort=True: правильный порядок чтения и отсев дублей
                     # текстового слоя (дизайнерские PDF и буклеты часто дублируют текст)
-                    blocks = page.get_text("blocks", sort=True)
-                    for block in blocks:
-                        paragraph = block[4].strip()
-                        if not paragraph:
-                            continue
-                        # Склеиваем переносы строк внутри блока в один пробел
-                        paragraph = " ".join(line.strip() for line in paragraph.split('\n') if line.strip())
-                        if len(paragraph) > 50 and not self._is_garbage_text(paragraph):
-                            page_fragments.append(f"[{base_name}, стр. {page_num+1}] {paragraph}")
+                    page_fragments, long_chars = self._page_fragments(
+                        [block[4] for block in page.get_text("blocks", sort=True)])
 
-                    # Если текстовый слой не дал результата (скан или битая кодировка) — пробуем OCR
-                    if not page_fragments and ocr_enabled:
+                    # OCR нужен, когда текстового слоя на странице нет (скан или чертёж).
+                    # Признак — отсутствие ДЛИННЫХ блоков, а не отсутствие фрагментов:
+                    # короткие колонтитулы и подписи теперь тоже идут в базу, и по ним
+                    # нельзя считать страницу «текстовой» (иначе потеряем текст с картинок).
+                    if long_chars == 0 and ocr_enabled:
                         cache_path = self._get_ocr_cache_path(file_path, page_num)
                         ocr_text = self._ocr_page(page, base_name, page_num, cache_path)
                         if ocr_text:
-                            paragraphs = [p.strip() for p in ocr_text.split('\n') if p.strip()]
-                            for paragraph in paragraphs:
-                                if len(paragraph) > 50 and not self._is_garbage_text(paragraph):
-                                    page_fragments.append(f"[{base_name}, стр. {page_num+1}] {paragraph}")
+                            ocr_fragments, _ = self._page_fragments(ocr_text.split('\n'))
+                            page_fragments.extend(ocr_fragments)
 
-                    pdf_knowledge.extend(page_fragments)
+                    for paragraph in page_fragments:
+                        add_fragment(paragraph, page_num + 1)
             finally:
                 doc.close()
         except ImportError:
@@ -824,11 +882,11 @@ class RAGCore:
                 pdf_reader = PyPDF2.PdfReader(f)
                 for page_num, page in enumerate(pdf_reader.pages):
                     text = page.extract_text()
-                    if text:
-                        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-                        for paragraph in paragraphs:
-                            if len(paragraph) > 50 and not self._is_garbage_text(paragraph):
-                                pdf_knowledge.append(f"[{base_name}, стр. {page_num+1}] {paragraph}")
+                    if not text:
+                        continue
+                    page_fragments, _ = self._page_fragments(text.split('\n\n'))
+                    for paragraph in page_fragments:
+                        add_fragment(paragraph, page_num + 1)
         return pdf_knowledge
 
     def _process_file(self, file_path, all_knowledge):
@@ -920,9 +978,18 @@ class RAGCore:
                     # chunk_size = 500 # например, 500 символов
                     # chunks = [combined_text[i:i+chunk_size] for i in range(0, len(combined_text), chunk_size)]
                     
+                    # Порог общий с PDF (MIN_FRAGMENT_CHARS): в спецификациях половина
+                    # полезного — короткие ячейки вида «раструб d32 под склейку»
+                    docx_seen_short = set()
                     for paragraph in paragraphs:
-                        if len(paragraph) > 50: # Фильтруем короткие фрагменты
-                            docx_knowledge.append(f"[{os.path.basename(file_path)}] {paragraph}")
+                        if len(paragraph) <= MIN_FRAGMENT_CHARS:  # Фильтруем короткие фрагменты
+                            continue
+                        key = self._dedupe_key(paragraph)
+                        if key is not None:
+                            if key in docx_seen_short:
+                                continue
+                            docx_seen_short.add(key)
+                        docx_knowledge.append(f"[{os.path.basename(file_path)}] {paragraph}")
                     
                     if docx_knowledge:
                         logger.info(f"✅ Извлечено {len(docx_knowledge)} фрагментов из {os.path.basename(file_path)}")
