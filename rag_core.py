@@ -937,11 +937,11 @@ class RAGCore:
                     # Одна строка CSV = один факт (универсально, без привязки к колонкам клиента)
                     if parts:
                         csv_knowledge.append(", ".join(parts) + ".")
-                    if csv_knowledge:
-                        logger.info(f"✅ Загружено {len(csv_knowledge)} строк из {os.path.basename(file_path)}")
-                        all_knowledge[file_path] = csv_knowledge
-                    else:
-                        logger.warning(f"⚠️ Файл {os.path.basename(file_path)} не содержит данных")
+                if csv_knowledge:
+                    logger.info(f"✅ Загружено {len(csv_knowledge)} строк из {os.path.basename(file_path)}")
+                    all_knowledge[file_path] = csv_knowledge
+                else:
+                    logger.warning(f"⚠️ Файл {os.path.basename(file_path)} не содержит данных")
                         
             elif file_path.lower().endswith(".pdf"):
                 pdf_knowledge = self._extract_pdf_text(file_path)
