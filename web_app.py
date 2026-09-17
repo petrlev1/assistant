@@ -13,7 +13,8 @@ import re
 import secrets
 import shutil
 import csv
-from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file
+from datetime import datetime
+from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
@@ -580,6 +581,9 @@ def get_documents():
     # Фоновая миграция групп старых документов: doc_group по содержимому дописывается
     # в БД в фоне (не блокирует ответ; фронт временно группирует по имени).
     _backfill_doc_groups_async(user_id, [d for d in docs if not d.get('doc_group')])
+    # Пометка: файл можно править текстом прямо из списка (.txt/.csv)
+    for d in docs:
+        d['can_edit'] = _is_editable(d['filename'])
     # Пометка TXT-файлов, созданных для эмбеддингов (есть одноимённый файл другого формата)
     try:
         stems = {}
@@ -1003,6 +1007,357 @@ def _run_telegram_bot():
         logger.error(f"Ошибка в работе Telegram бота: {e}", exc_info=True)
     finally:
         telegram_running = False
+
+
+# === Редактирование текстовых документов (TXT/CSV) прямо из списка документов ===
+# Правка идёт в тот же файл в Database/user_N/, поэтому id документа не меняется
+# (в отличие от повторной загрузки, где старый id удаляется и создаётся новый) —
+# ссылки-источники в чате продолжают указывать на тот же документ.
+
+EDITABLE_EXT = ('.txt', '.csv')
+MAX_EDIT_BYTES = 1024 * 1024   # 1 МБ: больше textarea в браузере уже не тянет
+EDIT_VERSIONS_KEEP = 5         # сколько последних версий файла храним
+
+
+def _docs_dir(user_id):
+    return os.path.join('Database', f'user_{user_id}')
+
+
+def _versions_dir(user_id):
+    """Папка версий файлов — ВНЕ папки пользователя.
+
+    Иначе синхронизация в /api/documents и индексатор (rag_core перебирает файлы
+    папки пользователя) могли бы принять версии за отдельные документы.
+    """
+    return os.path.join('Database', '.versions', f'user_{user_id}')
+
+
+def _is_editable(filename):
+    return filename.lower().endswith(EDITABLE_EXT)
+
+
+def _get_owned_doc(user_id, doc_id):
+    """Документ пользователя по id (None — если нет или он чужой)."""
+    for d in get_user_documents(user_id):
+        if d['id'] == doc_id:
+            return d
+    return None
+
+
+def _detect_encoding(raw):
+    """Кодировка текстового файла: utf-8-sig (BOM) → utf-8 → cp1251.
+
+    Тот же порядок, что в rag_core._read_text_preview: файл, который индекс
+    читает как UTF-8, редактор не должен перекодировать (иначе кириллица поедет).
+    """
+    if raw.startswith(b'\xef\xbb\xbf'):
+        return 'utf-8-sig'
+    for enc in ('utf-8', 'cp1251'):
+        try:
+            raw.decode(enc)
+            return enc
+        except UnicodeDecodeError:
+            continue
+    return 'cp1251'   # не текстовый/смешанный — отдадим с заменами
+
+
+def _read_text_file(path):
+    """Текст файла + параметры для обратной записи (кодировка, переводы строк)."""
+    with open(path, 'rb') as f:
+        raw = f.read()
+    encoding = _detect_encoding(raw)
+    try:
+        text = raw.decode(encoding)
+    except UnicodeDecodeError:
+        text = raw.decode(encoding, errors='replace')
+    crlf = raw.count(b'\r\n')
+    lf = raw.count(b'\n') - crlf
+    newline = '\r\n' if crlf > lf else '\n'
+    return text, encoding, newline
+
+
+def _restore_newlines(text, newline):
+    """textarea в браузере всегда отдаёт \n — возвращаем родные переводы строк."""
+    unified = text.replace('\r\n', '\n').replace('\r', '\n')
+    if newline == '\r\n':
+        return unified.replace('\n', '\r\n')
+    return unified
+
+
+def _write_text_file(path, text, encoding):
+    """Атомарная запись (tmp + os.replace): обрыв не оставит половину файла."""
+    tmp_path = path + '.tmp-edit'
+    with open(tmp_path, 'wb') as f:
+        f.write(text.encode(encoding))
+    os.replace(tmp_path, path)
+
+
+def _doc_etag(path):
+    """Метка версии файла — защита от правки в двух вкладках одновременно."""
+    st = os.stat(path)
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
+def _save_file_version(user_id, filename, keep=EDIT_VERSIONS_KEEP):
+    """Копия текущего файла в .versions перед перезаписью; храним последние keep."""
+    src = os.path.join(_docs_dir(user_id), filename)
+    if not os.path.isfile(src):
+        return None
+    vdir = _versions_dir(user_id)
+    os.makedirs(vdir, exist_ok=True)
+    version = f"{filename}.{time.strftime('%Y%m%d-%H%M%S')}"
+    dst = os.path.join(vdir, version)
+    shutil.copy2(src, dst)
+    os.utime(dst, None)   # mtime = момент сохранения (для порядка чистки)
+    prefix = filename + '.'
+    versions = sorted(v for v in os.listdir(vdir)
+                      if v.startswith(prefix) and os.path.isfile(os.path.join(vdir, v)))
+    for old in versions[:-keep]:
+        try:
+            os.remove(os.path.join(vdir, old))
+        except OSError:
+            pass
+    return version
+
+
+def _count_csv_rows(file_path):
+    """Сколько строк данных в CSV — для отчёта «N позиций из M строк»."""
+    try:
+        return sum(1 for row in _iter_csv_rows(file_path) if any(str(c).strip() for c in row))
+    except Exception as e:
+        logger.error(f"Ошибка подсчёта строк CSV {file_path}: {e}")
+        return 0
+
+
+def _after_text_edit(user_id, doc, filename, file_path):
+    """После правки: группа по новому содержимому, ре-парсинг прайса, индексация."""
+    info = {'doc_group': doc.get('doc_group') or '', 'is_price_list': False,
+            'price_count': 0, 'price_total': 0, 'price_lost': False}
+    is_price = False
+
+    if filename.lower().endswith('.csv'):
+        try:
+            rows = parse_price_list(file_path)
+        except Exception as e:
+            logger.error(f"❌ Ошибка разбора прайс-листа после правки {filename}: {e}")
+            rows = []
+        if rows:
+            is_price = True
+            replace_price_items(user_id, filename, rows)
+            info['is_price_list'] = True
+            info['price_count'] = len(rows)
+            info['price_total'] = _count_csv_rows(file_path)
+            update_document_group(doc['id'], user_id, '💲 Прайс-листы')
+            info['doc_group'] = '💲 Прайс-листы'
+            logger.info(f"📋 Прайс-лист {filename} переразобран после правки: {len(rows)} позиций")
+        elif filename in get_price_files(user_id):
+            # Таблица сломана правкой: старые позиции устарели — снимаем их из поиска.
+            delete_price_items_for_file(user_id, filename)
+            info['price_lost'] = True
+            logger.warning(f"⚠️ {filename} больше не распознаётся как прайс-лист: позиции сняты")
+
+    if not is_price:
+        group = detect_doc_group(filename, _read_text_preview(file_path), False)
+        if group != (doc.get('doc_group') or ''):
+            update_document_group(doc['id'], user_id, group)
+        info['doc_group'] = group
+
+    if rag_ready:
+        _reindex_user_async(user_id)
+    return info
+
+
+@app.route('/api/documents/<int:doc_id>/text')
+def get_document_text(doc_id):
+    """Текст документа для редактора (.txt/.csv, только свои файлы)."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    user_id = session['user_id']
+    doc = _get_owned_doc(user_id, doc_id)
+    if not doc:
+        return jsonify({'error': 'Документ не найден'}), 404
+
+    filename = os.path.basename(doc['filename'])
+    if not _is_editable(filename):
+        return jsonify({'error': 'Этот формат нельзя править как текст — только скачать и загрузить заново'}), 400
+
+    path = os.path.join(_docs_dir(user_id), filename)
+    if not os.path.isfile(path):
+        return jsonify({'error': 'Файл не найден на диске'}), 404
+
+    size = os.path.getsize(path)
+    if size > MAX_EDIT_BYTES:
+        return jsonify({'error': f'Файл больше {MAX_EDIT_BYTES // (1024 * 1024)} МБ — правка в браузере недоступна, скачайте файл',
+                        'too_big': True, 'size': size}), 413
+
+    text, encoding, newline = _read_text_file(path)
+
+    # txT-дубль для эмбеддингов: рядом лежит одноимённый файл другого формата,
+    # и по ссылке из чата скачается ИМЕННО ОН (см. download_kb_file).
+    is_rag_helper = False
+    if filename.lower().endswith('.txt'):
+        stem = os.path.splitext(filename)[0].lower()
+        folder = _docs_dir(user_id)
+        is_rag_helper = any(
+            f.lower() != filename.lower() and os.path.splitext(f)[0].lower() == stem
+            and not f.lower().endswith('.txt') and os.path.isfile(os.path.join(folder, f))
+            for f in os.listdir(folder)
+        )
+
+    price_files = {}
+    try:
+        price_files = get_price_files(user_id)
+    except Exception as e:
+        logger.error(f"Ошибка определения прайс-листов: {e}")
+
+    return jsonify({
+        'success': True,
+        'id': doc_id,
+        'filename': doc['original_name'],
+        'text': text,
+        'etag': _doc_etag(path),
+        'encoding': encoding,
+        'newline': 'CRLF' if newline == '\r\n' else 'LF',
+        'size': size,
+        'is_rag_helper': is_rag_helper,
+        'is_price_list': filename in price_files,
+        'price_count': price_files.get(filename, 0),
+    })
+
+
+@app.route('/api/documents/<int:doc_id>/save', methods=['POST'])
+def save_document_text(doc_id):
+    """Сохранение текста из редактора: версия в .versions → запись → переиндексация."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    user_id = session['user_id']
+    data = request.get_json(silent=True) or {}
+    text = data.get('text')
+    if not isinstance(text, str):
+        return jsonify({'error': 'Не передан текст документа'}), 400
+
+    doc = _get_owned_doc(user_id, doc_id)
+    if not doc:
+        return jsonify({'error': 'Документ не найден'}), 404
+
+    filename = os.path.basename(doc['filename'])
+    if not _is_editable(filename):
+        return jsonify({'error': 'Этот формат нельзя править как текст'}), 400
+
+    path = os.path.join(_docs_dir(user_id), filename)
+    if not os.path.isfile(path):
+        return jsonify({'error': 'Файл не найден на диске'}), 404
+
+    # Конфликт: файл менялся в другой вкладке/сессии после открытия редактора
+    current_etag = _doc_etag(path)
+    client_etag = data.get('etag')
+    if client_etag and client_etag != current_etag:
+        logger.warning(f"⚠️ Конфликт правки {filename} (user {user_id}): {client_etag} != {current_etag}")
+        return jsonify({'error': 'Файл уже изменён в другой вкладке или сессии. Перезагрузите текст, чтобы не потерять чужие правки.',
+                        'conflict': True, 'etag': current_etag}), 409
+
+    _, encoding, newline = _read_text_file(path)
+    payload = _restore_newlines(text, newline)
+    try:
+        encoded = payload.encode(encoding)
+    except UnicodeEncodeError as e:
+        bad = payload[e.start:e.end]
+        return jsonify({'error': f'Символ «{bad}» нельзя записать в кодировке {encoding}: файл был загружен в ней. '
+                                 f'Уберите символ или загрузите файл заново в UTF-8.'}), 400
+
+    if len(encoded) > MAX_EDIT_BYTES:
+        return jsonify({'error': f'После правки файл больше {MAX_EDIT_BYTES // (1024 * 1024)} МБ — сохранение отменено'}), 413
+
+    version = _save_file_version(user_id, filename)
+    try:
+        _write_text_file(path, payload, encoding)
+    except OSError as e:
+        logger.error(f"❌ Не удалось записать {filename} (user {user_id}): {e}")
+        return jsonify({'error': f'Не удалось записать файл: {e}'}), 500
+
+    info = _after_text_edit(user_id, doc, filename, path)
+    logger.info(f"✏️ Пользователь {session.get('username')} сохранил правку документа: {filename}")
+
+    message = 'Файл сохранён'
+    if info['is_price_list']:
+        message += f". Прайс-лист переразобран: распознано {info['price_count']} позиций из {info['price_total']} строк"
+    if info['price_lost']:
+        message += '. ⚠️ Таблица с ценами больше не распознаётся — прежние позиции сняты из поиска'
+    if rag_ready:
+        message += '. Индексация базы знаний запущена в фоне'
+
+    return jsonify({'success': True, 'message': message, 'etag': _doc_etag(path),
+                    'version': version, 'encoding': encoding, **info})
+
+
+@app.route('/api/documents/<int:doc_id>/versions')
+def list_document_versions(doc_id):
+    """Список сохранённых версий файла (последние EDIT_VERSIONS_KEEP)."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    user_id = session['user_id']
+    doc = _get_owned_doc(user_id, doc_id)
+    if not doc:
+        return jsonify({'error': 'Документ не найден'}), 404
+
+    filename = os.path.basename(doc['filename'])
+    if not _is_editable(filename):
+        return jsonify({'error': 'Этот формат нельзя править как текст'}), 400
+
+    vdir = _versions_dir(user_id)
+    prefix = filename + '.'
+    versions = []
+    if os.path.isdir(vdir):
+        for v in sorted(os.listdir(vdir), reverse=True):
+            vpath = os.path.join(vdir, v)
+            if not v.startswith(prefix) or not os.path.isfile(vpath):
+                continue
+            stamp = v[len(prefix):]
+            try:
+                saved_at = datetime.strptime(stamp, '%Y%m%d-%H%M%S').strftime('%d.%m.%Y %H:%M:%S')
+            except ValueError:
+                saved_at = stamp
+            versions.append({'version': v, 'saved_at': saved_at, 'size': os.path.getsize(vpath)})
+    return jsonify({'success': True, 'versions': versions})
+
+
+@app.route('/api/documents/<int:doc_id>/versions/restore', methods=['POST'])
+def restore_document_version(doc_id):
+    """Откат файла к сохранённой версии (текущее состояние тоже сохраняется)."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    user_id = session['user_id']
+    doc = _get_owned_doc(user_id, doc_id)
+    if not doc:
+        return jsonify({'error': 'Документ не найден'}), 404
+
+    filename = os.path.basename(doc['filename'])
+    if not _is_editable(filename):
+        return jsonify({'error': 'Этот формат нельзя править как текст'}), 400
+
+    data = request.get_json(silent=True) or {}
+    version = os.path.basename(str(data.get('version') or ''))
+    vdir = _versions_dir(user_id)
+    vpath = os.path.join(vdir, version)
+    # Берём только имя из списка версий этого файла: защита от path traversal
+    if not version.startswith(filename + '.') or not os.path.isfile(vpath):
+        return jsonify({'error': 'Версия не найдена'}), 404
+
+    path = os.path.join(_docs_dir(user_id), filename)
+    if not os.path.isfile(path):
+        return jsonify({'error': 'Файл не найден на диске'}), 404
+
+    _save_file_version(user_id, filename)   # откат тоже обратим
+    shutil.copy2(vpath, path)
+    info = _after_text_edit(user_id, doc, filename, path)
+    logger.info(f"↩️ Пользователь {session.get('username')} откатил {filename} к версии {version}")
+
+    return jsonify({'success': True, 'message': f'Файл восстановлен из версии {version}',
+                    'etag': _doc_etag(path), **info})
 
 
 @app.route('/telegram/status')
