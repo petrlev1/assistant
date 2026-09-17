@@ -12,3 +12,4 @@ venv/
 start_web.bat
 .run_cli/
 admin_config.json
+web.log*
