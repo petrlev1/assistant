@@ -25,6 +25,7 @@ from auth_db import (init_max_channels, get_max_channel, get_max_channel_by_hook
                      delete_max_channel, max_consume)
 import docs_renderer
 import max_bot
+import site_crawler
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -789,6 +790,115 @@ def upload_document():
         message += f'. Прайс-листы: {total_price} позиций'
     return jsonify({'success': True, 'message': message, 'results': results,
                     'is_price_list': any_price, 'price_count': total_price})
+
+
+# === Импорт сайта в базу знаний (обход по ссылке → TXT + авто-эмбеддинги) ===
+
+
+def _site_pages_limit():
+    """Лимит страниц обхода: app_settings.site_pages_limit, иначе значение по умолчанию."""
+    try:
+        value = int((get_all_settings() or {}).get('site_pages_limit', 0) or 0)
+        if value > 0:
+            return value
+    except Exception as e:
+        logger.warning(f"Не удалось прочитать лимит страниц сайта: {e}")
+    return site_crawler.DEFAULT_PAGE_LIMIT
+
+
+def _site_crawl_finished(user_id, result):
+    """Итог обхода: файл сайта становится документом БЗ + фоновая переиндексация.
+
+    Вызывается из потока обхода (после записи TXT). Прежний документ с тем же
+    именем заменяется — как повторная загрузка файла, без дубликатов в списке.
+    """
+    filename = result['filename']
+    os.makedirs(os.path.join('Database', f'user_{user_id}'), exist_ok=True)
+
+    old = next((d for d in get_user_documents(user_id) if d['filename'] == filename), None)
+    if old is not None:
+        delete_document(old['id'], user_id)
+        logger.info(f"♻️ Сайт: документ {filename} обновляется (заменяет id {old['id']})")
+
+    success, doc_id = add_document(user_id, filename, filename,
+                                   doc_group=f"🌐 {result['domain']}")
+    if not success:
+        raise RuntimeError('не удалось добавить документ в базу знаний')
+
+    stats = result.get('stats') or {}
+    logger.info(f"🌐 Сайт {result['domain']}: строк {result['lines']}, страниц {stats.get('pages', 0)} "
+                f"(новых {stats.get('new', 0)}, изменённых {stats.get('changed', 0)}, "
+                f"неизменных {stats.get('unchanged', 0)}, ушло {stats.get('gone', 0)}) "
+                f"→ {filename} (doc {doc_id})")
+    if rag_ready:
+        _reindex_user_async(user_id)
+
+
+@app.route('/api/site/crawl', methods=['POST'])
+def site_crawl_start():
+    """Запуск обхода сайта: ответ сразу, прогресс — GET /api/site/status."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    data = request.get_json(silent=True) or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'Укажите адрес сайта'}), 400
+    if '://' not in url:
+        url = 'https://' + url
+    try:
+        pages = int(data.get('pages') or 0) or _site_pages_limit()
+    except (TypeError, ValueError):
+        pages = _site_pages_limit()
+    respect_robots = bool(data.get('respect_robots', True))
+
+    try:
+        job = site_crawler.start_job(session['user_id'], url, pages, respect_robots,
+                                     on_finish=_site_crawl_finished)
+    except site_crawler.CrawlError as e:
+        return jsonify({'error': str(e)}), 400
+
+    logger.info(f"🌐 Пользователь {session.get('username')} запустил обход сайта: {url} (лимит {pages})")
+    return jsonify({'success': True, 'job': site_crawler.public_job(job)})
+
+
+@app.route('/api/site/status')
+def site_crawl_status():
+    """Состояние обхода для строки прогресса в интерфейсе."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    state = site_crawler.status_json()
+    job = state.get('job') or {}
+    if job.get('user_id') not in (None, session['user_id']):
+        # Обход идёт у другого пользователя: свою строку прогресса ему показывать нечего
+        return jsonify({'active': state['active'], 'job': None, 'other_user': True})
+    return jsonify(state)
+
+
+@app.route('/api/site/cancel', methods=['POST'])
+def site_crawl_cancel():
+    """Отмена обхода: в файл попадает то, что успели обойти."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    state = site_crawler.get_status()
+    job = state.get('job') or {}
+    if not state['active'] or job.get('user_id') != session['user_id']:
+        return jsonify({'ok': False, 'error': 'Активного обхода нет'}), 409
+    site_crawler.cancel()
+    logger.info(f"⏹ Пользователь {session.get('username')} отменил обход сайта")
+    return jsonify({'ok': True})
+
+
+@app.route('/api/site/info')
+def site_info():
+    """Сведения о последнем обходе сайта для документа (кнопка «Обновить с сайта»)."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    filename = os.path.basename(request.args.get('filename') or '')
+    info = site_crawler.info_for_filename(session['user_id'], filename) if filename else None
+    if not info:
+        return jsonify({'error': 'Сайт для этого файла не найден'}), 404
+    return jsonify(info)
 
 
 @app.route('/api/kb/qa-correction', methods=['POST'])
