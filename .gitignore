@@ -1,6 +1,7 @@
 DataBase.txt
 Database/
 embeddings_cache/
+site_cache/
 rag_mod/
 __pycache__/
 chat_logs/
