@@ -9,7 +9,9 @@
 #      а фрагмент-колонтитул при этом попадает в базу;
 #   3) _dedupe_key: короткие тексты нормализуются, длинные не дедуплицируются;
 #   4) DOCX через _process_file: тот же порог и дедуп повторов-ячеек;
-#   5) (если есть PyMuPDF и файл из базы) интеграционная проверка на реальном PDF:
+#   5) split_long_fragments: длинные куски режутся так, чтобы влезать в окно e5 (512 токенов),
+#      текст не теряется, префикс источника есть в каждом куске;
+#   6) (если есть PyMuPDF и файл из базы) интеграционная проверка на реальном PDF:
 #      фрагментов стало больше, колонтитул ровно один, коротких «огрызков» нет,
 #      текст с чертежа (из OCR-кэша) на месте.
 #
@@ -24,7 +26,8 @@ except Exception:
     pass
 
 import rag_core
-from rag_core import MIN_FRAGMENT_CHARS, OCR_TRIGGER_MIN_CHARS, DEDUPE_SHORT_MAX_CHARS
+from rag_core import (MIN_FRAGMENT_CHARS, OCR_TRIGGER_MIN_CHARS, DEDUPE_SHORT_MAX_CHARS,
+                      CHUNK_MAX_CHARS, split_long_fragments)
 
 PASSED, FAILED = [], []
 
@@ -126,8 +129,46 @@ def test_docx(tmp):
     check('длинный абзац на месте', any(long_par[:40] in f for f in frags), frags)
 
 
+def test_split_long_fragments():
+    print('\n4) split_long_fragments: нарезка под окно модели эмбеддингов')
+    print(f'   предел куска: {CHUNK_MAX_CHARS} символов (e5 обрезает вход на 512 токенов)')
+    sent = 'Напорная аэрация с компрессором удаляет железо и марганец из воды. '
+
+    check('короткий фрагмент не меняется',
+          split_long_fragments(['маленький фрагмент']) == ['маленький фрагмент'],
+          split_long_fragments(['маленький фрагмент']))
+    check('пустые фрагменты отбрасываются', split_long_fragments(['', '   ', None]) == [])
+
+    prefix = '[Инструкция для осмоса.docx] '
+    source = prefix + sent * 40
+    chunks = split_long_fragments([source])
+    check('длинный фрагмент разрезан на несколько кусков', len(chunks) > 1, len(chunks))
+    check('каждый кусок вместе с префиксом ≤ предела',
+          all(len(c) <= CHUNK_MAX_CHARS for c in chunks), [len(c) for c in chunks])
+    check('префикс источника есть в каждом куске',
+          all(c.startswith(prefix) for c in chunks), [c[:40] for c in chunks])
+    joined = ''.join(' '.join(c[len(prefix):] for c in chunks).split())
+    check('текст не потерян и не переставлен',
+          joined == ''.join(source[len(prefix):].split()), (len(joined), len(''.join(source.split()))))
+
+    monster = split_long_fragments(['я' * (CHUNK_MAX_CHARS * 2 + 500)])
+    check('один сверхдлинный «слово-монстр» режется жёстко и не превышает предел',
+          len(monster) >= 3 and all(len(c) <= CHUNK_MAX_CHARS for c in monster), [len(c) for c in monster])
+
+    paragraphs = (sent * 20).strip() + '\n' + (sent * 20).strip()
+    chunks_p = split_long_fragments([paragraphs])
+    check('многоабзацный текст тоже уложен в предел',
+          len(chunks_p) > 1 and all(len(c) <= CHUNK_MAX_CHARS for c in chunks_p), [len(c) for c in chunks_p])
+    check('абзацы не потеряны',
+          ''.join(' '.join(chunks_p).split()) == ''.join(paragraphs.split()))
+
+    short_source = 'Стерилайзер SP-6 — 1/4" дренаж, 55 мм'
+    check('фрагмент короче предела остаётся единственным куском',
+          split_long_fragments([short_source]) == [short_source])
+
+
 def test_real_pdf():
-    print('\n4) Реальный PDF из базы (если есть PyMuPDF)')
+    print('\n5) Реальный PDF из базы (если есть PyMuPDF)')
     try:
         import fitz  # noqa: F401
     except ImportError:
@@ -163,6 +204,7 @@ def main():
     test_page_fragments()
     test_dedupe_key()
     test_docx(tmp)
+    test_split_long_fragments()
     test_real_pdf()
     print('\n' + '=' * 60)
     print(f'Пройдено: {len(PASSED)}   Провалено: {len(FAILED)}')

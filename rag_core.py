@@ -523,6 +523,98 @@ OCR_TRIGGER_MIN_CHARS = 50
 # («Руководство по монтажу и наладке» встречается в файле до 89 раз — это колонтитул,
 # 89 одинаковых векторов только засоряют индекс).
 DEDUPE_SHORT_MAX_CHARS = 100
+# Нарезка длинных фрагментов: e5 (multilingual-e5-large) обрезает вход на 512 токенов.
+# Замер на реальной базе (1473 фрагмента): медиана 3.04 симв./токен, у «плотных» таблиц ~2.0,
+# худший случай 1.6 (короткие числовые куски). 1200 символов ≈ 395 токенов обычного русского —
+# с запасом влезает в окно модели, а «хвосты» длинных кусков (были по 2700–5400 симв.)
+# перестают быть невидимыми для семантического поиска.
+CHUNK_MAX_CHARS = 1200
+
+# Границы предложений: точка/!/?/… перед пробелом (пунктуация остаётся в предложении)
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?…])\s+')
+
+
+def _hard_wrap(text, max_chars):
+    """Жёсткая нарезка по словам: каждый кусок ≤ max_chars (сверхдлинное слово режется)."""
+    out, current = [], ''
+    for word in text.split(' '):
+        while len(word) > max_chars:
+            if current:
+                out.append(current)
+                current = ''
+            out.append(word[:max_chars])
+            word = word[max_chars:]
+        if not word:
+            continue
+        if not current:
+            current = word
+        elif len(current) + 1 + len(word) <= max_chars:
+            current += ' ' + word
+        else:
+            out.append(current)
+            current = word
+    if current:
+        out.append(current)
+    return out
+
+
+def _split_into_pieces(text, max_chars):
+    """Текст → куски ≤ max_chars: сначала по абзацам, потом по предложениям, затем жёстко."""
+    pieces = []
+    for paragraph in (text or '').split('\n'):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        if len(paragraph) <= max_chars:
+            pieces.append(paragraph)
+            continue
+        for sentence in (s.strip() for s in _SENTENCE_SPLIT_RE.split(paragraph)):
+            if not sentence:
+                continue
+            if len(sentence) <= max_chars:
+                pieces.append(sentence)
+            else:
+                pieces.extend(_hard_wrap(sentence, max_chars))
+    return pieces
+
+
+def split_long_fragments(fragments, max_chars=CHUNK_MAX_CHARS):
+    """Нарезка длинных фрагментов на куски, влезающие в окно модели эмбеддингов.
+
+    Зачем: e5 обрезает вход на 512 токенов, поэтому у фрагментов по 2700–5400 символов
+    (типично для DOCX, где куском становится целый раздел) «хвост» не участвовал ни в
+    семантическом поиске, ни в выдаче. Режем по абзацам и предложениям, короткий
+    префикс источника («[файл, стр. N] ») повторяем в каждом куске, чтобы цитата
+    оставалась узнаваемой. Гарантия: каждый кусок вместе с префиксом ≤ max_chars —
+    из-за этого предел считается за вычетом длины префикса, а слишком короткий
+    последний кусок остаётся отдельным фрагментом (это факт, а не мусор).
+    """
+    out = []
+    for fragment in fragments or []:
+        text = (fragment or '').strip()
+        if not text:
+            continue
+        if len(text) <= max_chars:
+            out.append(text)
+            continue
+        prefix = ''
+        match = re.match(r'^(\[[^\]]{1,200}\]\s*)', text)
+        if match:
+            prefix, text = match.group(1), text[match.end():]
+        # Префикс источника повторяется в каждом куске — резервируем под него место,
+        # чтобы кусок вместе с префиксом остался в пределах max_chars
+        body_limit = max(200, max_chars - len(prefix))
+        chunks = []
+        for piece in _split_into_pieces(text, body_limit):
+            if chunks and len(chunks[-1]) + 1 + len(piece) <= body_limit:
+                chunks[-1] += ' ' + piece
+            else:
+                chunks.append(piece)
+        # Короткий последний кусок остаётся отдельным фрагментом: упаковка выше уже склеила
+        # всё, что влезало, значит этот кусок в предыдущий не помещается, а вылезать за предел
+        # ради склейки нельзя (иначе семантика снова обрежет хвост).
+        out.extend(prefix + chunk for chunk in chunks)
+    return out
 
 
 class RAGCore:
@@ -1259,6 +1351,14 @@ class RAGCore:
             
             # Загрузка знаний
             self.all_knowledge_dict = self.load_knowledge_from_txt(user_id=user_id)
+            # Нарезка длинных фрагментов ДО эмбеддингов: e5 обрезает вход на 512 токенов,
+            # из-за чего «хвост» кусков по 2700–5400 символов не искался вообще. Режем один
+            # раз здесь — my_knowledge, fragment_sources и кэш эмбеддингов идут по одному
+            # и тому же all_knowledge_dict, поэтому соответствие индекс↔источник сохраняется.
+            self.all_knowledge_dict = {
+                path: split_long_fragments(items)
+                for path, items in self.all_knowledge_dict.items()
+            }
             self._load_qa_corrections()
             
             # Получаем список текущих файлов (по имени без пути)
