@@ -857,6 +857,95 @@
             padding: 8px 0;
             text-align: center;
         }
+        /* === Индексация сайта по ссылке === */
+        .docs-site-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            font-family: inherit;
+            font-size: 13px;
+            color: #555;
+            cursor: pointer;
+            padding: 8px 12px;
+            border: 1px dashed #d5dae3;
+            border-radius: 8px;
+            background: #fafbfd;
+            transition: border-color 0.2s, background 0.2s;
+        }
+        .docs-site-btn:hover { border-color: #4a7dff; background: #f0f5ff; }
+        .site-bar {
+            display: none;
+            align-items: flex-start;
+            gap: 10px;
+            margin: 0 20px 10px;
+            padding: 9px 12px;
+            border: 1px solid #dbe3f5;
+            border-radius: 8px;
+            background: #f7f9ff;
+            font-size: 12.5px;
+            color: #33456b;
+            line-height: 1.4;
+        }
+        .site-bar.active { display: flex; }
+        .site-bar .site-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+        .site-bar .site-track {
+            height: 4px;
+            margin-top: 6px;
+            border-radius: 3px;
+            background: #e2e8f7;
+            overflow: hidden;
+        }
+        .site-bar .site-fill {
+            height: 100%;
+            width: 0;
+            background: #4a7dff;
+            transition: width 0.3s;
+        }
+        .site-bar button {
+            flex-shrink: 0;
+            border: none;
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-family: inherit;
+            font-size: 12px;
+            color: #33456b;
+            background: #eef1f8;
+            cursor: pointer;
+        }
+        .site-bar button:hover { background: #e2e8f7; }
+        .site-check {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #555;
+            margin: 0;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .site-row { display: flex; gap: 14px; align-items: flex-end; }
+        .site-row > div { flex: 1; }
+        .site-hint {
+            font-size: 12px;
+            color: #777;
+            line-height: 1.45;
+            margin-top: 12px;
+        }
+        #siteModalBox input[type="text"],
+        #siteModalBox input[type="number"] {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            padding: 9px 10px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        #siteModalBox input:focus { outline: none; border-color: #2196f3; }
+        #siteModalStart { background: #764ba2; color: white; }
+        #siteModalStart:hover { background: #5f3b85; }
+        #siteModalStart:disabled { background: #b9aac9; cursor: default; }
         /* === Двухколоночный макет: чат слева (шире), документы справа === */
         .main-layout {
             flex: 1;
@@ -1052,6 +1141,17 @@
                         <input type="checkbox" id="priceListCheck">
                         📋 Это прайс-лист
                     </label>
+                    <button class="docs-site-btn" id="siteAddBtn" onClick="openSiteModal()"
+                            title="Обойти сайт по ссылке и добавить его текст в базу знаний">🌐 Индексировать сайт</button>
+                </div>
+                <!-- Прогресс обхода сайта (виден, пока идёт индексация) -->
+                <div class="site-bar" id="siteBar">
+                    <span id="siteIcon">🔍</span>
+                    <div class="site-text">
+                        <div id="siteText">Обход сайта…</div>
+                        <div class="site-track"><div class="site-fill" id="siteFill"></div></div>
+                    </div>
+                    <button id="siteCancelBtn" onClick="cancelSiteCrawl()" title="Остановить обход">Отменить</button>
                 </div>
                 <!-- Панель множественных действий (видна при выборе документов) -->
                 <div class="docs-bulkbar" id="bulkBar" style="display:none;">
@@ -1138,6 +1238,31 @@
     </div>
     <div class="docs-overlay" id="maxOverlay" onClick="toggleMaxPanel()"></div>
 
+    <!-- Модалка: индексация сайта по ссылке -->
+    <div class="qa-modal" id="siteModal" onClick="if (event.target === this) closeSiteModal()">
+        <div class="qa-modal-box" id="siteModalBox">
+            <h3>🌐 Индексировать сайт</h3>
+            <label>Адрес сайта</label>
+            <input type="text" id="siteUrl" placeholder="https://example.com" autocomplete="off" spellcheck="false">
+            <div class="site-row">
+                <div>
+                    <label>Страниц (максимум)</label>
+                    <input type="number" id="sitePages" min="1" max="300" value="50">
+                </div>
+                <label class="site-check"><input type="checkbox" id="siteRobots" checked> Уважать robots.txt</label>
+            </div>
+            <div class="site-hint" id="siteModalHint">
+                Система обойдёт страницы сайта, соберёт текст в один TXT-файл и добавит его в базу
+                знаний чат-бота. Повторный запуск по тому же адресу обновит файл: изменившиеся
+                страницы переиндексируются, а уже собранные не потеряются.
+            </div>
+            <div class="qa-modal-actions">
+                <button id="siteModalCancel" onClick="closeSiteModal()">Отмена</button>
+                <button id="siteModalStart" onClick="startSiteCrawl()">Индексировать</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Модалка: исправить ответ и сохранить в базу знаний -->
     <div class="qa-modal" id="qaModal" onClick="if (event.target === this) closeQaModal()">
         <div class="qa-modal-box">
@@ -1188,6 +1313,8 @@
         loadHistory();
         // Загрузка списка документов (панель «Мои документы» всегда открыта)
         loadDocuments();
+        // Если обход сайта идёт прямо сейчас — показать прогресс (например, после F5)
+        resumeSiteCrawl();
 
         function checkStatus() {
             fetch('/status')
@@ -1642,6 +1769,9 @@
         function docItemHtml(doc) {
             const ragClass = doc.is_rag_helper ? ' rag-helper' : '';
             const ragTag = doc.is_rag_helper ? ' <span class="rag-tag" title="Технический TXT-файл для эмбеддингов">RAG</span>' : '';
+            // Файл, собранный обходом сайта (site_<домен>.txt): у него есть кнопка
+            // «Обновить с сайта» — повторный обход того же адреса вместо новой загрузки
+            const isSiteDoc = /^site_.+\.txt$/i.test(doc.original_name || '');
             return `
                             <div class="docs-item${ragClass}">
                                 <input type="checkbox" class="doc-check" data-id="${doc.id}" onchange="updateBulkBar()" title="Выбрать">
@@ -1650,6 +1780,7 @@
                                     <div class="doc-date">${new Date(doc.created_at).toLocaleString('ru-RU')}</div>
                                 </div>
                                 <div style="display:flex;gap:4px;">
+                                    ${isSiteDoc ? `<button class="btn-edit" onclick="recrawlSite('${escapeHtml(doc.original_name)}')" title="Обновить с сайта">⟳</button>` : ''}
                                     ${doc.can_edit ? `<button class="btn-edit" onclick="editDocument(${doc.id})" title="Редактировать текст">✏️</button>` : ''}
                                     <button class="btn-download" onclick="downloadDocument(${doc.id})" title="Скачать">⬇️</button>
                                     <button class="btn-delete" onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_name)}')">🗑️</button>
@@ -1712,6 +1843,182 @@
                 .catch(() => {
                     list.innerHTML = '<div class="docs-empty">❌ Ошибка загрузки списка документов</div>';
                 });
+        }
+
+        // === Индексация сайта по ссылке: диалог, прогресс, отмена, повторный обход ===
+        const SITE_MAX_PAGES = 300;
+        let sitePollTimer = null;
+
+        function openSiteModal() {
+            const modal = document.getElementById('siteModal');
+            if (!modal) return;
+            document.getElementById('siteUrl').value = '';
+            document.getElementById('sitePages').value = 50;
+            document.getElementById('siteRobots').checked = true;
+            const startBtn = document.getElementById('siteModalStart');
+            startBtn.disabled = false;
+            startBtn.textContent = 'Индексировать';
+            modal.style.display = 'flex';
+            setTimeout(() => document.getElementById('siteUrl').focus(), 60);
+        }
+
+        function closeSiteModal() {
+            const modal = document.getElementById('siteModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function startSiteCrawl() {
+            const url = (document.getElementById('siteUrl').value || '').trim();
+            if (!url) { alert('Укажите адрес сайта'); return; }
+            let pages = parseInt(document.getElementById('sitePages').value, 10);
+            if (!pages || pages < 1) pages = 50;
+            if (pages > SITE_MAX_PAGES) pages = SITE_MAX_PAGES;
+            launchSiteCrawl({
+                url: url,
+                pages: pages,
+                respect_robots: document.getElementById('siteRobots').checked
+            }, () => {
+                const startBtn = document.getElementById('siteModalStart');
+                startBtn.disabled = false;
+                startBtn.textContent = 'Индексировать';
+            });
+        }
+
+        // Общий запуск обхода: первичная индексация из диалога и «⟳ Обновить с сайта» у документа
+        function launchSiteCrawl(payload, onError) {
+            const startBtn = document.getElementById('siteModalStart');
+            if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'Запуск…'; }
+            fetch('/api/site/crawl', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+                .then(r => r.json().then(data => ({ data: data })))
+                .then(res => {
+                    if (!res.data || !res.data.success) {
+                        alert((res.data && res.data.error) || 'Не удалось запустить обход сайта');
+                        if (onError) onError();
+                        return;
+                    }
+                    closeSiteModal();
+                    renderSiteBar(res.data.job || {}, true);
+                    pollSiteCrawl();
+                })
+                .catch(() => {
+                    alert('Ошибка соединения с сервером');
+                    if (onError) onError();
+                });
+        }
+
+        function cancelSiteCrawl() {
+            if (!confirm('Остановить обход сайта? В файл попадёт то, что уже удалось собрать.')) return;
+            fetch('/api/site/cancel', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => { if (!data.ok) alert(data.error || 'Не удалось остановить обход'); })
+                .catch(() => {});
+        }
+
+        function pollSiteCrawl() {
+            if (sitePollTimer) clearInterval(sitePollTimer);
+            const tick = () => {
+                fetch('/api/site/status')
+                    .then(r => r.json())
+                    .then(state => {
+                        const job = (state && state.job) || {};
+                        if (state && state.active) { renderSiteBar(job, true); return; }
+                        if (sitePollTimer) clearInterval(sitePollTimer);
+                        sitePollTimer = null;
+                        renderSiteBar(job, false);
+                        loadDocuments();
+                    })
+                    .catch(() => {});
+            };
+            tick();
+            sitePollTimer = setInterval(tick, 1500);
+        }
+
+        // Строка прогресса: active=true — обход идёт, false — итог последнего обхода
+        function renderSiteBar(job, active) {
+            const bar = document.getElementById('siteBar');
+            if (!bar) return;
+            job = job || {};
+            const text = document.getElementById('siteText');
+            const fill = document.getElementById('siteFill');
+            const icon = document.getElementById('siteIcon');
+            const cancelBtn = document.getElementById('siteCancelBtn');
+            const stats = (job.result && job.result.stats) || {};
+
+            if (active) {
+                const current = (job.current || '').replace(/^https?:\/\//, '').slice(0, 70);
+                bar.classList.add('active');
+                icon.textContent = '🔍';
+                cancelBtn.style.display = '';
+                text.textContent = 'Обход сайта: страниц ' + (job.pages || 0) +
+                    (job.pages_total ? ' из ' + job.pages_total : '') +
+                    ' · строк ' + (job.lines || 0) + (current ? ' · ' + current : '');
+                fill.style.width = (job.pages_total
+                    ? Math.min(100, Math.round((job.pages || 0) * 100 / job.pages_total))
+                    : 5) + '%';
+                return;
+            }
+
+            bar.classList.add('active');
+            cancelBtn.style.display = 'none';
+            fill.style.width = '100%';
+            const phase = job.phase || 'done';
+            const parts = [];
+            if (stats.pages) parts.push('страниц ' + stats.pages);
+            if (stats.new) parts.push('новых ' + stats.new);
+            if (stats.changed) parts.push('изменённых ' + stats.changed);
+            if (stats.unchanged) parts.push('без изменений ' + stats.unchanged);
+            if (stats.gone) parts.push('ушло ' + stats.gone);
+            if (stats.carried) parts.push('сохранено прежних ' + stats.carried);
+            const tail = parts.length ? ' (' + parts.join(', ') + ')' : '';
+            if (phase === 'error') {
+                icon.textContent = '⚠️';
+                text.textContent = job.message || 'Обход сайта не удался';
+            } else if (phase === 'cancelled') {
+                icon.textContent = '⏹';
+                text.textContent = 'Обход остановлен: в базу знаний попали строки ' + (job.lines || 0) +
+                    ' — то, что успели собрать' + tail;
+            } else {
+                icon.textContent = '✅';
+                text.textContent = 'Сайт добавлен в базу знаний: строк ' + (job.lines || 0) + tail;
+            }
+            setTimeout(() => {
+                if (!sitePollTimer) bar.classList.remove('active');
+            }, 10000);
+        }
+
+        // Обход, запущенный до перезагрузки страницы, показываем снова
+        function resumeSiteCrawl() {
+            fetch('/api/site/status')
+                .then(r => r.json())
+                .then(state => {
+                    if (state && state.active) {
+                        renderSiteBar(state.job || {}, true);
+                        pollSiteCrawl();
+                    }
+                })
+                .catch(() => {});
+        }
+
+        // «⟳ Обновить с сайта» у файла site_<домен>.txt
+        function recrawlSite(filename) {
+            fetch('/api/site/info?filename=' + encodeURIComponent(filename))
+                .then(r => r.json())
+                .then(info => {
+                    if (!info || !info.url) {
+                        alert((info && info.error) || 'Не удалось определить адрес сайта');
+                        return;
+                    }
+                    launchSiteCrawl({
+                        url: info.url,
+                        pages: info.page_limit || 50,
+                        respect_robots: info.respect_robots !== false
+                    }, null);
+                })
+                .catch(() => alert('Ошибка соединения с сервером'));
         }
 
         // Загрузка одного или нескольких файлов (клик по иконке или drag&drop)
