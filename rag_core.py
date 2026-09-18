@@ -986,7 +986,12 @@ class RAGCore:
         try:
             if file_path.lower().endswith(".txt"):
                 with open(file_path, "r", encoding="utf-8") as file:
-                    lines = [line.strip() for line in file if line.strip()]
+                    # Строки-заголовки («# Раздел», «# Сайт — https://...») в индекс не идут:
+                    # это разметка файла для человека, а не факт для базы знаний.
+                    # Формат БЗ их разрешает (см. навык rag-knowledge-base-formatting),
+                    # поэтому фильтр обязан быть здесь — иначе заголовки висят в поиске мусором.
+                    lines = [line.strip() for line in file
+                             if line.strip() and not line.lstrip().startswith('#')]
                     if lines:
                         logger.info(f"✅ Загружено {len(lines)} строк из {os.path.basename(file_path)}")
                         all_knowledge[file_path] = lines
