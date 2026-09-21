@@ -1,5 +1,5 @@
 # web_app.py - Веб-интерфейс для RAG-системы (с авторизацией)
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file, abort, make_response
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file, send_from_directory, abort, make_response
 import threading
 import uuid
 import logging
@@ -336,6 +336,23 @@ def logout():
     session.clear()
     logger.info(f"Пользователь {username} вышел из системы")
     return redirect(url_for('login'))
+
+
+# === Иконка сайта (favicon) ===
+ICON_DIR = os.path.join(app.static_folder, 'img')
+
+
+@app.route('/favicon.ico')
+def favicon():
+    """Классический favicon: браузеры и краулеры запрашивают /favicon.ico даже при наличии <link rel="icon">."""
+    return send_from_directory(ICON_DIR, 'favicon.ico', mimetype='image/vnd.microsoft.icon')
+
+
+@app.route('/apple-touch-icon.png')
+@app.route('/apple-touch-icon-precomposed.png')
+def apple_touch_icon():
+    """Иконка для «на главный экран» в Safari/iOS."""
+    return send_from_directory(ICON_DIR, 'apple-touch-icon.png', mimetype='image/png')
 
 
 # === Основные маршруты ===
