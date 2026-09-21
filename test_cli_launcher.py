@@ -8,6 +8,7 @@
 #   3) main() первым делом зовёт самопочинку (иначе «танца с интерпретатором» не будет).
 #
 # Запуск из папки проекта:  venv/Scripts/python.exe test_cli_launcher.py
+import os
 import sys
 import types
 from types import SimpleNamespace
@@ -57,10 +58,11 @@ def test_ensure_interpreter():
         run_cli.os.execv = orig_execv
     check('psycopg2 доступен → перезапуска нет', calls['execv'] == 0, calls)
 
-    # Дальше эмулируем «мы НЕ venv-питон» подменой sys.executable: в тесте сам тест
-    # запущен venv-питоном, и без этого проверка «мы уже venv» отсекала бы сценарии
-    saved_executable = sys.executable
-    sys.executable = 'C:\\not-a-venv\\python.exe'
+    # Дальше эмулируем «мы НЕ в venv» подменой sys.prefix: сравнивать realpath(sys.executable)
+    # нельзя — в ubuntu-venv bin/python это симлинк на /usr/bin/python3 (проверено на сервере).
+    venv_dir = run_cli.os.path.join(run_cli.PROJECT_DIR, 'venv')
+    saved_prefix = sys.prefix
+    sys.prefix = '/usr'
 
     # 1b) psycopg2 нет и в venv его нет → не перезапускаемся
     sys.modules.pop('psycopg2', None)
@@ -84,6 +86,7 @@ def test_ensure_interpreter():
     run_cli.os.execv = lambda path, argv: (calls.__setitem__('execv', calls['execv'] + 1),
                                            recorded.update(path=path, argv=list(argv)))
     run_cli.subprocess.run = lambda *a, **kw: SimpleNamespace(returncode=0)
+    saved_flag = os.environ.pop('RAG_CLI_BOOTSTRAPPED', None)
     try:
         run_cli._ensure_venv_interpreter()
     finally:
@@ -96,9 +99,14 @@ def test_ensure_interpreter():
           (recorded.get('argv') or [None, None])[1] == run_cli.os.path.abspath(run_cli.__file__), recorded.get('argv'))
     check('аргументы командной строки сохранены',
           (recorded.get('argv') or [])[2:] == sys.argv[1:], recorded.get('argv'))
+    check('перед перезапуском выставлен флаг RAG_CLI_BOOTSTRAPPED (защита от петли)',
+          os.environ.get('RAG_CLI_BOOTSTRAPPED') == '1', os.environ.get('RAG_CLI_BOOTSTRAPPED'))
+    os.environ.pop('RAG_CLI_BOOTSTRAPPED', None)
+    if saved_flag is not None:
+        os.environ['RAG_CLI_BOOTSTRAPPED'] = saved_flag
 
-    # 1d) мы уже venv-питон → перезапуска не делаем даже если psycopg2 не импортируется (нет петли)
-    sys.executable = saved_executable
+    # 1d) мы уже в venv (sys.prefix = venv) → перезапуска нет даже без psycopg2
+    sys.prefix = venv_dir
     sys.modules.pop('psycopg2', None)
     saved = _without_psycopg2()
     calls['execv'] = 0
@@ -110,7 +118,27 @@ def test_ensure_interpreter():
         run_cli.os.execv = orig_execv
         run_cli.subprocess.run = orig_run
         _restore(saved)
-    check('запуск уже venv-питоном → перезапуска нет (нет петли)', calls['execv'] == 0, calls)
+    check('sys.prefix указывает на venv → перезапуска нет', calls['execv'] == 0, calls)
+
+    # 1e) флаг bootstrap уже стоит → перезапуска нет (гарантия отсутствия петли)
+    sys.prefix = '/usr'
+    sys.modules.pop('psycopg2', None)
+    saved = _without_psycopg2()
+    calls['execv'] = 0
+    run_cli.os.execv = lambda *a, **kw: calls.__setitem__('execv', calls['execv'] + 1)
+    run_cli.subprocess.run = lambda *a, **kw: SimpleNamespace(returncode=0)
+    os.environ['RAG_CLI_BOOTSTRAPPED'] = '1'
+    try:
+        run_cli._ensure_venv_interpreter()
+    finally:
+        run_cli.os.execv = orig_execv
+        run_cli.subprocess.run = orig_run
+        run_cli.sys.prefix = saved_prefix
+        os.environ.pop('RAG_CLI_BOOTSTRAPPED', None)
+        if saved_flag is not None:
+            os.environ['RAG_CLI_BOOTSTRAPPED'] = saved_flag
+        _restore(saved)
+    check('повторный запуск с флагом → перезапуска нет', calls['execv'] == 0, calls)
 
 
 def test_db_settings_or_none():

@@ -63,13 +63,19 @@ def _ensure_venv_interpreter():
         return
     except ImportError:
         pass
+    # Защита от петли: второй запуск (после execv) помечается переменной окружения.
+    if os.environ.get("RAG_CLI_BOOTSTRAPPED"):
+        return
+    # «Мы уже в venv?» проверяем по sys.prefix, а НЕ сравнением realpath(sys.executable):
+    # в ubuntu-venv bin/python — симлинк на /usr/bin/python3, realpath совпадает и
+    # проверка ошибочно решала, что мы уже в venv, ничего не перезапуская.
+    if os.path.realpath(sys.prefix) == os.path.realpath(os.path.join(PROJECT_DIR, "venv")):
+        return
     if os.name == "nt":
         venv_python = os.path.join(PROJECT_DIR, "venv", "Scripts", "python.exe")
     else:
         venv_python = os.path.join(PROJECT_DIR, "venv", "bin", "python")
     if not os.path.exists(venv_python):
-        return
-    if os.path.realpath(venv_python) == os.path.realpath(sys.executable):
         return
     try:
         probe = subprocess.run([venv_python, "-c", "import psycopg2"],
@@ -78,8 +84,12 @@ def _ensure_venv_interpreter():
         return
     if probe.returncode != 0:
         return
-    print(f"ℹ️ Текущий интерпретатор без psycopg2 — перезапуск CLI через venv: {venv_python}")
+    # flush=True: при перенаправленном выводе строка иначе останется в буфере и
+    # пропадёт вместе с подменой образа процесса (execv)
+    print(f"ℹ️ Текущий интерпретатор без psycopg2 — перезапуск CLI через venv: {venv_python}",
+          flush=True)
     try:
+        os.environ["RAG_CLI_BOOTSTRAPPED"] = "1"
         os.execv(venv_python, [venv_python, os.path.abspath(__file__)] + sys.argv[1:])
     except Exception as e:
         print(f"⚠️ Перезапуск в venv не удался ({e}) — настройки БД могут быть недоступны")
