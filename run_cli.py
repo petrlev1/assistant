@@ -47,6 +47,65 @@ if sys.platform == "win32":
             pass
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _ensure_venv_interpreter():
+    """Перезапустить CLI интерпретатором venv, если в текущем нет psycopg2.
+
+    Симптом без этого: «⚠️ БД недоступна, используются настройки по умолчанию:
+    No module named 'psycopg2'» — CLI показывает дефолты вместо боевых настроек
+    и не может сохранить ни одного изменения (запуск `python3 run_cli.py` системным
+    питоном). Проверяем не только наличие venv-питона, но и то, что psycopg2 в нём
+    действительно импортируется, — иначе перезапуск бессмысленен.
+    """
+    try:
+        import psycopg2  # noqa: F401
+        return
+    except ImportError:
+        pass
+    if os.name == "nt":
+        venv_python = os.path.join(PROJECT_DIR, "venv", "Scripts", "python.exe")
+    else:
+        venv_python = os.path.join(PROJECT_DIR, "venv", "bin", "python")
+    if not os.path.exists(venv_python):
+        return
+    if os.path.realpath(venv_python) == os.path.realpath(sys.executable):
+        return
+    try:
+        probe = subprocess.run([venv_python, "-c", "import psycopg2"],
+                               capture_output=True, timeout=60)
+    except Exception:
+        return
+    if probe.returncode != 0:
+        return
+    print(f"ℹ️ Текущий интерпретатор без psycopg2 — перезапуск CLI через venv: {venv_python}")
+    try:
+        os.execv(venv_python, [venv_python, os.path.abspath(__file__)] + sys.argv[1:])
+    except Exception as e:
+        print(f"⚠️ Перезапуск в venv не удался ({e}) — настройки БД могут быть недоступны")
+
+
+def _db_settings_or_none():
+    """Настройки из БД или None, если БД недоступна.
+
+    Отличие от load_settings(): НЕ подставляет дефолты. Нужно там, где результат
+    собираются записать обратно: сохранить дефолты поверх боевых настроек — это тихая
+    потеря ключей API и параметров поиска (пример: сохранение «текущих» настроек
+    перед запуском веб-сервера при недоступной БД).
+    """
+    try:
+        from auth_db import get_all_settings
+        loaded = get_all_settings()
+    except Exception as e:
+        print(f"⚠️ БД недоступна: {e}")
+        return None
+    if not loaded:
+        return None
+    defaults = dict(_DEFAULTS)
+    for key, value in defaults.items():
+        if key not in loaded:
+            loaded[key] = value
+    return loaded
 RUN_DIR = os.path.join(PROJECT_DIR, ".run_cli")  # PID-файлы и логи процессов
 os.makedirs(RUN_DIR, exist_ok=True)
 
@@ -767,8 +826,14 @@ def cmd_web_start(mode, open_browser=False):
         print("   Чтобы запустить сервер отсюда, сначала остановите внешний процесс.")
         return 1
 
-    # Перед запуском сохраняем текущие настройки (как делает GUI в launch_web)
-    save_settings(load_settings())
+    # Перед запуском сохраняем настройки, но ТОЛЬКО реально прочитанные из БД.
+    # load_settings() при недоступной БД подставляет дефолты, и сохранение их в
+    # app_settings стёрло бы боевые ключи и параметры (тихая потеря настроек).
+    db_settings = _db_settings_or_none()
+    if db_settings is None:
+        print("⚠️ Настройки в БД не сохранены (БД недоступна) — веб-сервер запускаем как есть")
+    else:
+        save_settings(db_settings)
 
     if mode == "domain":
         if _start_caddy() is None:
@@ -1831,6 +1896,7 @@ def menu_loop():
             _pause()
     _maybe_stop_on_exit()
 def main(argv=None):
+    _ensure_venv_interpreter()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None or args.command == "menu":
