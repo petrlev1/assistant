@@ -119,6 +119,19 @@ class AdminModelsCase(unittest.TestCase):
         self.assertNotIn('LEAK', html)
 
     # --- сохранение ---
+    def test_04b_tabs_default_to_users(self):
+        """Две вкладки: «Пользователи» открыта по умолчанию, «Настройки» скрыта до клика."""
+        self._as_admin()
+        html = self.client.get('/admin').get_data(as_text=True)
+        self.assertIn('data-tab="users"', html)
+        self.assertIn('data-tab="settings"', html)
+        self.assertIn('<div class="tabpane" id="pane-settings">', html)          # без active — скрыта
+        self.assertIn('<div class="tabpane active" id="pane-users">', html)     # открыта
+        # блок «Модели» живёт в панели настроек, таблица пользователей — в панели пользователей
+        self.assertLess(html.index('id="pane-settings"'), html.index('id="llm_provider"'))
+        self.assertLess(html.index('id="llm_provider"'), html.index('id="pane-users"'))
+        self.assertIn('showTab', html)
+
     def test_05_save_requires_admin(self):
         r = self.client.post('/admin/api/settings', json={'llm_provider': 'DeepSeek'})
         self.assertEqual(r.status_code, 403)

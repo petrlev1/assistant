@@ -97,6 +97,17 @@
     .save-row { display: flex; align-items: center; gap: 12px; margin-top: 20px; }
     .saved { color: #6f7b8f; font-size: 12px; }
     .hidden { display: none !important; }
+    /* Вкладки: Пользователи (по умолчанию) / Настройки */
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab {
+        padding: 9px 16px; border-radius: 9px; border: 1px solid #2a3242;
+        background: #161b24; color: #aab3c5; font-size: 13.5px; font-weight: 500;
+        cursor: pointer; transition: background .15s, color .15s;
+    }
+    .tab:hover { background: #1d2531; color: #fff; }
+    .tab.active { background: #2a3242; color: #fff; border-color: #3a4557; }
+    .tabpane { display: none; }
+    .tabpane.active { display: block; }
 </style>
 </head>
 <body>
@@ -128,6 +139,11 @@
         {% endwith %}
         <div id="msg" class="flash hidden"></div>
         <script id="models-data" type="application/json">{{ models | tojson }}</script>
+        <div class="tabs" role="tablist">
+            <button class="tab active" type="button" data-tab="users" role="tab">Пользователи</button>
+            <button class="tab" type="button" data-tab="settings" role="tab">Настройки</button>
+        </div>
+        <div class="tabpane" id="pane-settings">
         <div class="card sect">
             <div class="sect-head">
                 <h2>Модели</h2>
@@ -197,6 +213,8 @@
                 <span class="saved" id="models-saved"></span>
             </div>
         </div>
+        </div>{# /pane-settings #}
+        <div class="tabpane active" id="pane-users">
         <div class="card">
             <table>
                 <thead>
@@ -230,6 +248,7 @@
             </table>
         </div>
         <p class="foot">Удаление пользователя стирает все его данные: документы, прайс-листы, историю чата, аналитику запросов, файлы и кэш эмбеддингов. Действие необратимо.</p>
+        </div>{# /pane-users #}
     </div>
 {% endif %}
 <script>
@@ -353,6 +372,19 @@ async function saveModels() {
 }
 
 initModels();
+
+/* Вкладки: по умолчанию «Пользователи». Выбор держим в location.hash — иначе
+   сохранение моделей (с перезагрузкой страницы) выбрасывало бы обратно на «Пользователей». */
+function showTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
+    if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+}
+
+document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => showTab(t.dataset.tab));
+});
+showTab(location.hash === '#settings' ? 'settings' : 'users');
 function arm(btn, kind) {
     if (btn.dataset.armed === '1') { fire(btn, kind); return; }
     btn.dataset.armed = '1';
