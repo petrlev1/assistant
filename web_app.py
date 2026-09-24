@@ -431,6 +431,23 @@ def docs(page='index'):
                            username=session.get('username', ''))
 
 
+def _rag_provider_model(user_rag):
+    """Метка [провайдер | модель] для чат-лога и истории — из СВЕЖИХ настроек.
+
+    ask_model() перечитывает настройки из БД только внутри себя, поэтому чтение
+    значений до него давало метку, отставшую на одну смену: админ менял модель и
+    провайдера, а в чат-логе и истории реплика помечалась прежней моделью (при этом
+    отвечала уже новая). Перечитываем здесь — ask_model() сделает это ещё раз, это
+    обычный SELECT из app_settings.
+    """
+    try:
+        user_rag.settings.reload()
+    except Exception as e:
+        logger.warning(f"Настройки для метки чата не перечитаны: {e}")
+    return (user_rag.settings.get("llm_provider", ""),
+            user_rag.settings.get("llm_model", ""))
+
+
 @app.route('/ask', methods=['POST'])
 def ask_question():
     """Обработка вопроса от пользователя (требуется авторизация)"""
@@ -463,8 +480,7 @@ def ask_question():
         user_msg_id = save_message(user_id, 'user', question, device_id=device_id)
 
         # Логирование вопроса в файл чата (с провайдером и моделью)
-        provider = user_rag.settings.get("llm_provider", "")
-        model = user_rag.settings.get("llm_model", "")
+        provider, model = _rag_provider_model(user_rag)
         chat_logger.log_message(user_name, user_id, question, is_bot=False, provider=provider, model=model)
 
         # Персональный промт пользователя (если задан — заменит системный промт по умолчанию)
@@ -1941,8 +1957,7 @@ def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_s
     """
     try:
         user_rag = get_user_rag(user_id)
-        provider = user_rag.settings.get("llm_provider", "")
-        model = user_rag.settings.get("llm_model", "")
+        provider, model = _rag_provider_model(user_rag)
         save_message(user_id, 'user', question, device_id=scope)
         chat_logger.log_message(label, user_id, question, is_bot=False,
                                 provider=provider, model=model)

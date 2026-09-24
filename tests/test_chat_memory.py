@@ -76,10 +76,15 @@ def test_history_helpers():
 # === 2) Сборка messages в RAGCore.ask_model =========================
 
 class _Settings:
-    """Заглушка RAGSettings: словарь + get/reload."""
+    """Заглушка RAGSettings: «БД» (db) + снимок (data) + get/reload.
+
+    Настоящий RAGSettings держит снимок настроек и обновляет его только в reload(),
+    поэтому заглушка повторяет это: правки в db видны лишь после reload(). На этом
+    расхождении ловится метка чат-лога, отставшая на одну смену настроек.
+    """
 
     def __init__(self, **overrides):
-        self.data = {
+        self.db = {
             'disable_llm_models': False,
             'disable_qa_corrections': False,
             'disable_knowledge_base_search': False,
@@ -92,10 +97,11 @@ class _Settings:
             'llm_model': 'test-model',
             'llm_base_url': 'http://127.0.0.1:9/v1',
         }
-        self.data.update(overrides)
+        self.db.update(overrides)
+        self.data = dict(self.db)
 
     def reload(self):
-        pass
+        self.data = dict(self.db)
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -400,6 +406,48 @@ def test_http_flow(uid):
     auth_db.delete_widget(uid, widget['id'])
 
 
+
+def test_chat_label_follows_settings(uid):
+    """Метка [провайдер | модель] в чат-логе берётся из СВЕЖИХ настроек.
+
+    Раньше значения читались ДО ask_model() (только он делал reload()), поэтому
+    первая реплика после смены настроек помечалась прежней моделью: админ менял
+    модель, а в логе и истории оставалась старая — при том что отвечала уже новая.
+    """
+    print('\n3b) Метка чат-лога следует за сменой настроек')
+    fake = _FakeRAG()
+    fake.settings = _Settings(llm_provider='DashScope', llm_model='qwen-turbo')
+    web_app.get_user_rag = lambda user_id: fake
+    web_app.rag_ready = True
+
+    logged = []
+    real_log = web_app.chat_logger.log_message
+    web_app.chat_logger.log_message = lambda *a, **kw: logged.append(kw)
+    try:
+        client = web_app.app.test_client()
+        with client.session_transaction() as sess:
+            sess['user_id'] = uid
+            sess['username'] = 'testlabel'
+        cookie = {'Cookie': 'device_id=label_' + uuid.uuid4().hex[:8]}
+        web_app._rate_hits.clear()
+
+        r = client.post('/ask', json={'question': 'метка до смены'}, headers=cookie)
+        check('метка ответа = текущие настройки',
+              r.status_code == 200 and logged[-1].get('provider') == 'DashScope'
+              and logged[-1].get('model') == 'qwen-turbo', logged[-1])
+
+        # «Админ» поменял провайдера/модель в БД: снимок обновится только в reload()
+        fake.settings.db.update({'llm_provider': 'Local (llama.cpp)',
+                                 'llm_model': 'qwen3-4b-instruct-2507'})
+        web_app._rate_hits.clear()
+        client.post('/ask', json={'question': 'метка после смены'}, headers=cookie)
+        check('метка обновилась сразу, не отставая на один запрос',
+              logged[-1].get('provider') == 'Local (llama.cpp)'
+              and logged[-1].get('model') == 'qwen3-4b-instruct-2507', logged[-1])
+    finally:
+        web_app.chat_logger.log_message = real_log
+
+
 def main():
     auth_db.init_db()
     auth_db.init_chat_history()
@@ -409,6 +457,7 @@ def main():
         test_history_helpers()
         test_ask_model_messages()
         test_db_layer(uid)
+        test_chat_label_follows_settings(uid)
         test_http_flow(uid)
     finally:
         auth_db.delete_user(uid)
