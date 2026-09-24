@@ -204,6 +204,14 @@
             </div>
 
             <h3>Поиск по векторам</h3>
+            <div class="row">
+                <label class="fld narrow">Фрагментов в контексте (top-K)
+                    <input type="number" id="search_top_k" min="1" max="50" step="1">
+                </label>
+            </div>
+            <p class="hint">Сколько фрагментов базы знаний уходит модели в одном запросе (одно значение
+                для всех моделей). Больше — полнее контекст, но длиннее промпт: у локальной модели на GPU
+                это прямое время до первого слова ответа.</p>
             <p class="hint">Модель эмбеддингов: <b id="embedding_model"></b> — прошита в коде и из админки не
                 переключается: смена потребовала бы полной переиндексации всех баз знаний (минуты CPU и
                 пересчёт кэша). Сменить = правка <code>rag_core._get_embedding_model()</code> + переиндексация.</p>
@@ -306,6 +314,7 @@ function initModels() {
     el('llm_base_url').value = v.llm_base_url || (MODELS.catalog[v.llm_provider] || {}).base_url || '';
     el('ocr_base_url').value = v.ocr_base_url || (MODELS.catalog.DashScope || {}).base_url || '';
     el('ocr_dpi').value = v.ocr_dpi || 150;
+    el('search_top_k').value = v.search_top_k || 30;
     el('disable_llm_models').checked = !!MODELS.flags.disable_llm_models;
     el('ocr_enabled').checked = !!MODELS.flags.ocr_enabled;
     el('embedding_model').textContent = MODELS.embedding_model;
@@ -339,6 +348,7 @@ async function saveModels() {
         ocr_model: modelValue('ocr_model', 'ocr_model_own'),
         ocr_base_url: el('ocr_base_url').value.trim(),
         ocr_dpi: Number(el('ocr_dpi').value),
+        search_top_k: Number(el('search_top_k').value),
         llm_api_key: el('llm_api_key').value.trim(),
         llm_provider_api_key: el('llm_provider_api_key').value.trim(),
         llm_openrouter_api_key: el('llm_openrouter_api_key').value.trim()

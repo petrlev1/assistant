@@ -1717,7 +1717,7 @@ def _admin_models_view(settings):
     return {
         "values": {k: settings.get(k, "") for k in
                    ("llm_provider", "llm_model", "llm_base_url",
-                    "ocr_model", "ocr_base_url", "ocr_dpi")},
+                    "ocr_model", "ocr_base_url", "ocr_dpi", "search_top_k")},
         "flags": {"disable_llm_models": bool(settings.get("disable_llm_models", False)),
                   "ocr_enabled": bool(settings.get("ocr_enabled", False))},
         "key_states": {k: ("задан" if str(settings.get(k, "") or "").strip() else "не задан")
@@ -1764,6 +1764,19 @@ def _admin_settings_updates(data):
         errors.append("OCR dpi: целое число 50–600")
     else:
         updates["ocr_dpi"] = dpi
+    # top-K поиска — ОДНО значение на все модели (облачные и локальные). Больше
+    # фрагментов = полнее контекст, но длиннее промпт: у локальной модели на GPU это
+    # прямое время обработки промпта перед первым словом ответа.
+    # Ключа нет в запросе — значение не трогаем (прежние клиенты шлют без него).
+    if "search_top_k" in data:
+        try:
+            top_k = int(str(data.get("search_top_k", "")).strip())
+        except (TypeError, ValueError):
+            top_k = None
+        if top_k is None or not 1 <= top_k <= 50:
+            errors.append("top-K поиска: целое число 1–50")
+        else:
+            updates["search_top_k"] = top_k
     updates["ocr_enabled"] = bool(data.get("ocr_enabled"))
     updates["disable_llm_models"] = bool(data.get("disable_llm_models"))
     for key in _ADMIN_SECRET_KEYS:

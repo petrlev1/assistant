@@ -95,7 +95,8 @@ class AdminModelsCase(unittest.TestCase):
         html = self.client.get('/admin').get_data(as_text=True)
         for marker in ('Модели', 'id="llm_provider"', 'id="llm_model"', 'id="ocr_model"',
                        'id="ocr_dpi"', 'id="llm_api_key"', 'id="llm_provider_api_key"',
-                       'id="llm_openrouter_api_key"', 'intfloat/multilingual-e5-large',
+                       'id="llm_openrouter_api_key"', 'id="search_top_k"',
+                       'intfloat/multilingual-e5-large',
                        'id="models-data"', 'id="save-models"'):
             self.assertIn(marker, html, f'нет элемента: {marker}')
 
@@ -110,6 +111,7 @@ class AdminModelsCase(unittest.TestCase):
         self.assertEqual(data['key_states']['llm_provider_api_key'], 'задан')
         self.assertEqual(data['key_states']['llm_openrouter_api_key'], 'не задан')
         self.assertEqual(data['embedding_model'], 'intfloat/multilingual-e5-large')
+        self.assertEqual(data['values']['search_top_k'], 30)
         self.assertEqual(sorted(data['providers']), ['DashScope', 'DeepSeek', 'OpenRouter'])
         self.assertIn('qwen-vl-max', data['ocr_models'])
 
@@ -208,6 +210,33 @@ class AdminModelsCase(unittest.TestCase):
         r = self.client.post('/admin/api/settings', json={'llm_provider': 'DeepSeek'},
                              headers={'Origin': 'https://evil.example'})
         self.assertEqual(r.status_code, 403)
+
+    def test_11b_search_top_k_saved_as_number(self):
+        """top-K поиска — одно общее значение для всех моделей, сохраняется числом."""
+        self._as_admin()
+        body = {'llm_provider': 'DeepSeek', 'llm_model': 'deepseek-chat',
+                'llm_base_url': 'https://api.deepseek.com/v1', 'ocr_model': 'qwen-vl-ocr',
+                'ocr_base_url': 'https://x/v1', 'ocr_dpi': 150, 'search_top_k': 12}
+        r = self.client.post('/admin/api/settings', json=body)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(self.saved[0]['search_top_k'], 12)
+        self.assertIsInstance(self.saved[0]['search_top_k'], int)
+
+    def test_11c_search_top_k_out_of_range_rejected(self):
+        """0, 51 и мусор — ошибка; без ключа в запросе значение не трогаем."""
+        self._as_admin()
+        base = {'llm_provider': 'DeepSeek', 'llm_model': 'deepseek-chat',
+                'llm_base_url': 'https://api.deepseek.com/v1', 'ocr_model': 'qwen-vl-ocr',
+                'ocr_base_url': 'https://x/v1', 'ocr_dpi': 150}
+        for bad in (0, 51, '', 'abc'):
+            r = self.client.post('/admin/api/settings', json={**base, 'search_top_k': bad})
+            self.assertEqual(r.status_code, 400, f'значение {bad!r} должно быть отклонено')
+            self.assertIn('top-K', r.get_json()['error'])
+        self.assertEqual(self.saved, [])
+
+        r = self.client.post('/admin/api/settings', json=base)   # ключа нет — не трогаем
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertNotIn('search_top_k', self.saved[0])
 
 
 class OcrCacheByModelCase(unittest.TestCase):
