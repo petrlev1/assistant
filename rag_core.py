@@ -20,6 +20,8 @@ import base64
 import io
 import threading
 
+import model_catalog
+
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -807,15 +809,26 @@ class RAGCore:
 
         return False
 
+    @staticmethod
+    def _ocr_model_slug(model):
+        """Имя модели → безопасный сегмент пути (правило — в model_catalog)."""
+        return model_catalog.ocr_model_slug(model)
+
     def _get_ocr_cache_path(self, file_path, page_num):
         """Путь к кэшу OCR-текста страницы (по хэшу PDF-файла), чтобы не жечь деньги
-        на повторных переиндексациях."""
+        на повторных переиндексациях.
+
+        Каталог разбит ПО МОДЕЛИ: текст, распознанный qwen-vl-ocr, нельзя отдавать
+        как результат qwen-vl-plus — после смены ocr_model (в т.ч. из админки)
+        страницы распознаются заново, а старый кэш остаётся на месте.
+        """
         if self.current_user_id is not None:
             cache_dir = Path("embeddings_cache") / f"user_{self.current_user_id}" / "ocr_cache"
         else:
             cache_dir = Path("embeddings_cache") / "ocr_cache"
         file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()[:12]
-        page_dir = cache_dir / file_hash
+        model_slug = self._ocr_model_slug(self.settings.get("ocr_model", "qwen-vl-ocr"))
+        page_dir = cache_dir / file_hash / model_slug
         page_dir.mkdir(exist_ok=True, parents=True)
         return page_dir / f"page_{page_num+1}.txt"
 
