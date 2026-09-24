@@ -119,21 +119,9 @@ def _db_settings_or_none():
 RUN_DIR = os.path.join(PROJECT_DIR, ".run_cli")  # PID-файлы и логи процессов
 os.makedirs(RUN_DIR, exist_ok=True)
 
-# Маппинг провайдеров LLM: base_url и доступные модели (единый источник для CLI)
-_PROVIDERS_FALLBACK = {
-    "DashScope": {
-        "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        "models": ["deepseek-v4-flash", "qwen-plus", "qwen-turbo", "qwen-max"],
-    },
-    "DeepSeek": {
-        "base_url": "https://api.deepseek.com/v1",
-        "models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
-    },
-    "OpenRouter": {
-        "base_url": "https://openrouter.ai/api/v1",
-        "models": ["qwen/qwen-plus", "deepseek/deepseek-chat", "openai/gpt-4o-mini"],
-    },
-}
+# Маппинг провайдеров LLM и список OCR-моделей — общий каталог model_catalog.py:
+# им же пользуется веб-админка, чтобы списки в CLI и на странице /admin не разъезжались.
+from model_catalog import PROVIDERS as _PROVIDERS_FALLBACK, OCR_MODELS as _OCR_MODELS
 
 # Ключи, значения которых маскируются в выводе (секреты)
 _SECRET_KEYS = ("llm_api_key", "llm_provider_api_key", "llm_openrouter_api_key", "telegram_bot_token")
@@ -169,8 +157,6 @@ _DEFAULTS = {
                    if os.name == "nt" else "/usr/bin/caddy"),
     "caddy_dir": PROJECT_DIR,
 }
-
-_OCR_MODELS = ["qwen-vl-ocr", "qwen-vl-plus", "qwen-vl-max"]
 
 # Группировка настроек для показа в `settings` и для меню
 SETTINGS_GROUPS = [
