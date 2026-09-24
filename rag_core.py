@@ -410,6 +410,10 @@ class RAGSettings:
         OpenRouter → llm_openrouter_api_key (fallback llm_provider_api_key / llm_api_key),
         остальные (DashScope и т.п.) → llm_api_key (он же используется для OCR)."""
         provider = self.settings.get("llm_provider", "DeepSeek")
+        if model_catalog.provider_is_local(provider):
+            # Локальный сервер ключ не проверяет, но ПУСТАЯ строка роняет OpenAI()
+            # с «Missing credentials» — отдаём заглушку (наружу она не уходит).
+            return "local"
         if provider == "DeepSeek":
             return self.settings.get("llm_provider_api_key") or self.settings.get("llm_api_key", "")
         if provider == "OpenRouter":

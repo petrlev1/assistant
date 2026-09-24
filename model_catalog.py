@@ -26,6 +26,15 @@ PROVIDERS = {
         "models": ["qwen/qwen-plus", "deepseek/deepseek-chat", "openai/gpt-4o-mini"],
         "key_hint": "Отдельный ключ OpenRouter (llm_openrouter_api_key).",
     },
+    # Локальный OpenAI-совместимый сервер рядом с приложением (llama.cpp llama-server).
+    # Данные и прайсы не уходят наружу. Ключ не проверяется, но клиенту openai нужна
+    # непустая строка — см. RAGSettings.get_llm_api_key и флаг local ниже.
+    "Local (llama.cpp)": {
+        "base_url": "http://127.0.0.1:8080/v1",
+        "models": ["qwen3-4b-instruct-2507"],
+        "key_hint": "Локальный сервер ключ не проверяет. Имя модели должно совпадать с --alias llama-server.",
+        "local": True,
+    },
 }
 
 OCR_MODELS = ["qwen-vl-ocr", "qwen-vl-plus", "qwen-vl-max"]
@@ -61,3 +70,8 @@ def models_for(provider):
 def provider_base_url(provider):
     """OpenAI-совместимый base_url провайдера."""
     return (PROVIDERS.get(provider) or {}).get("base_url", "")
+
+
+def provider_is_local(provider):
+    """Локальный ли провайдер: сервер рядом с приложением, ключ не нужен."""
+    return bool((PROVIDERS.get(provider) or {}).get("local"))

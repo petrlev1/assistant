@@ -189,7 +189,7 @@ _KEY_HINTS = {
     "disable_hybrid_search": "true/false",
     "disable_knowledge_base_search": "true/false",
     "ocr_enabled": "true/false",
-    "llm_provider": "DashScope | DeepSeek | OpenRouter",
+    "llm_provider": "DashScope | DeepSeek | OpenRouter | Local (llama.cpp)",
     "llm_model": "например: qwen-turbo, deepseek-chat (для OpenRouter — вручную, напр. openai/gpt-4o)",
     "llm_base_url": "URL OpenAI-совместимого API",
     "llm_api_key": "ключ DashScope/OCR (при провайдере DeepSeek/OpenRouter сохранится в его поле)",

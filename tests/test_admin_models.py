@@ -112,7 +112,8 @@ class AdminModelsCase(unittest.TestCase):
         self.assertEqual(data['key_states']['llm_openrouter_api_key'], 'не задан')
         self.assertEqual(data['embedding_model'], 'intfloat/multilingual-e5-large')
         self.assertEqual(data['values']['search_top_k'], 30)
-        self.assertEqual(sorted(data['providers']), ['DashScope', 'DeepSeek', 'OpenRouter'])
+        self.assertEqual(sorted(data['providers']),
+                         ['DashScope', 'DeepSeek', 'Local (llama.cpp)', 'OpenRouter'])
         self.assertIn('qwen-vl-max', data['ocr_models'])
 
     def test_04_secret_values_never_reach_the_page(self):
@@ -296,6 +297,57 @@ class OcrCacheByModelCase(unittest.TestCase):
         finally:
             sys.modules.pop('rag_core', None)   # вернуть состояние до теста (в web_app — заглушка)
 
+class LocalProviderCase(unittest.TestCase):
+    """Провайдер «Local (llama.cpp)»: адрес по умолчанию и заглушка вместо ключа.
+
+    Здесь импортируется НАСТОЯЩИЙ rag_core (torch + sentence-transformers), поэтому
+    класс идёт последним — после OcrCacheByModelCase.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cwd = os.getcwd()
+        cls.tmp = tempfile.mkdtemp(prefix='rag_local_provider_')
+        src_cfg = os.path.join(PROJECT, 'db_config.json')
+        if os.path.isfile(src_cfg):
+            shutil.copy(src_cfg, os.path.join(cls.tmp, 'db_config.json'))
+        os.chdir(cls.tmp)
+        # На старте rag_core создаёт клиента OpenAI: без ключа в настройках нужен env-ключ
+        os.environ.setdefault('OPENAI_API_KEY', 'test-key')
+
+    @classmethod
+    def tearDownClass(cls):
+        os.chdir(cls.cwd)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _real_rag_core(self):
+        sys.modules.pop('rag_core', None)
+        import importlib
+        return importlib.import_module('rag_core')
+
+    def test_01_catalog_entry_points_to_localhost(self):
+        import model_catalog
+        entry = model_catalog.PROVIDERS['Local (llama.cpp)']
+        self.assertTrue(model_catalog.provider_is_local('Local (llama.cpp)'))
+        self.assertTrue(entry['base_url'].startswith('http://127.0.0.1'))
+        self.assertIn('qwen3-4b-instruct-2507', entry['models'])
+        self.assertFalse(model_catalog.provider_is_local('DashScope'))
+        self.assertFalse(model_catalog.provider_is_local('НеТакой'))
+
+    def test_02_local_provider_does_not_borrow_cloud_key(self):
+        """Пустая строка api_key роняет OpenAI() — локальному провайдеру отдаём заглушку."""
+        real = self._real_rag_core()
+        settings = real.RAGSettings.__new__(real.RAGSettings)      # без чтения БД
+        settings.settings = {'llm_provider': 'Local (llama.cpp)', 'llm_api_key': '',
+                             'llm_base_url': 'http://127.0.0.1:8080/v1'}
+        self.assertEqual(settings.get_llm_api_key(), 'local')
+
+        core = real.RAGCore.__new__(real.RAGCore)
+        core.settings = settings
+        core._setup_client()          # клиент создаётся без OpenAIError
+
+        settings.settings.update({'llm_provider': 'DashScope', 'llm_api_key': 'sk-test'})
+        self.assertEqual(settings.get_llm_api_key(), 'sk-test')
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
