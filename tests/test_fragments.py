@@ -15,10 +15,13 @@
 #      фрагментов стало больше, колонтитул ровно один, коротких «огрызков» нет,
 #      текст с чертежа (из OCR-кэша) на месте.
 #
-# Запуск из папки проекта:  venv/Scripts/python.exe test_fragments.py
+# Запуск из корня проекта:  venv/Scripts/python.exe tests/test_fragments.py   (Linux-сервер: venv/bin/python tests/test_fragments.py)
 import os
 import sys
 import tempfile
+
+# Запуск из любого каталога: корень проекта в sys.path (import auth_db / rag_core / web_app)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')

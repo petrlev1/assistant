@@ -8,12 +8,15 @@
 #   4) content списком частей → части склеены;
 #   5) HTTP 500 и 200 без choices → None, ошибка в логе, кэш НЕ пишется.
 #
-# Запуск из папки проекта:  venv/Scripts/python.exe test_ocr_page.py
+# Запуск из корня проекта:  venv/Scripts/python.exe tests/test_ocr_page.py   (Linux-сервер: venv/bin/python tests/test_ocr_page.py)
 import json
 import logging
 import os
 import sys
 import tempfile
+
+# Запуск из любого каталога: корень проекта в sys.path (import auth_db / rag_core / web_app)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')

@@ -11,10 +11,15 @@
 #      виджет не видит историю владельца, настройки chat_memory_* выключают память.
 #
 # Сети и LLM не требуется: get_user_rag и requests.post подменяются заглушками.
-# Запуск из папки проекта:  venv/Scripts/python.exe test_chat_memory.py
+# Запуск из корня проекта:  venv/Scripts/python.exe tests/test_chat_memory.py   (Linux-сервер: venv/bin/python tests/test_chat_memory.py)
 import sys
 import time
 import uuid
+
+import os
+
+# Запуск из любого каталога: корень проекта в sys.path (import auth_db / rag_core / web_app)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:                                    # Windows-консоль: русский вывод без падений
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')

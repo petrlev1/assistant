@@ -6,7 +6,7 @@
 * каждая страница рендерится мини-рендерером без остатков markdown-разметки;
 * нет «осиротевших» файлов, которых нет в меню (иначе о них нельзя узнать).
 
-Запуск:  venv/Scripts/python.exe test_docs.py
+Запуск:  venv/Scripts/python.exe tests/test_docs.py   (Linux-сервер: venv/bin/python tests/test_docs.py)
 """
 
 import os
@@ -15,7 +15,10 @@ import sys
 import unittest
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parent
+# Запуск из любого каталога: корень проекта в sys.path (import auth_db / rag_core / web_app)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+PROJECT = Path(__file__).resolve().parent.parent  # корень проекта (сами тесты лежат в tests/)
 sys.path.insert(0, str(PROJECT))
 
 import docs_renderer

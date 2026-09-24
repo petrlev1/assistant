@@ -6,7 +6,7 @@
 индекс эмбеддингов/BM25 они попадать не должны — иначе поиск засоряется короткими
 служебными строками. Фильтр живёт в txt-ветке `_process_file`.
 
-Запуск:  venv/Scripts/python.exe test_txt_headers.py
+Запуск:  venv/Scripts/python.exe tests/test_txt_headers.py   (Linux-сервер: venv/bin/python tests/test_txt_headers.py)
 
 БД и LLM не нужны: `auth_db` подменяется заглушкой (rag_core при импорте читает оттуда
 настройки), сам метод вызывается на объекте, созданном через `object.__new__` — ветка
@@ -20,7 +20,10 @@ import types
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Запуск из любого каталога: корень проекта в sys.path (import auth_db / rag_core / web_app)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Заглушка auth_db: rag_core при импорте читает настройки (get_all_settings) и создаёт
 # клиента LLM. Ключ-пустышка нужен только чтобы конструирование клиента не падало.

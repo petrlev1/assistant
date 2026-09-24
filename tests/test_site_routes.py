@@ -1,7 +1,7 @@
 # test_site_routes.py — маршруты индексации сайта в веб-приложении (web_app.py)
 """Сквозная проверка фичи «🌐 Индексировать сайт» без настоящей БД и без LLM.
 
-Запуск:  venv/Scripts/python.exe test_site_routes.py
+Запуск:  venv/Scripts/python.exe tests/test_site_routes.py   (Linux-сервер: venv/bin/python tests/test_site_routes.py)
 
 Подробности: обход идёт по локальному тестовому сайту (http.server) с флагом
 SITE_CRAWLER_ALLOW_LOCAL=1, запись документа и переиндексация подменены заглушками
@@ -22,7 +22,10 @@ import types
 import unittest
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parent
+# Запуск из любого каталога: корень проекта в sys.path (import auth_db / rag_core / web_app)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+PROJECT = Path(__file__).resolve().parent.parent  # корень проекта (сами тесты лежат в tests/)
 sys.path.insert(0, str(PROJECT))
 
 PAGES = {

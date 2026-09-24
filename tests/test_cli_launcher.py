@@ -7,11 +7,14 @@
 #      отсутствующих ключей;
 #   3) main() первым делом зовёт самопочинку (иначе «танца с интерпретатором» не будет).
 #
-# Запуск из папки проекта:  venv/Scripts/python.exe test_cli_launcher.py
+# Запуск из корня проекта:  venv/Scripts/python.exe tests/test_cli_launcher.py   (Linux-сервер: venv/bin/python tests/test_cli_launcher.py)
 import os
 import sys
 import types
 from types import SimpleNamespace
+
+# Запуск из любого каталога: корень проекта в sys.path (import auth_db / rag_core / web_app)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')

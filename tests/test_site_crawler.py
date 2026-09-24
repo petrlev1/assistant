@@ -2,7 +2,7 @@
 """Тесты краулера: нормализация URL, защита от SSRF, разбор HTML, сборка строк-фактов,
 инкрементальный обход (304) и полный прогон по локальному тестовому сайту.
 
-Запуск:  venv/Scripts/python.exe test_site_crawler.py
+Запуск:  venv/Scripts/python.exe tests/test_site_crawler.py   (Linux-сервер: venv/bin/python tests/test_site_crawler.py)
 Тесты работают в отдельном временном каталоге (там же создаются site_cache/ и Database/),
 поэтому файлы реальных пользователей не затрагиваются.
 """
@@ -19,7 +19,10 @@ import time
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Запуск из любого каталога: корень проекта в sys.path (import auth_db / rag_core / web_app)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import site_crawler as sc
 
