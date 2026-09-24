@@ -76,6 +76,27 @@
     .actions .btn + .btn { margin-left: 8px; }
     .empty { text-align: center; color: #8b94a7; padding: 30px; }
     .foot { margin-top: 18px; color: #5c6577; font-size: 12px; }
+    /* Блок «Модели» */
+    .sect { margin-bottom: 20px; }
+    .sect-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+    .sect h2 { font-size: 17px; color: #fff; }
+    .sect h3 {
+        font-size: 12px; color: #8b94a7; text-transform: uppercase; letter-spacing: .04em;
+        margin: 18px 0 10px; padding-top: 14px; border-top: 1px solid #1f2530;
+    }
+    .sect h3:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+    .row { display: flex; flex-wrap: wrap; gap: 14px; }
+    .fld { flex: 1 1 240px; min-width: 190px; }
+    .fld.narrow { flex: 0 1 170px; }
+    .hint { color: #6f7b8f; font-size: 12px; margin: 8px 0 0; line-height: 1.5; }
+    .hint code { font-family: Consolas, Menlo, monospace; color: #9fb3d9; }
+    .chk { display: flex; align-items: center; gap: 8px; color: #aab3c5; font-size: 13px; margin-bottom: 12px; }
+    .chk input { width: auto; margin: 0; }
+    .state { font-size: 11px; color: #5c6577; }
+    .state.on { color: #4cc38a; }
+    .save-row { display: flex; align-items: center; gap: 12px; margin-top: 20px; }
+    .saved { color: #6f7b8f; font-size: 12px; }
+    .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -106,6 +127,76 @@
             {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
         {% endwith %}
         <div id="msg" class="flash hidden"></div>
+        <script id="models-data" type="application/json">{{ models | tojson }}</script>
+        <div class="card sect">
+            <div class="sect-head">
+                <h2>Модели</h2>
+                <span class="hint">Общие для всех пользователей · применяются со следующего запроса, перезапуск сервера не нужен</span>
+            </div>
+
+            <h3>LLM — ответы на вопросы</h3>
+            <label class="chk"><input type="checkbox" id="disable_llm_models">
+                Отключить отправку запросов к LLM (отдавать только найденный контекст)</label>
+            <div class="row">
+                <label class="fld">Провайдер
+                    <select id="llm_provider"></select>
+                </label>
+                <label class="fld">Модель
+                    <select id="llm_model"></select>
+                </label>
+                <label class="fld hidden" id="llm_model_own_fld">Своя модель
+                    <input type="text" id="llm_model_own" autocomplete="off" placeholder="например: openai/gpt-4o">
+                </label>
+            </div>
+            <label class="fld">Base URL провайдера
+                <input type="text" id="llm_base_url" autocomplete="off">
+            </label>
+            <p class="hint" id="key-hint"></p>
+
+            <h3>OCR — распознавание сканов и чертежей</h3>
+            <label class="chk"><input type="checkbox" id="ocr_enabled">
+                Распознавать страницы PDF без текстового слоя (DashScope Vision)</label>
+            <div class="row">
+                <label class="fld">Модель OCR
+                    <select id="ocr_model"></select>
+                </label>
+                <label class="fld hidden" id="ocr_model_own_fld">Своя модель
+                    <input type="text" id="ocr_model_own" autocomplete="off" placeholder="qwen-vl-ocr">
+                </label>
+                <label class="fld narrow">DPI рендера страницы
+                    <input type="number" id="ocr_dpi" min="50" max="600" step="10">
+                </label>
+            </div>
+            <label class="fld">Base URL OCR
+                <input type="text" id="ocr_base_url" autocomplete="off">
+            </label>
+            <p class="hint">Кэш распознанного текста разбит по модели: после смены модели страницы
+                распознаются заново (расходует квоту DashScope).</p>
+
+            <h3>API-ключи</h3>
+            <p class="hint">Пустое поле = ключ не меняется. Значения на страницу не отдаются — только признак «задан».</p>
+            <div class="row">
+                <label class="fld">DashScope <span class="state" id="state_llm_api_key"></span>
+                    <input type="password" id="llm_api_key" autocomplete="new-password" placeholder="не менять">
+                </label>
+                <label class="fld">DeepSeek <span class="state" id="state_llm_provider_api_key"></span>
+                    <input type="password" id="llm_provider_api_key" autocomplete="new-password" placeholder="не менять">
+                </label>
+                <label class="fld">OpenRouter <span class="state" id="state_llm_openrouter_api_key"></span>
+                    <input type="password" id="llm_openrouter_api_key" autocomplete="new-password" placeholder="не менять">
+                </label>
+            </div>
+
+            <h3>Поиск по векторам</h3>
+            <p class="hint">Модель эмбеддингов: <b id="embedding_model"></b> — прошита в коде и из админки не
+                переключается: смена потребовала бы полной переиндексации всех баз знаний (минуты CPU и
+                пересчёт кэша). Сменить = правка <code>rag_core._get_embedding_model()</code> + переиндексация.</p>
+
+            <div class="save-row">
+                <button class="btn small" type="button" id="save-models">Сохранить модели</button>
+                <span class="saved" id="models-saved"></span>
+            </div>
+        </div>
         <div class="card">
             <table>
                 <thead>
@@ -143,6 +234,125 @@
 {% endif %}
 <script>
 const ARM_MS = 5000;
+const OWN = '__own__';
+const MODELS = JSON.parse(document.getElementById('models-data').textContent);
+
+function el(id) { return document.getElementById(id); }
+
+function fillModelSelect(sel, models, current) {
+    sel.textContent = '';
+    const list = (models || []).slice();
+    if (current && !list.includes(current)) list.push(current);   // текущая модель может быть не из списка
+    list.forEach(m => {
+        const o = document.createElement('option');
+        o.value = m; o.textContent = m;
+        sel.appendChild(o);
+    });
+    const own = document.createElement('option');
+    own.value = OWN; own.textContent = '— своя модель (ввести) —';
+    sel.appendChild(own);
+    sel.value = current && current.length ? current : (list[0] || OWN);
+}
+
+function modelValue(selId, ownId) {
+    const sel = el(selId);
+    return sel.value === OWN ? el(ownId).value.trim() : sel.value;
+}
+
+function syncOwnFields() {
+    el('llm_model_own_fld').classList.toggle('hidden', el('llm_model').value !== OWN);
+    el('ocr_model_own_fld').classList.toggle('hidden', el('ocr_model').value !== OWN);
+}
+
+function setKeyStates() {
+    Object.keys(MODELS.key_states).forEach(k => {
+        const badge = el('state_' + k);
+        if (!badge) return;
+        const on = MODELS.key_states[k] === 'задан';
+        badge.textContent = MODELS.key_states[k];
+        badge.classList.toggle('on', on);
+    });
+}
+
+function initModels() {
+    const v = MODELS.values || {};
+    MODELS.providers.forEach(name => {
+        const o = document.createElement('option');
+        o.value = name; o.textContent = name;
+        el('llm_provider').appendChild(o);
+    });
+    el('llm_provider').value = v.llm_provider || MODELS.providers[0];
+    fillModelSelect(el('llm_model'), (MODELS.catalog[v.llm_provider] || {}).models, v.llm_model);
+    fillModelSelect(el('ocr_model'), MODELS.ocr_models, v.ocr_model);
+    el('llm_base_url').value = v.llm_base_url || (MODELS.catalog[v.llm_provider] || {}).base_url || '';
+    el('ocr_base_url').value = v.ocr_base_url || (MODELS.catalog.DashScope || {}).base_url || '';
+    el('ocr_dpi').value = v.ocr_dpi || 150;
+    el('disable_llm_models').checked = !!MODELS.flags.disable_llm_models;
+    el('ocr_enabled').checked = !!MODELS.flags.ocr_enabled;
+    el('embedding_model').textContent = MODELS.embedding_model;
+    el('key-hint').textContent = (MODELS.catalog[el('llm_provider').value] || {}).key_hint || '';
+    setKeyStates();
+    syncOwnFields();
+
+    el('llm_provider').addEventListener('change', () => {
+        const info = MODELS.catalog[el('llm_provider').value] || {};
+        fillModelSelect(el('llm_model'), info.models, '');
+        // base_url меняем только если там адрес одного из известных провайдеров
+        const known = MODELS.providers.map(n => (MODELS.catalog[n] || {}).base_url);
+        const cur = el('llm_base_url').value.trim();
+        if (!cur || known.includes(cur)) el('llm_base_url').value = info.base_url || '';
+        el('key-hint').textContent = info.key_hint || '';
+        syncOwnFields();
+    });
+    el('llm_model').addEventListener('change', syncOwnFields);
+    el('ocr_model').addEventListener('change', syncOwnFields);
+    el('save-models').addEventListener('click', saveModels);
+}
+
+async function saveModels() {
+    const btn = el('save-models'), out = el('models-saved');
+    const body = {
+        llm_provider: el('llm_provider').value,
+        llm_model: modelValue('llm_model', 'llm_model_own'),
+        llm_base_url: el('llm_base_url').value.trim(),
+        disable_llm_models: el('disable_llm_models').checked,
+        ocr_enabled: el('ocr_enabled').checked,
+        ocr_model: modelValue('ocr_model', 'ocr_model_own'),
+        ocr_base_url: el('ocr_base_url').value.trim(),
+        ocr_dpi: Number(el('ocr_dpi').value),
+        llm_api_key: el('llm_api_key').value.trim(),
+        llm_provider_api_key: el('llm_provider_api_key').value.trim(),
+        llm_openrouter_api_key: el('llm_openrouter_api_key').value.trim()
+    };
+    if (!body.llm_model) { showMsg('Модель LLM не может быть пустой', true); return; }
+    if (!body.ocr_model) { showMsg('OCR-модель не может быть пустой', true); return; }
+    btn.disabled = true;
+    out.textContent = 'Сохранение…';
+    try {
+        const r = await fetch('/admin/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        if (d.success) {
+            ['llm_api_key', 'llm_provider_api_key', 'llm_openrouter_api_key'].forEach(id => { el(id).value = ''; });
+            showMsg(d.message);
+            out.textContent = 'Сохранено';
+            setTimeout(() => location.reload(), 900);
+        } else {
+            out.textContent = '';
+            showMsg(d.error || 'Ошибка сохранения', true);
+        }
+    } catch (e) {
+        out.textContent = '';
+        showMsg('Ошибка сети: ' + e, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+initModels();
 function arm(btn, kind) {
     if (btn.dataset.armed === '1') { fire(btn, kind); return; }
     btn.dataset.armed = '1';

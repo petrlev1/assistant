@@ -16,7 +16,7 @@ import csv
 from datetime import datetime
 from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_all_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
                      clear_widget_history)
@@ -26,6 +26,7 @@ from auth_db import (init_max_channels, get_max_channel, get_max_channel_by_hook
 import docs_renderer
 import max_bot
 import site_crawler
+import model_catalog
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -1695,6 +1696,88 @@ def _scrub_chat_logs(user_id):
     return removed
 
 
+# === Админка: модели LLM и OCR (страница /admin) ===
+# Модель векторизации из админки НЕ переключается: она прошита в rag_core
+# (_get_embedding_model), её смена требует полной переиндексации всех баз знаний —
+# на странице она показывается справочно.
+_ADMIN_SECRET_KEYS = ("llm_api_key", "llm_provider_api_key", "llm_openrouter_api_key")
+_ADMIN_SECRET_LABELS = {
+    "llm_api_key": "DashScope (он же для OCR)",
+    "llm_provider_api_key": "DeepSeek",
+    "llm_openrouter_api_key": "OpenRouter",
+}
+
+
+def _admin_models_view(settings):
+    """Данные блока «Модели» для шаблона.
+
+    Значения API-ключей НЕ отдаются в браузер даже админу: страница — это HTTP-ответ,
+    секретам в нём не место. Вместо значения — признак «задан / не задан».
+    """
+    return {
+        "values": {k: settings.get(k, "") for k in
+                   ("llm_provider", "llm_model", "llm_base_url",
+                    "ocr_model", "ocr_base_url", "ocr_dpi")},
+        "flags": {"disable_llm_models": bool(settings.get("disable_llm_models", False)),
+                  "ocr_enabled": bool(settings.get("ocr_enabled", False))},
+        "key_states": {k: ("задан" if str(settings.get(k, "") or "").strip() else "не задан")
+                       for k in _ADMIN_SECRET_KEYS},
+        "key_labels": _ADMIN_SECRET_LABELS,
+        "providers": model_catalog.provider_names(),
+        "catalog": model_catalog.PROVIDERS,
+        "ocr_models": model_catalog.OCR_MODELS,
+        "embedding_model": model_catalog.EMBEDDING_MODEL,
+    }
+
+
+def _admin_settings_updates(data):
+    """Проверка JSON из админки → (updates, errors).
+
+    Пустое поле ключа = «не менять»: так админ не затирает ключ случайно, а
+    llm_api_key (общий с OCR) остаётся живым при смене LLM-провайдера.
+    """
+    updates, errors = {}, []
+    provider = str(data.get("llm_provider", "") or "").strip()
+    if provider not in model_catalog.PROVIDERS:
+        errors.append(f"неизвестный провайдер LLM: {provider}")
+    else:
+        updates["llm_provider"] = provider
+    for key, label in (("llm_model", "модель LLM"), ("ocr_model", "OCR-модель")):
+        value = str(data.get(key, "") or "").strip()
+        if not value:
+            errors.append(f"{label} не может быть пустой")
+        elif len(value) > 120 or any(c.isspace() for c in value):
+            errors.append(f"{label}: недопустимое значение")
+        else:
+            updates[key] = value
+    for key, label in (("llm_base_url", "LLM base_url"), ("ocr_base_url", "OCR base_url")):
+        value = str(data.get(key, "") or "").strip().rstrip("/")
+        if not value.startswith(("http://", "https://")):
+            errors.append(f"{label}: нужен адрес вида https://…")
+        else:
+            updates[key] = value
+    try:
+        dpi = int(str(data.get("ocr_dpi", "")).strip())
+    except (TypeError, ValueError):
+        dpi = None
+    if dpi is None or not 50 <= dpi <= 600:
+        errors.append("OCR dpi: целое число 50–600")
+    else:
+        updates["ocr_dpi"] = dpi
+    updates["ocr_enabled"] = bool(data.get("ocr_enabled"))
+    updates["disable_llm_models"] = bool(data.get("disable_llm_models"))
+    for key in _ADMIN_SECRET_KEYS:
+        value = str(data.get(key, "") or "").strip()
+        if not value:      # пусто — ключ не трогаем
+            continue
+        if len(value) < 8 or any(c.isspace() for c in value):
+            errors.append(f"ключ ({_ADMIN_SECRET_LABELS[key]}): похоже на опечатку — "
+                          f"короче 8 символов или с пробелом")
+            continue
+        updates[key] = value
+    return updates, errors
+
+
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     """Скрытая админ-панель: вход по отдельной учётке + список пользователей.
@@ -1723,7 +1806,8 @@ def admin():
         for u in users:
             u['kb_folder'] = os.path.join('Database', f"user_{u['id']}")
             u['kb_folder_exists'] = os.path.isdir(u['kb_folder'])
-        return render_template('admin.html', mode='dashboard', users=users)
+        return render_template('admin.html', mode='dashboard', users=users,
+                               models=_admin_models_view(get_all_settings()))
     return render_template('admin.html', mode='login')
 
 
@@ -1732,6 +1816,37 @@ def admin_logout():
     """Выход из админ-панели (пользовательская сессия не трогается)."""
     session.pop('admin', None)
     return redirect(url_for('admin'))
+
+
+@app.route('/admin/api/settings', methods=['POST'])
+def admin_save_settings():
+    """Сохранение моделей LLM/OCR из админ-панели (только админ).
+
+    Настройки общие для всех пользователей (таблица app_settings). Сразу после
+    записи перечитываем их в этом же процессе: веб-сервер применяет новую модель
+    со следующего запроса, перезапуск не нужен (ask_model() тоже делает reload()).
+    """
+    if not session.get('admin'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+    data = request.get_json(silent=True) or {}
+    updates, errors = _admin_settings_updates(data)
+    if errors:
+        return jsonify({'error': '; '.join(errors)}), 400
+    if not set_settings(updates):
+        return jsonify({'error': 'Не удалось сохранить настройки в БД'}), 500
+    try:
+        from rag_core import settings as rag_settings
+        rag_settings.reload()   # чтобы OCR/LLM в этом процессе увидели новые значения сразу
+    except Exception as e:
+        logger.error(f"Настройки сохранены, но не перечитаны в процессе: {e}")
+    changed = [k for k in updates if k not in _ADMIN_SECRET_KEYS]
+    secrets = [k for k in updates if k in _ADMIN_SECRET_KEYS]
+    logger.info(f"⚙️ Админ изменил настройки моделей: {', '.join(changed)}"
+                + (f" (+ключи: {', '.join(secrets)})" if secrets else ""))
+    message = "Настройки сохранены и применены"
+    if secrets:
+        message += " (ключи обновлены, значения не показываются)"
+    return jsonify({'success': True, 'message': message, 'changed': changed})
 
 
 @app.route('/admin/api/delete-user', methods=['POST'])
