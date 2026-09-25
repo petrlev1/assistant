@@ -124,7 +124,8 @@ os.makedirs(RUN_DIR, exist_ok=True)
 from model_catalog import PROVIDERS as _PROVIDERS_FALLBACK, OCR_MODELS as _OCR_MODELS
 
 # Ключи, значения которых маскируются в выводе (секреты)
-_SECRET_KEYS = ("llm_api_key", "llm_provider_api_key", "llm_openrouter_api_key", "telegram_bot_token")
+_SECRET_KEYS = ("llm_api_key", "llm_provider_api_key", "llm_openrouter_api_key",
+                "llm_local_api_key", "telegram_bot_token")
 
 # Дефолты настроек (как в GUI-лаунчере)
 _DEFAULTS = {
@@ -195,6 +196,7 @@ _KEY_HINTS = {
     "llm_api_key": "ключ DashScope/OCR (при провайдере DeepSeek/OpenRouter сохранится в его поле)",
     "llm_provider_api_key": "ключ провайдера DeepSeek",
     "llm_openrouter_api_key": "ключ провайдера OpenRouter",
+    "llm_local_api_key": "ключ локального сервера модели (--api-key llama-server), если он открыт наружу",
     "ocr_model": "qwen-vl-ocr | qwen-vl-plus | qwen-vl-max",
     "ocr_base_url": "URL OCR API (DashScope)",
     "telegram_bot_token": "токен от @BotFather",

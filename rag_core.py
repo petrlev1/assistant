@@ -340,6 +340,7 @@ class RAGSettings:
             "llm_api_key": "",  # Пустое значение по умолчанию (используется и для OCR DashScope)
             "llm_provider_api_key": "",  # Отдельный ключ для LLM-провайдера (например DeepSeek); fallback — llm_api_key
             "llm_openrouter_api_key": "",  # Ключ OpenRouter (sk-or-...); fallback — llm_provider_api_key / llm_api_key
+            "llm_local_api_key": "",  # Ключ локального сервера модели (--api-key у llama-server), если он открыт наружу
             "llm_base_url": "https://api.deepseek.com/v1",
             "llm_provider": "DeepSeek",
             "llm_model": "deepseek-v4-flash",
@@ -411,9 +412,11 @@ class RAGSettings:
         остальные (DashScope и т.п.) → llm_api_key (он же используется для OCR)."""
         provider = self.settings.get("llm_provider", "DeepSeek")
         if model_catalog.provider_is_local(provider):
-            # Локальный сервер ключ не проверяет, но ПУСТАЯ строка роняет OpenAI()
-            # с «Missing credentials» — отдаём заглушку (наружу она не уходит).
-            return "local"
+            # У локального сервера может быть свой ключ (--api-key llama-server), когда
+            # он открыт наружу через проброс порта: задаётся в llm_local_api_key.
+            # Если ключ не задан — заглушка "local": ПУСТАЯ строка роняет OpenAI()
+            # с «Missing credentials», а сервер без --api-key ключ всё равно не смотрит.
+            return self.settings.get("llm_local_api_key") or "local"
         if provider == "DeepSeek":
             return self.settings.get("llm_provider_api_key") or self.settings.get("llm_api_key", "")
         if provider == "OpenRouter":

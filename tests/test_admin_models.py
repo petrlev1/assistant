@@ -349,5 +349,10 @@ class LocalProviderCase(unittest.TestCase):
         settings.settings.update({'llm_provider': 'DashScope', 'llm_api_key': 'sk-test'})
         self.assertEqual(settings.get_llm_api_key(), 'sk-test')
 
+        # Если локальный сервер открыт наружу и защищён --api-key — отправляем его
+        settings.settings = {'llm_provider': 'Local (llama.cpp)',
+                             'llm_local_api_key': 'a' * 48}
+        self.assertEqual(settings.get_llm_api_key(), 'a' * 48)
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
