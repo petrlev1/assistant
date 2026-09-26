@@ -311,7 +311,8 @@ function initModels() {
     el('llm_provider').value = v.llm_provider || MODELS.providers[0];
     fillModelSelect(el('llm_model'), (MODELS.catalog[v.llm_provider] || {}).models, v.llm_model);
     fillModelSelect(el('ocr_model'), MODELS.ocr_models, v.ocr_model);
-    el('llm_base_url').value = v.llm_base_url || (MODELS.catalog[v.llm_provider] || {}).base_url || '';
+    el('llm_base_url').value = v.llm_base_url || (MODELS.base_urls || {})[v.llm_provider]
+        || (MODELS.catalog[v.llm_provider] || {}).base_url || '';
     el('ocr_base_url').value = v.ocr_base_url || (MODELS.catalog.DashScope || {}).base_url || '';
     el('ocr_dpi').value = v.ocr_dpi || 150;
     el('search_top_k').value = v.search_top_k || 30;
@@ -323,12 +324,12 @@ function initModels() {
     syncOwnFields();
 
     el('llm_provider').addEventListener('change', () => {
-        const info = MODELS.catalog[el('llm_provider').value] || {};
+        const name = el('llm_provider').value;
+        const info = MODELS.catalog[name] || {};
         fillModelSelect(el('llm_model'), info.models, '');
-        // base_url меняем только если там адрес одного из известных провайдеров
-        const known = MODELS.providers.map(n => (MODELS.catalog[n] || {}).base_url);
-        const cur = el('llm_base_url').value.trim();
-        if (!cur || known.includes(cur)) el('llm_base_url').value = info.base_url || '';
+        // Адрес берём из памяти по провайдерам: у каждого он свой (у «Local» — адрес
+        // сервера модели, у облачных — их API), поэтому подставляется сам.
+        el('llm_base_url').value = (MODELS.base_urls || {})[name] || info.base_url || '';
         el('key-hint').textContent = info.key_hint || '';
         syncOwnFields();
     });

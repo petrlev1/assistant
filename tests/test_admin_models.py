@@ -239,6 +239,72 @@ class AdminModelsCase(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         self.assertNotIn('search_top_k', self.saved[0])
 
+    # --- память адресов по провайдерам (llm_base_urls) ---
+    def test_12_base_urls_shipped_with_every_provider(self):
+        """В админку уходит карта адресов: у каждого провайдера свой."""
+        self._as_admin()
+        urls = self._models_json()['base_urls']
+        self.assertEqual(urls['DashScope'], 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1')
+        self.assertEqual(urls['DeepSeek'], 'https://api.deepseek.com/v1')
+        self.assertEqual(urls['Local (llama.cpp)'], 'http://127.0.0.1:8080/v1')
+
+    def test_13_active_url_wins_over_catalog_default(self):
+        """Для активного провайдера показывается сохранённый адрес, а не умолчание каталога."""
+        old = dict(SETTINGS)
+        try:
+            SETTINGS.update({
+                'llm_provider': 'Local (llama.cpp)',
+                'llm_model': 'qwen3-4b-instruct-2507',
+                'llm_base_url': 'http://85.234.31.16:8443/v1',
+                'llm_base_urls': {'Local (llama.cpp)': 'http://127.0.0.1:8080/v1'},
+            })
+            self._as_admin()
+            data = self._models_json()
+            self.assertEqual(data['values']['llm_base_url'], 'http://85.234.31.16:8443/v1')
+            self.assertEqual(data['base_urls']['Local (llama.cpp)'], 'http://85.234.31.16:8443/v1')
+        finally:
+            SETTINGS.clear(); SETTINGS.update(old)
+
+    def test_14_save_remembers_url_of_that_provider_only(self):
+        """Сохранение запоминает адрес своего провайдера и не теряет чужие."""
+        old = dict(SETTINGS)
+        try:
+            SETTINGS['llm_base_urls'] = {'DashScope': 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'}
+            self._as_admin()
+            r = self.client.post('/admin/api/settings', json={
+                'llm_provider': 'Local (llama.cpp)', 'llm_model': 'qwen3-4b-instruct-2507',
+                'llm_base_url': 'http://85.234.31.16:8443/v1', 'ocr_model': 'qwen-vl-ocr',
+                'ocr_base_url': 'https://x/v1', 'ocr_dpi': 150})
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            saved = self.saved[-1]
+            self.assertEqual(saved['llm_base_url'], 'http://85.234.31.16:8443/v1')
+            self.assertEqual(saved['llm_base_urls'], {
+                'DashScope': 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+                'Local (llama.cpp)': 'http://85.234.31.16:8443/v1'})
+            self.assertNotIn('llm_base_urls', r.get_json()['changed'])   # служебный ключ не в отчёте
+        finally:
+            SETTINGS.clear(); SETTINGS.update(old)
+
+    def test_15_broken_memory_does_not_break_page_or_save(self):
+        """Мусор в памяти адресов не ломает ни страницу, ни сохранение."""
+        old = dict(SETTINGS)
+        try:
+            for broken in ('не json', 42, ['x'], {'НеТакой': 'https://x/v1'}):
+                SETTINGS['llm_base_urls'] = broken
+                self._as_admin()
+                urls = self._models_json()['base_urls']
+                self.assertEqual(urls['DashScope'],
+                                 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1')
+            r = self.client.post('/admin/api/settings', json={
+                'llm_provider': 'DashScope', 'llm_model': 'qwen-turbo',
+                'llm_base_url': 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+                'ocr_model': 'qwen-vl-ocr', 'ocr_base_url': 'https://x/v1', 'ocr_dpi': 150})
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            self.assertEqual(self.saved[-1]['llm_base_urls'],
+                             {'DashScope': 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'})
+        finally:
+            SETTINGS.clear(); SETTINGS.update(old)
+
 
 class OcrCacheByModelCase(unittest.TestCase):
     """Кэш OCR-текста разбит по модели: смена ocr_model перечитывает страницы заново.

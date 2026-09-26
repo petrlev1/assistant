@@ -1724,6 +1724,38 @@ _ADMIN_SECRET_LABELS = {
 }
 
 
+_ADMIN_BASE_URLS_KEY = "llm_base_urls"
+
+
+def _parse_base_urls(raw):
+    """Значение app_settings → {провайдер: адрес}; мусор, чужие ключи и не-адреса отбрасываются."""
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(name): str(url).strip().rstrip("/") for name, url in data.items()
+            if name in model_catalog.PROVIDERS and str(url).startswith(("http://", "https://"))}
+
+
+def _admin_base_urls(settings):
+    """Адрес каждого провайдера: умолчание каталога ← запомненный ← текущий активный.
+
+    Память адресов нужна админке: раньше при смене провайдера поле адреса оставалось
+    прежним, и можно было сохранить адрес чужого провайдера (например, сервера модели
+    на Чебе при облачном ключе) — запросы падали с 401. Рантайм (rag_core) по-прежнему
+    читает ОДИН активный llm_base_url, поэтому формат настроек не меняется.
+    """
+    urls = {name: (info or {}).get("base_url", "") for name, info in model_catalog.PROVIDERS.items()}
+    urls.update(_parse_base_urls(settings.get(_ADMIN_BASE_URLS_KEY, "")))
+    provider = str(settings.get("llm_provider", "") or "")
+    current = str(settings.get("llm_base_url", "") or "").strip().rstrip("/")
+    if provider in model_catalog.PROVIDERS and current:
+        urls[provider] = current      # активная настройка — источник правды для текущего провайдера
+    return urls
+
+
 def _admin_models_view(settings):
     """Данные блока «Модели» для шаблона.
 
@@ -1741,13 +1773,17 @@ def _admin_models_view(settings):
         "key_labels": _ADMIN_SECRET_LABELS,
         "providers": model_catalog.provider_names(),
         "catalog": model_catalog.PROVIDERS,
+        "base_urls": _admin_base_urls(settings),
         "ocr_models": model_catalog.OCR_MODELS,
         "embedding_model": model_catalog.EMBEDDING_MODEL,
     }
 
 
-def _admin_settings_updates(data):
+def _admin_settings_updates(data, settings=None):
     """Проверка JSON из админки → (updates, errors).
+
+    ``settings`` — текущие настройки из БД: нужны, чтобы дописать память адресов по
+    провайдерам. Без них (settings=None) память просто не обновляется.
 
     Пустое поле ключа = «не менять»: так админ не затирает ключ случайно, а
     llm_api_key (общий с OCR) остаётся живым при смене LLM-провайдера.
@@ -1772,6 +1808,12 @@ def _admin_settings_updates(data):
             errors.append(f"{label}: нужен адрес вида https://…")
         else:
             updates[key] = value
+    # Память адресов: сохраняем адрес, введённый для ЭТОГО провайдера, чтобы при
+    # следующем переключении поле заполнилось само.
+    if provider in model_catalog.PROVIDERS and "llm_base_url" in updates:
+        remembered = _parse_base_urls((settings or {}).get(_ADMIN_BASE_URLS_KEY, ""))
+        remembered[provider] = updates["llm_base_url"]
+        updates[_ADMIN_BASE_URLS_KEY] = remembered
     try:
         dpi = int(str(data.get("ocr_dpi", "")).strip())
     except (TypeError, ValueError):
@@ -1858,7 +1900,7 @@ def admin_save_settings():
     if not session.get('admin'):
         return jsonify({'error': 'Доступ запрещён'}), 403
     data = request.get_json(silent=True) or {}
-    updates, errors = _admin_settings_updates(data)
+    updates, errors = _admin_settings_updates(data, get_all_settings())
     if errors:
         return jsonify({'error': '; '.join(errors)}), 400
     if not set_settings(updates):
@@ -1868,7 +1910,8 @@ def admin_save_settings():
         rag_settings.reload()   # чтобы OCR/LLM в этом процессе увидели новые значения сразу
     except Exception as e:
         logger.error(f"Настройки сохранены, но не перечитаны в процессе: {e}")
-    changed = [k for k in updates if k not in _ADMIN_SECRET_KEYS]
+    changed = [k for k in updates
+               if k not in _ADMIN_SECRET_KEYS and k != _ADMIN_BASE_URLS_KEY]
     secrets = [k for k in updates if k in _ADMIN_SECRET_KEYS]
     logger.info(f"⚙️ Админ изменил настройки моделей: {', '.join(changed)}"
                 + (f" (+ключи: {', '.join(secrets)})" if secrets else ""))
