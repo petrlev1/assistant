@@ -45,11 +45,6 @@
   }
   .top .container { display: flex; align-items: center; justify-content: space-between; height: 64px; }
   .logo { display: flex; align-items: center; gap: 10px; color: #fff; font-weight: 700; font-size: 19px; }
-  .logo .mark {
-    width: 36px; height: 36px; border-radius: 10px; flex: 0 0 36px;
-    background: linear-gradient(135deg, var(--primary), var(--primary-2));
-    display: flex; align-items: center; justify-content: center; font-size: 19px;
-  }
   .nav { display: flex; gap: 22px; align-items: center; }
   .nav a { color: #cbd5e1; font-size: 14.5px; transition: color .15s; }
   .nav a:hover { color: #fff; }
@@ -226,7 +221,7 @@
 <!-- ================= HEADER ================= -->
 <header class="top">
   <div class="container">
-    <a href="/" class="logo"><span class="mark">🧠</span>RAGSTONE</a>
+    <a href="/" class="logo">RAGSTONE</a>
     <nav class="nav" id="mainNav">
       <a href="/#features">Возможности</a>
       <a href="/#how">Как работает</a>
@@ -257,7 +252,7 @@
 <section class="hero" id="top">
   <div class="container">
     <div class="badge">💰 Прозрачные тарифы · без скрытых платежей</div>
-    <h1>Начните бесплатно — <span class="grad">растите до своего контура</span></h1>
+    <h1>Начните бесплатно — <span class="grad">растите до своей инфраструктуры</span></h1>
     <p class="sub">Пять вариантов: облако для быстрого старта, тарифы для команды и отдела, лицензия на ваш сервер и индивидуальная установка системы под ключ.</p>
     <p class="note">Цены в рублях. Оплата за год — дешевле: два месяца в подарок.</p>
   </div>
@@ -349,7 +344,7 @@
       <div class="plan">
         <div class="tag">Свой сервер</div>
         <h3>Корпоративный</h3>
-        <p class="who">Данные не должны покидать контур: установка на сервер компании, своя или локальная LLM.</p>
+        <p class="who">Данные не должны уходить наружу: установка на сервер компании, своя или локальная LLM.</p>
         <div class="price">
           <span class="price-v" data-m="190 000 ₽" data-y="190 000 ₽">190 000 ₽</span>
           <span class="price-per" data-m="разово · + 39 000 ₽/год поддержка" data-y="разово · + 39 000 ₽/год поддержка">разово · + 39 000 ₽/год поддержка</span>
@@ -360,7 +355,7 @@
           <li>всё из «Бизнеса», плюс:</li>
           <li>развёртывание на вашем сервере</li>
           <li>локальная LLM на вашем GPU</li>
-          <li>полная изоляция данных в вашем контуре</li>
+          <li>данные остаются внутри вашей сети</li>
           <li>интеграция с доменом, своим сайтом, 1С-обменом</li>
           <li>обучение сотрудников онлайн</li>
           <li>обновления и поддержка 8×5, SLA</li>
@@ -459,7 +454,7 @@
           <tr><th>Изоляция баз знаний пользователей</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
           <tr><th>Свои ключи LLM-провайдера</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
           <tr><th>Локальная LLM на вашем GPU</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Данные не покидают ваш контур</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Данные не покидают вашу сеть</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
           <tr><th>Копии базы знаний (бэкап)</th><td class="no">—</td><td>ежедневно</td><td class="hl">ежедневно</td><td>по регламенту</td><td>по регламенту</td></tr>
 
           <tr class="group"><th colspan="6">Поддержка</th></tr>
@@ -504,7 +499,7 @@
       </details>
       <details>
         <summary>Что входит в индивидуальный проект?</summary>
-        <p>Обследование ваших процессов, аудит и подготовка базы знаний, развёртывание системы в вашем контуре, интеграции (CRM, 1С, телефония, портал), настройка сценариев и метрик качества ответов, обучение команды, выделенный инженер и поддержка 24/7 по SLA. Ориентировочный срок — от 4 недель, стоимость — от 490 000 ₽ в зависимости от объёма интеграций.</p>
+        <p>Обследование ваших процессов, аудит и подготовка базы знаний, развёртывание системы на вашем оборудовании, интеграции (CRM, 1С, телефония, портал), настройка сценариев и метрик качества ответов, обучение команды, выделенный инженер и поддержка 24/7 по SLA. Ориентировочный срок — от 4 недель, стоимость — от 490 000 ₽ в зависимости от объёма интеграций.</p>
       </details>
       <details>
         <summary>Нужен ли отдельный сервер для локальной установки?</summary>
