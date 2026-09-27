@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Тарифы и цены — RAGSTONE</title>
+<link rel="icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/svg+xml">
+<link rel="icon" href="{{ url_for('static', filename='img/favicon-32x32.png') }}" sizes="32x32" type="image/png">
+<link rel="icon" href="{{ url_for('static', filename='img/favicon-16x16.png') }}" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="shortcut icon" href="/favicon.ico">
+<meta name="description" content="Тарифы RAGSTONE: бесплатный старт, тарифы для команды и бизнеса, лицензия на сервер компании и индивидуальная установка системы под ключ.">
+<style>
+  :root {
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --ink: #0f172a;
+    --muted: #64748b;
+    --primary: #4f46e5;
+    --primary-2: #7c3aed;
+    --accent: #06b6d4;
+    --ok: #059669;
+    --line: #e2e8f0;
+    --radius: 16px;
+    --shadow: 0 10px 30px rgba(15, 23, 42, .08);
+    --shadow-hover: 0 18px 40px rgba(15, 23, 42, .14);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: "Segoe UI", "Inter", -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.6;
+  }
+  a { color: var(--primary); text-decoration: none; }
+  .container { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
+
+  /* ===== Header ===== */
+  .top {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(15, 23, 42, .92);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+  .top .container { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .logo { display: flex; align-items: center; gap: 10px; color: #fff; font-weight: 700; font-size: 19px; }
+  .logo .mark {
+    width: 36px; height: 36px; border-radius: 10px; flex: 0 0 36px;
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    display: flex; align-items: center; justify-content: center; font-size: 19px;
+  }
+  .nav { display: flex; gap: 22px; align-items: center; }
+  .nav a { color: #cbd5e1; font-size: 14.5px; transition: color .15s; }
+  .nav a:hover { color: #fff; }
+  .nav a.active { color: #fff; font-weight: 600; }
+  .btn {
+    display: inline-block; padding: 10px 20px; border-radius: 10px;
+    font-size: 15px; font-weight: 600; cursor: pointer; border: none; transition: transform .12s, box-shadow .12s;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #fff; box-shadow: 0 8px 20px rgba(79,70,229,.35); }
+  .btn-ghost { background: rgba(255,255,255,.08); color: #fff; border: 1px solid rgba(255,255,255,.18); }
+  .btn-ghost:hover { background: rgba(255,255,255,.16); }
+  .btn-outline { background: #fff; color: var(--primary); border: 1px solid var(--line); }
+  .btn-outline:hover { border-color: var(--primary); }
+  .mobile-cta { display: none; }
+
+  /* ===== Гамбургер (мобильное меню) ===== */
+  .burger {
+    display: none; flex: 0 0 42px; width: 42px; height: 42px; padding: 0;
+    flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18);
+    border-radius: 10px; cursor: pointer; transition: background .15s;
+  }
+  .burger:hover { background: rgba(255,255,255,.16); }
+  .burger span { display: block; width: 18px; height: 2px; border-radius: 2px; background: #e2e8f0; transition: transform .2s, opacity .2s; }
+  .burger.open span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+  .burger.open span:nth-child(2) { opacity: 0; }
+  .burger.open span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+  /* ===== Hero ===== */
+  .hero {
+    background: radial-gradient(900px 500px at 85% -10%, rgba(124,58,237,.45), transparent 60%),
+                radial-gradient(700px 420px at 10% 10%, rgba(6,182,212,.28), transparent 55%),
+                linear-gradient(160deg, #0f172a 0%, #1e1b4b 100%);
+    color: #fff;
+    padding: 84px 0 64px;
+    position: relative; overflow: hidden;
+    text-align: center;
+  }
+  .hero .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.18);
+    border-radius: 999px; padding: 6px 14px; font-size: 13.5px; color: #e0e7ff; margin-bottom: 22px;
+  }
+  .hero h1 { font-size: 44px; line-height: 1.15; font-weight: 800; letter-spacing: -.5px; }
+  .hero h1 .grad { background: linear-gradient(90deg, #a5b4fc, #67e8f9); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero .sub { margin: 20px auto 0; font-size: 18px; color: #cbd5e1; max-width: 720px; }
+  .hero .note { margin-top: 18px; font-size: 13.5px; color: #94a3b8; }
+
+  /* ===== Section ===== */
+  section { padding: 72px 0; }
+  .sec-title { font-size: 13px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--primary); }
+  .sec-h2 { font-size: 32px; font-weight: 800; margin-top: 8px; letter-spacing: -.5px; }
+  .sec-sub { margin-top: 12px; font-size: 16.5px; color: var(--muted); max-width: 760px; }
+  .sec-head { text-align: center; }
+  .sec-head .sec-sub { margin-left: auto; margin-right: auto; }
+
+  /* ===== Billing toggle ===== */
+  .billing { display: flex; justify-content: center; gap: 6px; margin: 34px auto 0; padding: 6px; background: #fff; border: 1px solid var(--line); border-radius: 999px; width: fit-content; box-shadow: var(--shadow); }
+  .bill-btn {
+    background: transparent; border: none; cursor: pointer; font: inherit; font-size: 14.5px; font-weight: 600;
+    color: var(--muted); padding: 9px 20px; border-radius: 999px; transition: background .15s, color .15s;
+  }
+  .bill-btn:hover { color: var(--ink); }
+  .bill-btn.active { background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #fff; box-shadow: 0 6px 16px rgba(79,70,229,.3); }
+  .bill-btn .save { font-size: 12px; font-weight: 700; opacity: .85; }
+
+  /* ===== Plans ===== */
+  .plans { display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; margin-top: 40px; align-items: start; }
+  .plan {
+    display: flex; flex-direction: column; height: 100%;
+    background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 26px 22px; box-shadow: var(--shadow); transition: transform .15s, box-shadow .15s, border-color .15s;
+  }
+  .plan:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover); }
+  .plan.featured { border: 2px solid var(--primary); box-shadow: 0 16px 40px rgba(79,70,229,.18); }
+  .plan .tag {
+    align-self: flex-start; font-size: 11.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--primary); background: rgba(79,70,229,.09); border-radius: 999px; padding: 4px 10px; margin-bottom: 12px;
+  }
+  .plan.featured .tag { color: #fff; background: linear-gradient(135deg, var(--primary), var(--primary-2)); }
+  .plan h3 { font-size: 19px; font-weight: 800; }
+  .plan .who { font-size: 13.5px; color: var(--muted); margin-top: 6px; min-height: 40px; }
+  .plan .price { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .plan .price-v { display: block; font-size: 27px; font-weight: 800; letter-spacing: -.5px; }
+  .plan .price-per { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; min-height: 34px; }
+  .plan .btn { margin-top: 18px; text-align: center; }
+  .plan ul { list-style: none; margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .plan li { font-size: 13.5px; color: var(--muted); padding: 4px 0 4px 20px; position: relative; }
+  .plan li::before { content: "✓"; position: absolute; left: 0; color: var(--ok); font-weight: 700; }
+  .plan li b { color: var(--ink); font-weight: 600; }
+
+  /* ===== Included for everyone ===== */
+  .everyone { background: #fff; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 32px; }
+  .strip .item { background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+  .strip .item b { display: block; font-size: 14.5px; margin-bottom: 2px; }
+  .strip .item span { font-size: 13px; color: var(--muted); }
+
+  /* ===== Comparison table ===== */
+  .table-wrap { margin-top: 34px; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  caption { caption-side: top; text-align: left; padding: 0; }
+  th, td { padding: 12px 16px; font-size: 13.5px; text-align: center; border-bottom: 1px solid var(--line); }
+  thead th { position: sticky; top: 0; background: #fff; font-size: 13px; font-weight: 700; color: var(--ink); vertical-align: bottom; }
+  thead th:first-child { text-align: left; }
+  thead th .th-price { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+  thead th.hl { color: var(--primary); }
+  tbody th { text-align: left; font-weight: 600; color: var(--ink); background: #fff; }
+  tbody td { color: var(--muted); }
+  tbody td.hl { background: rgba(79,70,229,.04); }
+  tbody tr:hover td, tbody tr:hover th { background: #f1f5ff; }
+  tr.group th { background: var(--bg); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); text-align: left; padding: 10px 16px; }
+  .yes { color: var(--ok); font-weight: 700; }
+  .no { color: #cbd5e1; }
+
+  /* ===== FAQ ===== */
+  .faq { display: grid; gap: 12px; margin-top: 32px; max-width: 900px; }
+  details { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 4px 20px; box-shadow: var(--shadow); }
+  details[open] { border-color: rgba(79,70,229,.35); }
+  summary { cursor: pointer; font-weight: 600; font-size: 15.5px; padding: 14px 0; list-style: none; position: relative; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; position: absolute; right: 0; top: 12px; font-size: 20px; color: var(--primary); font-weight: 700; }
+  details[open] summary::after { content: "–"; }
+  details p { font-size: 14.5px; color: var(--muted); padding: 0 0 16px; max-width: 820px; }
+
+  /* ===== CTA ===== */
+  .cta { background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #fff; text-align: center; }
+  .cta .sec-h2 { color: #fff; }
+  .cta p { color: #e0e7ff; margin-top: 12px; font-size: 16px; }
+  .cta .btn { background: #fff; color: var(--primary); margin-top: 26px; font-size: 16px; padding: 14px 32px; }
+  .cta .lead-note { margin-top: 14px; font-size: 13.5px; color: #c7d2fe; }
+
+  footer { background: #0f172a; color: #a5b4fc; padding: 28px 0; font-size: 14px; }
+  footer .container { display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+
+  @media (max-width: 1100px) {
+    .plans { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 900px) {
+    .plans { grid-template-columns: repeat(2, 1fr); }
+    .plan .who, .plan .price-per { min-height: 0; }
+  }
+  @media (max-width: 820px) {
+    .top .container { gap: 10px; }
+    .burger { display: flex; }
+    .mobile-cta { display: inline-block; margin-left: auto; }
+    .nav { display: none; }
+    .nav.open {
+      display: flex; flex-direction: column; align-items: stretch;
+      position: absolute; top: 64px; left: 0; right: 0;
+      padding: 6px 24px 16px;
+      background: #0f172a;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      box-shadow: 0 18px 40px rgba(0,0,0,.35);
+      max-height: calc(100vh - 64px); overflow-y: auto;
+    }
+    .nav.open a { font-size: 16px; padding: 13px 2px; }
+    .nav.open a + a { border-top: 1px solid rgba(255,255,255,.07); }
+    .nav.open a.btn { display: none; }
+    .hero h1 { font-size: 31px; }
+    section { padding: 52px 0; }
+    .sec-h2 { font-size: 26px; }
+    .billing { width: 100%; flex-direction: column; border-radius: 16px; }
+    .bill-btn { width: 100%; }
+  }
+  @media (max-width: 640px) {
+    .plans { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= HEADER ================= -->
+<header class="top">
+  <div class="container">
+    <a href="/" class="logo"><span class="mark">🧠</span>RAGSTONE</a>
+    <nav class="nav" id="mainNav">
+      <a href="/#features">Возможности</a>
+      <a href="/#how">Как работает</a>
+      <a href="/#embed">Интеграция</a>
+      <a href="/#tech">Технологии</a>
+      <a href="/#scenarios">Сценарии</a>
+      <a href="/#deploy">Внедрение</a>
+      <a href="/prices" class="active">Тарифы</a>
+      <a href="/docs">Документация</a>
+      {% if logged_in %}
+      <a href="/chat" class="btn btn-ghost" style="padding:8px 18px;" title="Перейти в чат">👤 {{ username }}</a>
+      {% else %}
+      <a href="/login" class="btn btn-ghost" style="padding:8px 18px;">Войти</a>
+      {% endif %}
+    </nav>
+    {% if logged_in %}
+    <a href="/chat" class="btn btn-ghost mobile-cta" title="Перейти в чат">👤 {{ username }}</a>
+    {% else %}
+    <a href="/login" class="btn btn-ghost mobile-cta">Войти</a>
+    {% endif %}
+    <button type="button" class="burger" id="burger" aria-controls="mainNav" aria-expanded="false" aria-label="Меню">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<!-- ================= HERO ================= -->
+<section class="hero" id="top">
+  <div class="container">
+    <div class="badge">💰 Прозрачные тарифы · без скрытых платежей</div>
+    <h1>Начните бесплатно — <span class="grad">растите до своего контура</span></h1>
+    <p class="sub">Пять вариантов: облако для быстрого старта, тарифы для команды и отдела, лицензия на ваш сервер и индивидуальная установка системы под ключ.</p>
+    <p class="note">Цены в рублях. Оплата за год — дешевле: два месяца в подарок.</p>
+  </div>
+</section>
+
+<!-- ================= PLANS ================= -->
+<section id="plans">
+  <div class="container">
+    <div class="sec-head">
+      <div class="sec-title">Тарифы</div>
+      <h2 class="sec-h2">Выберите вариант внедрения</h2>
+      <p class="sec-sub">От бесплатного знакомства на одном пользователе до полностью локальной системы на вашем оборудовании с выделенным инженером.</p>
+    </div>
+
+    <div class="billing" role="group" aria-label="Период оплаты">
+      <button type="button" class="bill-btn active" data-period="m">Помесячно</button>
+      <button type="button" class="bill-btn" data-period="y">Оплата за год <span class="save">−17%</span></button>
+    </div>
+
+    <div class="plans">
+      <!-- Старт -->
+      <div class="plan">
+        <div class="tag">Старт</div>
+        <h3>Бесплатно</h3>
+        <p class="who">Познакомиться с системой и проверить её на своих документах — без срока и без карты.</p>
+        <div class="price">
+          <span class="price-v" data-m="0 ₽" data-y="0 ₽">0 ₽</span>
+          <span class="price-per" data-m="навсегда" data-y="навсегда">навсегда</span>
+        </div>
+        <a href="/register" class="btn btn-outline">🚀 Начать бесплатно</a>
+        <ul>
+          <li><b>1 пользователь</b>, 1 база знаний</li>
+          <li>до <b>30 документов</b>, файл до 10 МБ</li>
+          <li><b>200 вопросов</b> в месяц</li>
+          <li>5+ форматов: PDF, DOCX, XLSX, TXT, CSV</li>
+          <li>ответы со ссылками на источники</li>
+          <li>облако на нашем сервере</li>
+          <li>без OCR сканов и виджета на сайт</li>
+        </ul>
+      </div>
+
+      <!-- Команда -->
+      <div class="plan">
+        <div class="tag">Команда</div>
+        <h3>Команда</h3>
+        <p class="who">Небольшой отдел или компания, которой нужна общая база знаний и бот для клиентов.</p>
+        <div class="price">
+          <span class="price-v" data-m="4 900 ₽" data-y="4 083 ₽">4 900 ₽</span>
+          <span class="price-per" data-m="в месяц · облако" data-y="в месяц · 49 000 ₽ в год">в месяц · облако</span>
+        </div>
+        <a href="/register" class="btn btn-outline">Подключить</a>
+        <ul>
+          <li>до <b>5 пользователей</b>, 3 базы знаний</li>
+          <li>до <b>500 документов</b>, файл до 50 МБ</li>
+          <li><b>3 000 вопросов</b> в месяц</li>
+          <li>распознавание сканов (OCR)</li>
+          <li>прайс-листы и таблицы</li>
+          <li>виджет на сайт + Telegram-бот</li>
+          <li>история диалогов 30 дней</li>
+          <li>свой характер ассистента (system prompt)</li>
+        </ul>
+      </div>
+
+      <!-- Бизнес -->
+      <div class="plan featured">
+        <div class="tag">Популярный</div>
+        <h3>Бизнес</h3>
+        <p class="who">Компания с несколькими направлениями: продажи, сервис, внутренние регламенты.</p>
+        <div class="price">
+          <span class="price-v" data-m="14 900 ₽" data-y="12 417 ₽">14 900 ₽</span>
+          <span class="price-per" data-m="в месяц · облако" data-y="в месяц · 149 000 ₽ в год">в месяц · облако</span>
+        </div>
+        <a href="/register" class="btn btn-primary">Попробовать 14 дней</a>
+        <ul>
+          <li>до <b>20 пользователей</b>, 10 баз знаний</li>
+          <li>до <b>5 000 документов</b>, файл до 200 МБ</li>
+          <li><b>20 000 вопросов</b> в месяц</li>
+          <li>всё из «Команды», плюс:</li>
+          <li>сайт-импорт: обход сайта в базу знаний</li>
+          <li>справочник цен и подбор товаров</li>
+          <li>аналитика запросов и пробелов в знаниях</li>
+          <li>бот MAX, публичные ссылки на файлы</li>
+          <li>свои ключи LLM · API-интеграции</li>
+          <li>поддержка 8×5, ответ до 8 часов</li>
+        </ul>
+      </div>
+
+      <!-- Корпоративный -->
+      <div class="plan">
+        <div class="tag">Свой сервер</div>
+        <h3>Корпоративный</h3>
+        <p class="who">Данные не должны покидать контур: установка на сервер компании, своя или локальная LLM.</p>
+        <div class="price">
+          <span class="price-v" data-m="190 000 ₽" data-y="190 000 ₽">190 000 ₽</span>
+          <span class="price-per" data-m="разово · + 39 000 ₽/год поддержка" data-y="разово · + 39 000 ₽/год поддержка">разово · + 39 000 ₽/год поддержка</span>
+        </div>
+        <a href="mailto:mail@ragstone.ru?subject=RAGSTONE%20—%20тариф%20Корпоративный" class="btn btn-outline">Обсудить установку</a>
+        <ul>
+          <li><b>без ограничений</b> по пользователям и документам</li>
+          <li>всё из «Бизнеса», плюс:</li>
+          <li>развёртывание на вашем сервере</li>
+          <li>локальная LLM на вашем GPU</li>
+          <li>полная изоляция данных в вашем контуре</li>
+          <li>интеграция с доменом, своим сайтом, 1С-обменом</li>
+          <li>обучение сотрудников онлайн</li>
+          <li>обновления и поддержка 8×5, SLA</li>
+        </ul>
+      </div>
+
+      <!-- Индивидуально -->
+      <div class="plan">
+        <div class="tag">Под ключ</div>
+        <h3>Индивидуально</h3>
+        <p class="who">Проект с обследованием, интеграциями и доработками под ваши процессы и безопасность.</p>
+        <div class="price">
+          <span class="price-v" data-m="от 490 000 ₽" data-y="от 490 000 ₽">от 490 000 ₽</span>
+          <span class="price-per" data-m="проект · срок от 4 недель" data-y="проект · срок от 4 недель">проект · срок от 4 недель</span>
+        </div>
+        <a href="mailto:mail@ragstone.ru?subject=RAGSTONE%20—%20индивидуальный%20проект" class="btn btn-outline">Обсудить проект</a>
+        <ul>
+          <li>всё из «Корпоративного», плюс:</li>
+          <li>обследование процессов и аудит данных</li>
+          <li>подготовка и очистка базы знаний</li>
+          <li><b>интеграции</b>: CRM, 1С, телефония, портал</li>
+          <li>сценарии и метрики качества ответов</li>
+          <li>дообучение / несколько локальных моделей</li>
+          <li>белый лейбл и ваш домен</li>
+          <li>выделенный инженер, SLA 24/7</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= INCLUDED ================= -->
+<section class="everyone">
+  <div class="container">
+    <div class="sec-head">
+      <div class="sec-title">Во всех тарифах</div>
+      <h2 class="sec-h2">Что вы получаете с первого дня</h2>
+    </div>
+    <div class="strip">
+      <div class="item"><b>🔍 Гибридный поиск</b><span>смысловой поиск + точные совпадения по словам, артикулам и цифрам</span></div>
+      <div class="item"><b>🔗 Ответы со ссылками</b><span>каждый ответ подкреплён документом-источником</span></div>
+      <div class="item"><b>📄 Форматы</b><span>PDF, DOCX, XLSX, TXT, CSV, MD, HTML, страницы сайта</span></div>
+      <div class="item"><b>🔐 Изоляция знаний</b><span>свои базы знаний у каждого пользователя и компании</span></div>
+      <div class="item"><b>📱 Работает везде</b><span>адаптивный интерфейс: ПК, планшет, телефон</span></div>
+      <div class="item"><b>🔄 Развитие системы</b><span>обновления и новые возможности включены в тариф</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= COMPARISON ================= -->
+<section id="compare">
+  <div class="container">
+    <div class="sec-head">
+      <div class="sec-title">Сравнение</div>
+      <h2 class="sec-h2">Возможности по тарифам</h2>
+      <p class="sec-sub">Полная детализация: лимиты, функции, каналы, безопасность и поддержка.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Возможность</th>
+            <th>Старт<span class="th-price">0 ₽</span></th>
+            <th>Команда<span class="th-price">4 900 ₽/мес</span></th>
+            <th class="hl">Бизнес<span class="th-price">14 900 ₽/мес</span></th>
+            <th>Корпоративный<span class="th-price">190 000 ₽ разово</span></th>
+            <th>Индивидуально<span class="th-price">от 490 000 ₽</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="group"><th colspan="6">Лимиты</th></tr>
+          <tr><th>Пользователи</th><td>1</td><td>5</td><td class="hl">20</td><td>без ограничений</td><td>без ограничений</td></tr>
+          <tr><th>Базы знаний</th><td>1</td><td>3</td><td class="hl">10</td><td>без ограничений</td><td>без ограничений</td></tr>
+          <tr><th>Документов</th><td>до 30</td><td>до 500</td><td class="hl">до 5 000</td><td>без ограничений</td><td>без ограничений</td></tr>
+          <tr><th>Вопросов в месяц</th><td>200</td><td>3 000</td><td class="hl">20 000</td><td>без ограничений*</td><td>без ограничений*</td></tr>
+          <tr><th>Размер одного файла</th><td>10 МБ</td><td>50 МБ</td><td class="hl">200 МБ</td><td>по ресурсам сервера</td><td>по ресурсам сервера</td></tr>
+
+          <tr class="group"><th colspan="6">Возможности</th></tr>
+          <tr><th>Гибридный поиск и ответы со ссылками</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Распознавание сканов (OCR)</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Прайс-листы и таблицы</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>История диалогов и память</th><td>базовая</td><td>30 дней</td><td class="hl">без ограничений</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Импорт содержимого сайта</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Аналитика запросов</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Публичные ссылки на файлы</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Свой характер ассистента</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>API-интеграции</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td>кастомные</td></tr>
+
+          <tr class="group"><th colspan="6">Каналы для пользователей</th></tr>
+          <tr><th>Веб-интерфейс системы</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Виджет на ваш сайт</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Telegram-бот</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Бот MAX</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+
+          <tr class="group"><th colspan="6">Данные и безопасность</th></tr>
+          <tr><th>Изоляция баз знаний пользователей</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Свои ключи LLM-провайдера</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Локальная LLM на вашем GPU</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Данные не покидают ваш контур</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Копии базы знаний (бэкап)</th><td class="no">—</td><td>ежедневно</td><td class="hl">ежедневно</td><td>по регламенту</td><td>по регламенту</td></tr>
+
+          <tr class="group"><th colspan="6">Поддержка</th></tr>
+          <tr><th>Документация и руководства</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Поддержка по email</th><td class="no">—</td><td>до 24 ч</td><td class="hl">до 8 ч</td><td>8×5, SLA</td><td>24/7, SLA</td></tr>
+          <tr><th>Обучение сотрудников</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td>онлайн</td><td>на месте</td></tr>
+          <tr><th>Выделенный инженер</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td class="no">—</td><td class="yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-sub" style="font-size:13.5px;">* На тарифах «Корпоративный» и «Индивидуально» система работает на вашем оборудовании — ограничения по числу запросов определяются ресурсами сервера, а не лицензией.</p>
+  </div>
+</section>
+
+<!-- ================= FAQ ================= -->
+<section style="background:#fff;border-top:1px solid var(--line);border-bottom:1px solid var(--line);">
+  <div class="container">
+    <div class="sec-head">
+      <div class="sec-title">Вопросы</div>
+      <h2 class="sec-h2">Частые вопросы о тарифах</h2>
+    </div>
+    <div class="faq">
+      <details open>
+        <summary>Что можно сделать на бесплатном тарифе?</summary>
+        <p>Зарегистрироваться, загрузить до 30 документов в одну базу знаний и задавать вопросы в чате — 200 вопросов в месяц. Это полноценная система, а не демо-режим: гибридный поиск, ответы со ссылками на источники, 5+ форматов файлов. Ограничения касаются только объёма, числа пользователей и внешних каналов.</p>
+      </details>
+      <details>
+        <summary>Где хранятся наши документы?</summary>
+        <p>На облачных тарифах («Старт», «Команда», «Бизнес») система работает на нашем сервере в России, данные изолированы по компаниям и пользователям. Если документы не должны покидать вашу инфраструктуру — выбирайте «Корпоративный» или «Индивидуально»: система разворачивается на вашем сервере, вместе с локальной LLM, и наружу не уходит ни один запрос.</p>
+      </details>
+      <details>
+        <summary>Нужен ли свой ключ LLM-провайдера?</summary>
+        <p>На облачных тарифах ключ уже включён в стоимость — платить внешним провайдерам отдельно не нужно. На тарифах со своей установкой вы используете либо собственный ключ, либо локальную модель на GPU сервера: тогда оплата за генерацию ответов вообще отсутствует.</p>
+      </details>
+      <details>
+        <summary>Как считаются вопросы и документы?</summary>
+        <p>Документ — это файл в базе знаний (повторная загрузка изменённой версии документа не удваивает счётчик). Вопрос — один запрос к ассистенту: поиск по базе знаний и один ответ. Повторное открытие истории диалогов и скачивание файлов в лимит не входят.</p>
+      </details>
+      <details>
+        <summary>Можно ли перейти на другой тариф?</summary>
+        <p>Да, в любой момент, без потери данных. При переходе на тариф выше лимиты и функции включаются сразу; при переходе на годовой план действует скидка 17% («Команда» — 49 000 ₽/год, «Бизнес» — 149 000 ₽/год).</p>
+      </details>
+      <details>
+        <summary>Что входит в индивидуальный проект?</summary>
+        <p>Обследование ваших процессов, аудит и подготовка базы знаний, развёртывание системы в вашем контуре, интеграции (CRM, 1С, телефония, портал), настройка сценариев и метрик качества ответов, обучение команды, выделенный инженер и поддержка 24/7 по SLA. Ориентировочный срок — от 4 недель, стоимость — от 490 000 ₽ в зависимости от объёма интеграций.</p>
+      </details>
+      <details>
+        <summary>Нужен ли отдельный сервер для локальной установки?</summary>
+        <p>Для небольшой компании достаточно рабочей станции или сервера с 16 ГБ оперативной памяти; для десятков одновременных пользователей и локальной LLM рекомендуем GPU (от 8 ГБ видеопамяти). На этапе обследования мы считаем конфигурацию под ваш объём документов и число сотрудников.</p>
+      </details>
+    </div>
+    <p class="sec-sub" style="margin-top:22px;font-size:13.5px;">Цены указаны в рублях без НДС и не являются публичной офертой. Для государственных и крупных корпоративных заказчиков — договор, счёт и закрывающие документы.</p>
+  </div>
+</section>
+
+<!-- ================= CTA ================= -->
+<section class="cta">
+  <div class="container">
+    <div class="sec-title" style="color:#c7d2fe;">Готовы начать?</div>
+    <h2 class="sec-h2">Бесплатный тариф — прямо сейчас</h2>
+    <p>Зарегистрируйтесь, загрузите документы и получите первые ответы по своей базе знаний сегодня.</p>
+    {% if logged_in %}
+    <a href="/chat" class="btn">💬 Открыть чат</a>
+    {% else %}
+    <a href="/register" class="btn">🚀 Создать бесплатный аккаунт</a>
+    {% endif %}
+    <p class="lead-note">Нужен свой сервер или нестандартная интеграция? Напишите: <a href="mailto:mail@ragstone.ru" style="color:#fff;text-decoration:underline;">mail@ragstone.ru</a></p>
+  </div>
+</section>
+
+<!-- ================= FOOTER ================= -->
+<footer>
+  <div class="container">
+    <span>RAGSTONE  — корпоративная RAG-платформа</span>
+    <span><a href="/" style="color:#cbd5e1;">Главная</a> · <a href="/prices" style="color:#cbd5e1;">Тарифы</a> · <a href="/docs" style="color:#cbd5e1;">Документация</a></span>
+    <span><a href="mailto:mail@ragstone.ru" style="color:#cbd5e1;">Написать нам</a></span>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var nav = document.getElementById('mainNav');
+    var btn = document.getElementById('burger');
+    if (!nav || !btn) return;
+    function setOpen(open) {
+      nav.classList.toggle('open', open);
+      btn.classList.toggle('open', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      setOpen(!nav.classList.contains('open'));
+    });
+    nav.addEventListener('click', function (e) {
+      if (e.target.tagName === 'A') setOpen(false);
+    });
+    document.addEventListener('click', function (e) {
+      if (nav.classList.contains('open') && !e.target.closest('.top')) setOpen(false);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') setOpen(false);
+    });
+    window.addEventListener('resize', function () {
+      if (window.innerWidth > 820) setOpen(false);
+    });
+  })();
+
+  // Переключатель периода оплаты: значения берутся из data-m / data-y
+  (function () {
+    var buttons = document.querySelectorAll('.bill-btn');
+    if (!buttons.length) return;
+    function apply(period) {
+      var i, el, nodes = document.querySelectorAll('.price-v, .price-per');
+      for (i = 0; i < nodes.length; i++) {
+        el = nodes[i];
+        var v = el.getAttribute(period === 'y' ? 'data-y' : 'data-m');
+        if (v !== null) el.textContent = v;
+      }
+      for (i = 0; i < buttons.length; i++) {
+        buttons[i].classList.toggle('active', buttons[i].getAttribute('data-period') === period);
+      }
+    }
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener('click', function () { apply(this.getAttribute('data-period')); });
+    }
+  })();
+</script>
+
+<script src="https://ragstone.ru/widget.js" data-key="L0D4TrbH4vihGD1fj4P0Qw" data-color="#475ec2" async></script>
+
+</body>
+</html>

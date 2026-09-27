@@ -388,6 +388,13 @@ def about():
     return render_template('about.html', logged_in='user_id' in session, username=session.get('username', ''))
 
 
+@app.route('/prices')
+@app.route('/tariffs')
+def prices():
+    """Публичная страница с тарифами (для клиентов)"""
+    return render_template('prices.html', logged_in='user_id' in session, username=session.get('username', ''))
+
+
 # === Пользовательская документация (/docs) ===
 # Порядок страниц = порядок в боковом меню раздела. Файлы лежат в docs/*.md.
 DOCS_PAGES = [
