@@ -18,6 +18,8 @@ from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, D
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
+                     get_widget, sync_conversations, list_widget_conversations,
+                     get_widget_dialog,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
                      clear_widget_history)
 from auth_db import (init_conversations, backfill_conversations,
@@ -2216,6 +2218,49 @@ def widgets_list():
     if 'user_id' not in session:
         return jsonify({'error': 'Необходима авторизация'}), 401
     return jsonify({'widgets': list_user_widgets(session['user_id'])})
+
+
+@app.route('/api/widgets/<int:widget_id>/inbox')
+def widget_inbox(widget_id):
+    """Диалоги гостей виджета для панели оператора (только свои виджеты)."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    w = get_widget(session['user_id'], widget_id)
+    if not w:
+        return jsonify({'error': 'Виджет не найден'}), 404
+    # Диалог мог появиться после последнего общего бэкфилла (реестр до ветки human
+    # в /api/widget/ask пополняется только здесь) — досыпаем именно этот виджет.
+    sync_conversations('wid', 'wid:%d:%%' % widget_id)
+    dialogs = list_widget_conversations(session['user_id'], widget_id)
+    return jsonify({'widget': {'id': w['id'], 'name': w['name']},
+                    'dialogs': dialogs,
+                    'unread_total': sum(d['unread'] for d in dialogs)})
+
+
+_VISITOR_RE = re.compile(r'[0-9a-zA-Z_-]{8,64}')
+
+
+@app.route('/api/widgets/<int:widget_id>/dialog')
+def widget_dialog(widget_id):
+    """Транскрипт одного диалога виджета для панели (владельцу, догрузка after_id)."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    w = get_widget(session['user_id'], widget_id)
+    if not w:
+        return jsonify({'error': 'Виджет не найден'}), 404
+    visitor = (request.args.get('visitor') or '').strip()
+    if not _VISITOR_RE.fullmatch(visitor):
+        return jsonify({'error': 'Некорректный посетитель.'}), 400
+    data = get_widget_dialog(session['user_id'], widget_id, visitor,
+                             after_id=request.args.get('after_id', type=int),
+                             limit=request.args.get('limit', type=int) or 50)
+    if data is None:
+        return jsonify({'error': 'Не удалось прочитать диалог'}), 500
+    dialog = {k: data[k] for k in ('visitor', 'code', 'mode', 'unread',
+                                   'operator_user_id', 'total')}
+    return jsonify({'dialog': dialog,
+                    'messages': _with_ts(data['messages']),
+                    'has_more': data['has_more']})
 
 
 @app.route('/api/widgets/create', methods=['POST'])

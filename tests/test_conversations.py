@@ -59,6 +59,136 @@ def _make_test_user():
     return _q('SELECT id FROM users WHERE username = %s', (name,))[0][0], name
 
 
+def test_inbox_http(uid, wid, vis1, vis2, s1):
+    print('\n4) Панель: GET /api/widgets/<id>/inbox')
+    # Раздел 3 оставил у диалога vis1 режим human и непрочитанное — снимаем,
+    # иначе он законно стоит первым (непрочитанные всегда наверху).
+    _q("UPDATE conversations SET mode='bot', unread_for_owner=0 WHERE conv_key = %s", (s1,))
+    import web_app
+    client = web_app.app.test_client()
+    check('без логина — 401', client.get(f'/api/widgets/{wid}/inbox').status_code == 401)
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = uid
+        sess['username'] = 'testconv'
+
+    uid2, _ = _make_test_user()
+    try:
+        ok, other = auth_db.create_widget(uid2, 'чужой виджет')
+        check('чужой виджет — 404',
+              client.get(f'/api/widgets/{other["id"]}/inbox').status_code == 404)
+    finally:
+        auth_db.delete_user(uid2)
+
+    # Гость написал ПОСЛЕ бэкфилла: панель должна его увидеть (досыпка при чтении)
+    vis3 = 'ffffeeee5555dddd'
+    auth_db.save_message(uid, 'user', 'А есть самовывоз?', device_id=f'wid:{wid}:{vis3}')
+
+    r = client.get(f'/api/widgets/{wid}/inbox')
+    body = r.get_json() or {}
+    dialogs = body.get('dialogs') or []
+    by_visitor = {d['visitor']: d for d in dialogs}
+    check('панель вернула 200 и три диалога',
+          r.status_code == 200 and set(by_visitor) == {vis1, vis2, vis3},
+          (r.status_code, list(by_visitor)))
+    check('сперва ждущие ответа человека, кто дольше ждёт — выше',
+          [d['visitor'] for d in dialogs[:2]] == [vis2, vis3]
+          and dialogs[0]['last_role'] == 'user' and dialogs[1]['last_role'] == 'user',
+          [(d['visitor'], d['last_role']) for d in dialogs])
+    check('затем диалог, где ответил бот',
+          dialogs[2]['visitor'] == vis1 and dialogs[2]['last_role'] == 'assistant',
+          [(d['visitor'], d['last_role']) for d in dialogs])
+    d3 = by_visitor[vis3]
+    check('авто-заголовок — первый вопрос гостя',
+          d3['title'].startswith('А есть самовывоз'), d3)
+    check('короткий код гостя — последние 4 символа', d3['code'] == vis3[-4:], d3)
+    check('последнее сообщение, счётчик и режим по умолчанию',
+          d3['last_message'].startswith('А есть самовывоз') and d3['messages'] == 1
+          and d3['mode'] == 'bot' and d3['unread'] == 0, d3)
+    check('epoch-метка времени разговора', d3['last_ts'] > 0, d3)
+
+    _q("UPDATE conversations SET mode='human', unread_for_owner=4 WHERE conv_key = %s", (s1,))
+    body = client.get(f'/api/widgets/{wid}/inbox').get_json() or {}
+    top = (body.get('dialogs') or [{}])[0]
+    check('непрочитанный диалог поднимается наверх', top.get('visitor') == vis1, top)
+    check('режим human отдан панели', top.get('mode') == 'human', top)
+    check('счётчик непрочитанного и сумма по виджету',
+          top.get('unread') == 4 and body.get('unread_total') == 4,
+          (top.get('unread'), body.get('unread_total')))
+    check('имя виджета в ответе',
+          (body.get('widget') or {}).get('name') == 'test-conv-widget', body.get('widget'))
+    _q("UPDATE conversations SET mode='bot', unread_for_owner=0 WHERE conv_key = %s", (s1,))
+
+    # Второй виджет того же владельца: диалоги не смешиваются
+    ok, w2 = auth_db.create_widget(uid, 'второй виджет')
+    vis4 = 'cafebabe00001111'
+    auth_db.save_message(uid, 'user', 'вопрос из второго виджета', device_id=f'wid:{w2["id"]}:{vis4}')
+    keys1 = {d['visitor'] for d in (client.get(f'/api/widgets/{wid}/inbox').get_json() or {}).get('dialogs', [])}
+    keys2 = {d['visitor'] for d in (client.get(f'/api/widgets/{w2["id"]}/inbox').get_json() or {}).get('dialogs', [])}
+    check('диалоги разных виджетов не смешиваются',
+          vis4 not in keys1 and vis4 in keys2, (sorted(keys1), sorted(keys2)))
+    auth_db.delete_widget(uid, w2['id'])
+
+
+def test_dialog_http(uid, wid, vis1):
+    print('\n5) Транскрипт диалога: GET /api/widgets/<id>/dialog')
+    import web_app
+    client = web_app.app.test_client()
+    check('без логина — 401',
+          client.get(f'/api/widgets/{wid}/dialog?visitor={vis1}').status_code == 401)
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = uid
+        sess['username'] = 'testconv'
+
+    r = client.get(f'/api/widgets/{wid}/dialog?visitor=zz')
+    check('битый visitor — 400', r.status_code == 400, r.status_code)
+
+    r = client.get(f'/api/widgets/{wid}/dialog?visitor={vis1}')
+    body = r.get_json() or {}
+    msgs = body.get('messages') or []
+    check('транскрипт отдаёт сообщения по порядку',
+          r.status_code == 200 and [m['role'] for m in msgs] == ['user', 'assistant'], body)
+    check('тексты реплик на месте',
+          msgs and msgs[0]['message'].startswith('Сколько стоит насос'), msgs)
+    check('epoch-метки у сообщений', all(m.get('ts', 0) > 0 for m in msgs), msgs)
+    d = body.get('dialog') or {}
+    check('состояние диалога в ответе',
+          d.get('mode') == 'bot' and d.get('total') == 2 and d.get('visitor') == vis1, d)
+    check('has_more=false на коротком диалоге', body.get('has_more') is False, body.get('has_more'))
+
+    body2 = client.get(f'/api/widgets/{wid}/dialog?visitor=0123456789abcdef').get_json() or {}
+    check('незнакомый посетитель — пустой транскрипт',
+          body2.get('messages') == [] and (body2.get('dialog') or {}).get('total') == 0, body2)
+
+    last_id = msgs[-1]['id']
+    body3 = client.get(f'/api/widgets/{wid}/dialog?visitor={vis1}&after_id={last_id}').get_json() or {}
+    check('after_id на последнем сообщении — пусто', body3.get('messages') == [], body3)
+
+    # Роль operator протаскивается как есть — на неё опирается ответ менеджера (кусок B2)
+    auth_db.save_message(uid, 'operator', 'Отвечает менеджер', device_id=f'wid:{wid}:{vis1}')
+    body4 = client.get(f'/api/widgets/{wid}/dialog?visitor={vis1}&after_id={last_id}').get_json() or {}
+    new_msgs = body4.get('messages') or []
+    check('after_id отдаёт только новую реплику',
+          len(new_msgs) == 1 and new_msgs[0]['role'] == 'operator'
+          and new_msgs[0]['message'] == 'Отвечает менеджер', new_msgs)
+
+    body5 = client.get(f'/api/widgets/{wid}/dialog?visitor={vis1}&limit=1').get_json() or {}
+    tail = body5.get('messages') or []
+    check('limit отдаёт хвост диалога, has_more=true',
+          len(tail) == 1 and tail[0]['message'] == 'Отвечает менеджер'
+          and body5.get('has_more') is True, (tail, body5.get('has_more')))
+
+    _q("UPDATE conversations SET mode='human', unread_for_owner=2 WHERE conv_key = %s",
+       (f'wid:{wid}:{vis1}',))
+    d2 = ((client.get(f'/api/widgets/{wid}/dialog?visitor={vis1}').get_json() or {})
+          .get('dialog') or {})
+    check('режим human и непрочитанное видны в транскрипте',
+          d2.get('mode') == 'human' and d2.get('unread') == 2, d2)
+    _q("UPDATE conversations SET mode='bot', unread_for_owner=0 WHERE conv_key = %s",
+       (f'wid:{wid}:{vis1}',))
+
+
 def main():
     auth_db.init_db()
     auth_db.init_chat_history()
@@ -125,7 +255,10 @@ def main():
         check('режим human и непрочитанное сохранены',
               row == ('human', 7, uid), row)
 
-        print('4) Каскад при удалении владельца')
+        test_inbox_http(uid, wid, vis1, vis2, s1)
+        test_dialog_http(uid, wid, vis1)
+
+        print('6) Каскад при удалении владельца')
         auth_db.delete_user(uid)
         check('диалоги удалены вместе с пользователем',
               not _q('SELECT 1 FROM conversations WHERE conv_key LIKE %s', (f'wid:{wid}:%', )))

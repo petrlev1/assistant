@@ -1179,6 +1179,22 @@ def get_widget_by_key(key):
         return None
 
 
+def get_widget(user_id, widget_id):
+    """Виджет владельца по id (None — виджета нет или он чужой)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM widgets WHERE id = %s AND user_id = %s",
+                    (widget_id, user_id))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Ошибка получения виджета #{widget_id}: {e}")
+        return None
+
+
 def list_user_widgets(user_id):
     """Все виджеты пользователя + счётчик обращений за сегодня."""
     try:
@@ -1376,10 +1392,11 @@ def init_max_channels():
 
 # Префикс scope в chat_history -> таблица владельца и имя канала.
 # Сами scope-строки собираются в web_app: _widget_scope (wid:), _max_scope (max:).
-_SCOPE_PREFIXES = (
-    ('wid', 'widgets', 'widget'),
-    ('max', 'max_channels', 'max'),
-)
+# Реестр диалогов и его синхронизация — ниже, в разделе «Реестр диалогов каналов».
+_SCOPE_TABLES = {
+    'wid': ('widgets', 'widget'),
+    'max': ('max_channels', 'max'),
+}
 
 
 def init_conversations():
@@ -1420,41 +1437,189 @@ def init_conversations():
         return False
 
 
-def backfill_conversations():
-    """Идемпотентная заливка диалогов из уже накопленной chat_history.
+def sync_conversations(prefix, scope_like):
+    """Добавить в реестр диалоги из chat_history, которых там ещё нет.
 
-    Ничего не затирает: ON CONFLICT DO NOTHING, поэтому режим/непрочитанное,
-    выставленные владельцем, при следующем запуске приложения сохраняются.
+    scope_like — шаблон device_id: 'wid:%' (всё) или 'wid:12:%' (один виджет).
+    Существующие строки не трогаются (ON CONFLICT DO NOTHING), поэтому режим
+    bot|human и непрочитанное, выставленные владельцем, не затираются.
     Возвращает число добавленных диалогов.
     """
+    if prefix not in _SCOPE_TABLES:
+        return 0
+    table, channel = _SCOPE_TABLES[prefix]
     added = 0
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        for prefix, table, channel in _SCOPE_PREFIXES:
-            cur.execute(f"""
-                INSERT INTO conversations
-                    (channel, owner_user_id, conv_key, mode, last_message_at, last_role)
-                SELECT %s, o.user_id, t.device_id, 'bot', t.created_at, t.role
-                FROM (
-                    SELECT DISTINCT ON (device_id) device_id, created_at, role
-                    FROM chat_history
-                    WHERE device_id LIKE %s
-                      AND split_part(device_id, ':', 2) ~ '^[0-9]+$'
-                    ORDER BY device_id, created_at DESC, id DESC
-                ) t
-                JOIN {table} o ON o.id = split_part(t.device_id, ':', 2)::int
-                ON CONFLICT (conv_key) DO NOTHING
-            """, (channel, prefix + ':%'))
-            added += max(cur.rowcount, 0)
+        cur.execute(f"""
+            INSERT INTO conversations
+                (channel, owner_user_id, conv_key, mode, last_message_at, last_role)
+            SELECT %s, o.user_id, t.device_id, 'bot', t.created_at, t.role
+            FROM (
+                SELECT DISTINCT ON (device_id) device_id, created_at, role
+                FROM chat_history
+                WHERE device_id LIKE %s
+                  AND split_part(device_id, ':', 2) ~ '^[0-9]+$'
+                ORDER BY device_id, created_at DESC, id DESC
+            ) t
+            JOIN {table} o ON o.id = split_part(t.device_id, ':', 2)::int
+            ON CONFLICT (conv_key) DO NOTHING
+        """, (channel, scope_like))
+        added = max(cur.rowcount, 0)
         conn.commit()
         cur.close()
         conn.close()
-        if added:
-            logger.info(f"Бэкфилл диалогов: добавлено {added}")
     except Exception as e:
-        logger.error(f"Ошибка бэкфилла conversations: {e}")
+        logger.error(f"Ошибка синхронизации диалогов ({scope_like}): {e}")
     return added
+
+
+def backfill_conversations():
+    """Разовая заливка всех накопленных диалогов каждого канала (при старте)."""
+    added = 0
+    for prefix in _SCOPE_TABLES:
+        added += sync_conversations(prefix, prefix + ':%')
+    if added:
+        logger.info(f"Бэкфилл диалогов: добавлено {added}")
+    return added
+
+
+def _short_text(text, limit):
+    """Однострочный обрезок текста для списка диалогов."""
+    flat = ' '.join(str(text or '').split())
+    return flat if len(flat) <= limit else flat[:limit - 1].rstrip() + '…'
+
+
+def list_widget_conversations(user_id, widget_id, limit=200):
+    """Диалоги гостей виджета для панели оператора (только виджеты владельца).
+
+    Содержимое диалога (последняя реплика, авто-заголовок из первого вопроса,
+    число сообщений) читается из chat_history, состояние (режим, непрочитанное) —
+    из conversations. Порядок: непрочитанные, затем ждущие ответа человека
+    (кто дольше ждёт — выше), затем остальные по свежести.
+    """
+    scope_like = 'wid:%d:%%' % int(widget_id or 0)
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            WITH scope AS (
+                SELECT device_id,
+                       max(created_at) AS last_at,
+                       count(*) AS total,
+                       (array_agg(message ORDER BY id)
+                            FILTER (WHERE role = 'user'))[1] AS first_question,
+                       (array_agg(message ORDER BY id DESC))[1] AS last_message,
+                       (array_agg(role ORDER BY id DESC))[1] AS last_role
+                FROM chat_history
+                WHERE user_id = %s AND device_id LIKE %s
+                GROUP BY device_id
+            )
+            SELECT c.conv_key,
+                   c.mode,
+                   c.unread_for_owner,
+                   c.operator_user_id,
+                   COALESCE(s.last_at, c.last_message_at) AS last_message_at,
+                   COALESCE(s.total, 0) AS messages,
+                   s.first_question,
+                   s.last_message,
+                   COALESCE(s.last_role, c.last_role) AS last_role
+            FROM conversations c
+            LEFT JOIN scope s ON s.device_id = c.conv_key
+            WHERE c.owner_user_id = %s AND c.conv_key LIKE %s
+            ORDER BY (c.unread_for_owner > 0) DESC,
+                     (COALESCE(s.last_role, c.last_role) = 'user') DESC,
+                     CASE WHEN COALESCE(s.last_role, c.last_role) = 'user'
+                          THEN COALESCE(s.last_at, c.last_message_at) END ASC NULLS LAST,
+                     COALESCE(s.last_at, c.last_message_at) DESC NULLS LAST
+            LIMIT %s
+        """, (user_id, scope_like, user_id, scope_like, int(limit)))
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Ошибка списка диалогов виджета #{widget_id}: {e}")
+        return []
+    dialogs = []
+    for r in rows:
+        key = r.get('conv_key') or ''
+        visitor = key.split(':', 2)[2] if key.count(':') >= 2 else ''
+        ts = r.get('last_message_at')
+        dialogs.append({
+            'visitor': visitor,
+            'code': visitor[-4:],
+            'mode': r.get('mode') or 'bot',
+            'unread': int(r.get('unread_for_owner') or 0),
+            'operator_user_id': r.get('operator_user_id'),
+            'messages': int(r.get('messages') or 0),
+            'title': _short_text(r.get('first_question'), 80) or 'Диалог гостя',
+            'last_message': _short_text(r.get('last_message'), 140),
+            'last_role': r.get('last_role'),
+            # epoch-метка серверного времени — как 'ts' в истории виджета (_with_ts)
+            'last_ts': ts.timestamp() if ts else 0,
+        })
+    return dialogs
+
+
+def get_widget_dialog(user_id, widget_id, visitor, after_id=None, limit=50):
+    """Транскрипт одного диалога виджета для панели оператора.
+
+    after_id — отдать только сообщения новее указанного id (опрос из панели);
+    без after_id отдаются последние `limit` сообщений (хвост разговора).
+    Область (device_id) собирается здесь из id виджета и посетителя: строку от
+    клиента не принимаем никогда, иначе ответ уедет в чужой диалог.
+    None — ошибка БД.
+    """
+    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
+    limit = max(1, min(int(limit or 50), 200))
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if after_id is not None:
+            cur.execute(
+                "SELECT id, role, message, created_at FROM chat_history "
+                "WHERE user_id = %s AND device_id = %s AND id > %s "
+                "ORDER BY id ASC LIMIT %s",
+                (user_id, scope, int(after_id), limit + 1),
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+            has_more = len(rows) > limit
+            messages = rows[:limit]
+        else:
+            cur.execute(
+                "SELECT id, role, message, created_at FROM chat_history "
+                "WHERE user_id = %s AND device_id = %s ORDER BY id DESC LIMIT %s",
+                (user_id, scope, limit + 1),
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+            has_more = len(rows) > limit
+            messages = list(reversed(rows[:limit]))
+        cur.execute(
+            "SELECT count(*) AS total FROM chat_history WHERE user_id = %s AND device_id = %s",
+            (user_id, scope),
+        )
+        total = int((cur.fetchone() or {}).get('total') or 0)
+        cur.execute(
+            "SELECT mode, unread_for_owner, operator_user_id FROM conversations WHERE conv_key = %s",
+            (scope,),
+        )
+        state = cur.fetchone() or {}
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Ошибка транскрипта диалога виджета #{widget_id}: {e}")
+        return None
+    return {
+        'visitor': visitor,
+        'code': (visitor or '')[-4:],
+        'mode': state.get('mode') or 'bot',
+        'unread': int(state.get('unread_for_owner') or 0),
+        'operator_user_id': state.get('operator_user_id'),
+        'total': total,
+        'has_more': has_more,
+        'messages': messages,
+    }
 
 
 def get_max_channel(user_id):
