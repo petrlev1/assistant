@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Диалоги гостей - RAGSTONE</title>
+<link rel="icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/svg+xml">
+<link rel="shortcut icon" href="/favicon.ico">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f0f2f5; min-height: 100vh; display: flex; flex-direction: column;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white; padding: 14px 30px;
+            display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+        }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header h1 a { color: inherit; text-decoration: none; }
+        .header h1 a:hover { opacity: 0.8; }
+        .header .user-info { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+        .header .username { background: rgba(255,255,255,0.2); padding: 4px 12px; border-radius: 20px; }
+        .btn-logout {
+            background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3);
+            padding: 6px 16px; border-radius: 20px; cursor: pointer; font-size: 13px;
+            text-decoration: none; transition: background 0.2s;
+        }
+        .btn-logout:hover { background: rgba(255,255,255,0.3); }
+
+        .wrap { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; padding: 22px 20px 30px;
+                display: flex; flex-direction: column; min-height: 0; }
+        .topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+        .topbar h2 { font-size: 19px; color: #1f2937; }
+        .topbar .spacer { flex: 1; }
+        select {
+            border: 1px solid #d8dbe6; border-radius: 8px; padding: 8px 10px; font: inherit;
+            font-size: 13.5px; background: #fff; outline: none;
+        }
+        .btn { border: none; border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+               background: linear-gradient(135deg,#667eea,#764ba2); color: #fff; white-space: nowrap; }
+        .btn:hover { filter: brightness(1.08); }
+        .btn.sec { background: #eef0f7; color: #374151; }
+
+        .board { flex: 1; display: flex; gap: 16px; min-height: 0; }
+        @media (max-width: 860px) { .board { flex-direction: column; } }
+
+        .panel { background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+                 display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+        .side { flex: 0 0 340px; }
+        @media (max-width: 860px) { .side { flex: none; max-height: 45vh; } }
+        .chat-pane { flex: 1; }
+
+        .filters { display: flex; gap: 6px; padding: 12px 14px 10px; border-bottom: 1px solid #f0f1f5; }
+        .chip { font-size: 12.5px; padding: 5px 11px; border-radius: 20px; cursor: pointer;
+                background: #f2f3f8; color: #6b7280; user-select: none; }
+        .chip.on { background: #e4e7fd; color: #4338ca; font-weight: 600; }
+        .dlg-list { overflow-y: auto; flex: 1; }
+        .dlg { padding: 12px 14px; border-bottom: 1px solid #f4f5f8; cursor: pointer; display: flex; gap: 10px; }
+        .dlg:hover { background: #fafbff; }
+        .dlg.on { background: #f3f4ff; border-left: 3px solid #667eea; padding-left: 11px; }
+        .dlg .ava { width: 34px; height: 34px; border-radius: 50%; background: #e9ebfd; color: #4f46e5;
+                    display: flex; align-items: center; justify-content: center; font-size: 12px;
+                    font-weight: 700; flex-shrink: 0; }
+        .dlg .mid { min-width: 0; flex: 1; }
+        .dlg .row1 { display: flex; align-items: center; gap: 6px; }
+        .dlg .ttl { font-size: 13.5px; font-weight: 600; color: #1f2937; flex: 1;
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .dlg .prev { font-size: 12.5px; color: #6b7280; margin-top: 3px;
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .dlg .row2 { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
+        .dlg .when { font-size: 11.5px; color: #9ca3af; }
+        .tag { font-size: 11px; padding: 2px 7px; border-radius: 20px; background: #f2f3f8; color: #6b7280; }
+        .tag.wait { background: #fff7e6; color: #b45309; }
+        .tag.human { background: #e9f9ef; color: #047857; }
+        .badge { background: #ef4444; color: #fff; font-size: 11px; font-weight: 700;
+                 border-radius: 20px; padding: 1px 7px; }
+        .empty { color: #9ca3af; font-size: 13.5px; padding: 16px 14px; }
+
+        .chat-head { padding: 12px 16px; border-bottom: 1px solid #f0f1f5; display: flex;
+                     align-items: center; gap: 10px; flex-wrap: wrap; }
+        .chat-head .who { font-size: 14.5px; font-weight: 700; color: #1f2937; }
+        .chat-head .meta { font-size: 12.5px; color: #9ca3af; }
+        .thread { flex: 1; overflow-y: auto; padding: 16px; background: #fbfbfe; }
+        .msg { max-width: 76%; margin-bottom: 10px; padding: 9px 13px; border-radius: 12px;
+               font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+        .msg.user { background: #fff; border: 1px solid #e8eaf1; color: #1f2937; border-bottom-left-radius: 4px; }
+        .msg.bot { background: #eef0ff; color: #26307a; margin-left: auto; border-bottom-right-radius: 4px; }
+        .msg.operator { background: #e7f8ee; color: #065f46; margin-left: auto;
+                        border-bottom-right-radius: 4px; border: 1px solid #b7ebca; }
+        .msg .who-row { font-size: 11px; color: #8a90a2; margin-bottom: 3px; }
+        .composer { border-top: 1px solid #f0f1f5; padding: 12px 16px; display: flex; gap: 10px;
+                    align-items: center; background: #fff; }
+        .composer input {
+            flex: 1; border: 1px solid #d8dbe6; border-radius: 8px; padding: 10px 12px;
+            font: inherit; font-size: 13.5px; outline: none; background: #f7f8fc;
+        }
+        .composer .note { font-size: 12px; color: #9ca3af; }
+        .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+                 background: #1f2430; color: #fff; padding: 10px 18px; border-radius: 10px;
+                 font-size: 13.5px; opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 99; }
+        .toast.show { opacity: 1; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1><a href="{{ url_for('index') }}" title="На главную">RAGSTONE</a></h1>
+        <div class="user-info">
+            <span class="username">👤 {{ username }}</span>
+            <a href="{{ url_for('logout') }}" class="btn-logout">Выйти</a>
+        </div>
+    </div>
+
+    <div class="wrap">
+        <div class="topbar">
+            <h2>📥 Диалоги гостей</h2>
+            <span class="meta" id="total"></span>
+            <span class="spacer"></span>
+            <select id="wsel" onchange="pickWidget()"></select>
+            <button class="btn sec" onclick="loadDialogs()">🔄 Обновить</button>
+        </div>
+
+        <div class="board">
+            <div class="panel side">
+                <div class="filters">
+                    <span class="chip on" data-f="all" onclick="setFilter('all')">Все</span>
+                    <span class="chip" data-f="wait" onclick="setFilter('wait')">Ждут ответа</span>
+                    <span class="chip" data-f="unread" onclick="setFilter('unread')">Непрочитанные</span>
+                </div>
+                <div class="dlg-list" id="dlgs"><div class="empty">Загрузка…</div></div>
+            </div>
+
+            <div class="panel chat-pane">
+                <div class="chat-head" id="chead">
+                    <span class="who">Диалог не выбран</span>
+                    <span class="meta">выберите гостя слева</span>
+                </div>
+                <div class="thread" id="thread">
+                    <div class="empty">Здесь появится переписка гостя с ботом.</div>
+                </div>
+                <div class="composer">
+                    <input type="text" id="reply" disabled placeholder="Ручной ответ появится в следующем шаге">
+                    <span class="note">пока только просмотр</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+<script>
+var ORIGIN = location.origin;
+var widgets = [], dialogs = [], cur = null, lastId = 0, filter = 'all';
+var POLL_MS = 5000, LIST_MS = 15000;
+
+function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+function toast(msg) {
+    var t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
+    setTimeout(function () { t.classList.remove('show'); }, 2200);
+}
+function ago(ts) {
+    if (!ts) return '—';
+    var s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (s < 60) return 'только что';
+    if (s < 3600) return Math.floor(s / 60) + ' мин назад';
+    if (s < 86400) return Math.floor(s / 3600) + ' ч назад';
+    var d = new Date(ts * 1000);
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' +
+           d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+function clock(ts) {
+    if (!ts) return '';
+    return new Date(ts * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+function loadWidgets() {
+    fetch('/api/widgets').then(function (r) { return r.json(); }).then(function (d) {
+        widgets = d.widgets || [];
+        var sel = document.getElementById('wsel');
+        if (!widgets.length) {
+            sel.innerHTML = '<option>виджетов нет</option>';
+            document.getElementById('dlgs').innerHTML =
+                '<div class="empty">Виджетов нет — создайте его на странице 🪶 Виджет.</div>';
+            return;
+        }
+        sel.innerHTML = widgets.map(function (w) {
+            return '<option value="' + w.id + '">' + esc(w.name) + (w.active ? '' : ' (выключен)') + '</option>';
+        }).join('');
+        var saved = localStorage.getItem('inbox_widget');
+        if (saved && widgets.some(function (w) { return String(w.id) === saved; })) sel.value = saved;
+        loadDialogs();
+    });
+}
+function pickWidget() {
+    localStorage.setItem('inbox_widget', document.getElementById('wsel').value);
+    cur = null; lastId = 0;
+    document.getElementById('chead').innerHTML = '<span class="who">Диалог не выбран</span>' +
+        '<span class="meta">выберите гостя слева</span>';
+    document.getElementById('thread').innerHTML = '<div class="empty">Здесь появится переписка гостя с ботом.</div>';
+    loadDialogs();
+}
+function setFilter(f) {
+    filter = f;
+    document.querySelectorAll('.chip').forEach(function (c) {
+        c.classList.toggle('on', c.dataset.f === f);
+    });
+    renderDialogs();
+}
+
+function loadDialogs() {
+    var wid = document.getElementById('wsel').value;
+    if (!wid || !widgets.length) return;
+    fetch('/api/widgets/' + wid + '/inbox').then(function (r) { return r.json(); }).then(function (d) {
+        if (d.error) { toast(d.error); return; }
+        dialogs = d.dialogs || [];
+        var un = d.unread_total || 0;
+        document.getElementById('total').textContent = dialogs.length + ' диалог(ов), непрочитанных: ' + un;
+        renderDialogs();
+    });
+}
+
+function renderDialogs() {
+    var box = document.getElementById('dlgs');
+    var list = dialogs.filter(function (d) {
+        if (filter === 'wait') return d.last_role === 'user';
+        if (filter === 'unread') return d.unread > 0;
+        return true;
+    });
+    if (!list.length) { box.innerHTML = '<div class="empty">Ничего нет в этом фильтре.</div>'; return; }
+    box.innerHTML = list.map(function (d) {
+        var tags = '<span class="tag' + (d.mode === 'human' ? ' human' : '') + '">' +
+            (d.mode === 'human' ? '🧑 ведёт человек' : '🤖 бот') + '</span>';
+        if (d.last_role === 'user') tags += '<span class="tag wait">ждёт ответа</span>';
+        return '<div class="dlg' + (cur && cur.visitor === d.visitor ? ' on' : '') + '" onclick="openDialog(\'' +
+            esc(d.visitor) + '\')">'
+            + '<div class="ava">#' + esc(d.code) + '</div>'
+            + '<div class="mid">'
+            +   '<div class="row1"><span class="ttl">' + esc(d.title) + '</span>'
+            +     (d.unread ? '<span class="badge">' + d.unread + '</span>' : '') + '</div>'
+            +   '<div class="prev">' + esc(d.last_message || '—') + '</div>'
+            +   '<div class="row2">' + tags + '<span class="when">' + ago(d.last_ts) + '</span></div>'
+            + '</div></div>';
+    }).join('');
+}
+
+function openDialog(visitor) {
+    cur = dialogs.filter(function (d) { return d.visitor === visitor; })[0] || { visitor: visitor };
+    lastId = 0;
+    document.getElementById('thread').innerHTML = '<div class="empty">Загрузка…</div>';
+    renderDialogs();
+    fetchDialog();
+}
+
+function head(d) {
+    return '<span class="who">Гость #' + esc(d.code) + '</span>'
+        + '<span class="meta">' + esc(d.visitor) + '</span>'
+        + '<span class="meta">сообщений: ' + d.total + '</span>'
+        + '<span class="tag' + (d.mode === 'human' ? ' human' : '') + '">' +
+          (d.mode === 'human' ? '🧑 ведёт человек' : '🤖 отвечает бот') + '</span>';
+}
+
+function bubble(m) {
+    var cls = m.role === 'user' ? 'user' : (m.role === 'operator' ? 'operator' : 'bot');
+    var who = m.role === 'user' ? 'Гость' : (m.role === 'operator' ? 'Менеджер' : 'Бот');
+    return '<div class="msg ' + cls + '"><div class="who-row">' + who + ' · ' + clock(m.ts) + '</div>'
+        + esc(m.message) + '</div>';
+}
+
+function fetchDialog() {
+    if (!cur) return;
+    var wid = document.getElementById('wsel').value;
+    var url = '/api/widgets/' + wid + '/dialog?visitor=' + encodeURIComponent(cur.visitor);
+    if (lastId) url += '&after_id=' + lastId;
+    fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.error) { toast(d.error); return; }
+        var thread = document.getElementById('thread');
+        var msgs = d.messages || [];
+        if (!lastId) {
+            document.getElementById('chead').innerHTML = head(d.dialog || {});
+            thread.innerHTML = msgs.length ? msgs.map(bubble).join('')
+                : '<div class="empty">Гость ещё ничего не написал.</div>';
+        } else if (msgs.length) {
+            var box = document.getElementById('thread');
+            var nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+            msgs.forEach(function (m) { box.insertAdjacentHTML('beforeend', bubble(m)); });
+            if (nearBottom) box.scrollTop = box.scrollHeight;
+        }
+        if (msgs.length) lastId = msgs[msgs.length - 1].id;
+        var first = document.getElementById('thread');
+        if (!lastId) first.scrollTop = first.scrollHeight;
+    });
+}
+
+setInterval(fetchDialog, POLL_MS);
+setInterval(function () { if (!document.hidden) loadDialogs(); }, LIST_MS);
+loadWidgets();
+</script>
+</body>
+</html>

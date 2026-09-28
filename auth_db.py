@@ -1179,6 +1179,22 @@ def get_widget_by_key(key):
         return None
 
 
+def count_unread_conversations(user_id):
+    """Сколько реплик гостей ждут владельца — бейдж у кнопки «Диалоги» в кабинете."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(sum(unread_for_owner), 0) FROM conversations "
+                    "WHERE owner_user_id = %s", (user_id,))
+        total = int(cur.fetchone()[0] or 0)
+        cur.close()
+        conn.close()
+        return total
+    except Exception as e:
+        logger.error(f"Ошибка счётчика непрочитанного: {e}")
+        return 0
+
+
 def get_widget(user_id, widget_id):
     """Виджет владельца по id (None — виджета нет или он чужой)."""
     try:

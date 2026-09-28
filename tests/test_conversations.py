@@ -189,6 +189,41 @@ def test_dialog_http(uid, wid, vis1):
        (f'wid:{wid}:{vis1}',))
 
 
+def test_inbox_page(uid, wid, vis1):
+    print('\n6) Страница панели: /inbox и бейдж в кабинете')
+    import web_app
+    anon = web_app.app.test_client()
+    r = anon.get('/inbox')
+    check('/inbox без логина отправляет на вход',
+          r.status_code == 302 and '/login' in (r.headers.get('Location') or ''),
+          (r.status_code, r.headers.get('Location')))
+
+    client = web_app.app.test_client()
+    with client.session_transaction() as sess:
+        sess['user_id'] = uid
+        sess['username'] = 'testconv'
+
+    r = client.get('/inbox')
+    body = r.get_data(as_text=True)
+    check('/inbox отдаёт страницу панели',
+          r.status_code == 200 and 'Диалоги гостей' in body and '/inbox' in body, r.status_code)
+    check('на странице есть выбор виджета и неактивное поле ответа',
+          'id="wsel"' in body and 'Ручной ответ появится в следующем шаге' in body
+          and 'id="reply" disabled' in body, None)
+    check('страница не тянет ответы (только чтение)',
+          '/reply' not in body and "'POST'" not in body, None)
+
+    check('счётчик непрочитанного пуст', auth_db.count_unread_conversations(uid) == 0,
+          auth_db.count_unread_conversations(uid))
+    _q("UPDATE conversations SET unread_for_owner=3 WHERE conv_key = %s", (f'wid:{wid}:{vis1}',))
+    check('счётчик видит непрочитанное', auth_db.count_unread_conversations(uid) == 3,
+          auth_db.count_unread_conversations(uid))
+    chat_body = client.get('/chat').get_data(as_text=True)
+    check('в кабинете у кнопки «Диалоги» появляется бейдж',
+          'class="cnt">3<' in chat_body, None)
+    _q("UPDATE conversations SET unread_for_owner=0 WHERE conv_key = %s", (f'wid:{wid}:{vis1}',))
+
+
 def main():
     auth_db.init_db()
     auth_db.init_chat_history()
@@ -257,8 +292,9 @@ def main():
 
         test_inbox_http(uid, wid, vis1, vis2, s1)
         test_dialog_http(uid, wid, vis1)
+        test_inbox_page(uid, wid, vis1)
 
-        print('6) Каскад при удалении владельца')
+        print('7) Каскад при удалении владельца')
         auth_db.delete_user(uid)
         check('диалоги удалены вместе с пользователем',
               not _q('SELECT 1 FROM conversations WHERE conv_key LIKE %s', (f'wid:{wid}:%', )))

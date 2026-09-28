@@ -19,6 +19,7 @@ from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      get_widget, sync_conversations, list_widget_conversations,
+                     count_unread_conversations,
                      get_widget_dialog,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
                      clear_widget_history)
@@ -382,7 +383,8 @@ def chat():
     user_prompt = get_user_prompt(session['user_id'])
     greeting = build_greeting(user_prompt, session.get('username', 'Пользователь'))
     did = _device_id()
-    resp = make_response(render_template('index.html', greeting=greeting))
+    resp = make_response(render_template('index.html', greeting=greeting,
+                                         inbox_unread=count_unread_conversations(session['user_id'])))
     resp.set_cookie('device_id', did, max_age=365 * 24 * 3600, samesite='Lax')
     return resp
 
@@ -2185,6 +2187,14 @@ def widgets_page():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     return render_template('widgets.html', username=session.get('username', ''))
+
+
+@app.route('/inbox')
+def inbox_page():
+    """Диалоги гостей виджета (просмотр; ручные ответы — следующий шаг)."""
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    return render_template('inbox.html', username=session.get('username', ''))
 
 
 def _widget_sanitize_fields(body):
