@@ -20,7 +20,8 @@ from auth_db import init_db, register_user, login_user, init_chat_history, save_
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
                      clear_widget_history)
-from auth_db import (init_max_channels, get_max_channel, get_max_channel_by_hook,
+from auth_db import (init_conversations, backfill_conversations,
+                     init_max_channels, get_max_channel, get_max_channel_by_hook,
                      list_active_max_channels, save_max_channel, update_max_channel,
                      delete_max_channel, max_consume)
 import docs_renderer
@@ -220,6 +221,8 @@ def init_auth():
         init_query_analytics()
         init_widgets()
         init_max_channels()
+        init_conversations()
+        backfill_conversations()
         logger.info("База данных аутентификации инициализирована")
     except Exception as e:
         logger.error(f"Ошибка инициализации БД аутентификации: {e}")

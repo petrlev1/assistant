@@ -1372,6 +1372,91 @@ def init_max_channels():
         return False
 
 
+# === Реестр диалогов каналов (панель оператора) ===
+
+# Префикс scope в chat_history -> таблица владельца и имя канала.
+# Сами scope-строки собираются в web_app: _widget_scope (wid:), _max_scope (max:).
+_SCOPE_PREFIXES = (
+    ('wid', 'widgets', 'widget'),
+    ('max', 'max_channels', 'max'),
+)
+
+
+def init_conversations():
+    """Таблица диалогов каналов: режим (bot|human), непрочитанное, кто ведёт.
+
+    Ключ диалога (conv_key) — то же значение, что device_id в chat_history:
+    сама переписка остаётся в chat_history, здесь хранится только состояние.
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id BIGSERIAL PRIMARY KEY,
+                channel VARCHAR(16) NOT NULL,
+                owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                conv_key VARCHAR(64) NOT NULL UNIQUE,
+                mode VARCHAR(8) NOT NULL DEFAULT 'bot',
+                operator_user_id INTEGER,
+                last_message_at TIMESTAMP,
+                last_role VARCHAR(10),
+                unread_for_owner INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT conversations_mode_check CHECK (mode IN ('bot', 'human'))
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_conversations_owner
+            ON conversations (owner_user_id, channel, last_message_at DESC)
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("Таблица диалогов (conversations) инициализирована")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка инициализации conversations: {e}")
+        return False
+
+
+def backfill_conversations():
+    """Идемпотентная заливка диалогов из уже накопленной chat_history.
+
+    Ничего не затирает: ON CONFLICT DO NOTHING, поэтому режим/непрочитанное,
+    выставленные владельцем, при следующем запуске приложения сохраняются.
+    Возвращает число добавленных диалогов.
+    """
+    added = 0
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        for prefix, table, channel in _SCOPE_PREFIXES:
+            cur.execute(f"""
+                INSERT INTO conversations
+                    (channel, owner_user_id, conv_key, mode, last_message_at, last_role)
+                SELECT %s, o.user_id, t.device_id, 'bot', t.created_at, t.role
+                FROM (
+                    SELECT DISTINCT ON (device_id) device_id, created_at, role
+                    FROM chat_history
+                    WHERE device_id LIKE %s
+                      AND split_part(device_id, ':', 2) ~ '^[0-9]+$'
+                    ORDER BY device_id, created_at DESC, id DESC
+                ) t
+                JOIN {table} o ON o.id = split_part(t.device_id, ':', 2)::int
+                ON CONFLICT (conv_key) DO NOTHING
+            """, (channel, prefix + ':%'))
+            added += max(cur.rowcount, 0)
+        conn.commit()
+        cur.close()
+        conn.close()
+        if added:
+            logger.info(f"Бэкфилл диалогов: добавлено {added}")
+    except Exception as e:
+        logger.error(f"Ошибка бэкфилла conversations: {e}")
+    return added
+
+
 def get_max_channel(user_id):
     """Подключение MAX пользователя + счётчик ответов за сегодня."""
     try:
