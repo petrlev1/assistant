@@ -19,7 +19,8 @@ from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      get_widget, sync_conversations, list_widget_conversations,
-                     count_unread_conversations,
+                     count_unread_conversations, set_widget_dialog_mode,
+                     add_widget_dialog_message,
                      get_widget_dialog,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
                      clear_widget_history)
@@ -2250,6 +2251,90 @@ def widget_inbox(widget_id):
 _VISITOR_RE = re.compile(r'[0-9a-zA-Z_-]{8,64}')
 
 
+def _dialog_state(data):
+    """Состояние диалога из ответа get_widget_dialog — без списка сообщений."""
+    return {k: data[k] for k in ('visitor', 'code', 'mode', 'unread',
+                                 'operator_user_id', 'total')}
+
+
+def _owned_widget_visitor(widget_id):
+    """Виджет владельца + visitor из тела запроса: (widget, visitor, err_response)."""
+    if 'user_id' not in session:
+        return None, None, (jsonify({'error': 'Необходима авторизация'}), 401)
+    w = get_widget(session['user_id'], widget_id)
+    if not w:
+        return None, None, (jsonify({'error': 'Виджет не найден'}), 404)
+    body = request.get_json(silent=True) or {}
+    visitor = (body.get('visitor') or request.args.get('visitor') or '').strip()
+    if not _VISITOR_RE.fullmatch(visitor):
+        return None, None, (jsonify({'error': 'Некорректный посетитель.'}), 400)
+    return w, visitor, None
+
+
+@app.route('/api/widgets/<int:widget_id>/reply', methods=['POST'])
+def widget_reply(widget_id):
+    """Ответ менеджера гостю: реплика в ленту диалога ролью operator.
+
+    Ответ человека сам переводит диалог в режим human — иначе бот ответил бы
+    поверх менеджера.
+    """
+    w, visitor, err = _owned_widget_visitor(widget_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    text = (body.get('text') or body.get('message') or '').strip()
+    if not text:
+        return jsonify({'error': 'Пустой ответ'}), 400
+    if len(text) > 4000:
+        return jsonify({'error': 'Слишком длинный ответ (максимум 4000 символов)'}), 400
+    sync_conversations('wid', 'wid:%d:%%' % widget_id)   # гость мог написать после бэкфилла
+    data = get_widget_dialog(session['user_id'], widget_id, visitor, limit=1)
+    if data is None:
+        return jsonify({'error': 'Не удалось прочитать диалог'}), 500
+    if not data.get('total'):
+        return jsonify({'error': 'Диалог не найден'}), 404
+    set_widget_dialog_mode(session['user_id'], widget_id, visitor, 'human',
+                           operator_user_id=session['user_id'])
+    saved = add_widget_dialog_message(session['user_id'], widget_id, visitor, 'operator', text)
+    if not saved:
+        return jsonify({'error': 'Не удалось отправить ответ'}), 500
+    return jsonify({'success': True, 'message': saved,
+                    'dialog': _dialog_state(
+                        get_widget_dialog(session['user_id'], widget_id, visitor, limit=1) or {})})
+
+
+@app.route('/api/widgets/<int:widget_id>/takeover', methods=['POST'])
+def widget_takeover(widget_id):
+    """Взять диалог на себя — бот в нём замолкает (ветка human — кусок B3)."""
+    w, visitor, err = _owned_widget_visitor(widget_id)
+    if err:
+        return err
+    sync_conversations('wid', 'wid:%d:%%' % widget_id)   # гость мог писать после бэкфилла
+    ok = set_widget_dialog_mode(session['user_id'], widget_id, visitor, 'human',
+                                operator_user_id=session['user_id'])
+    if ok is None:
+        return jsonify({'error': 'Не удалось переключить режим'}), 500
+    if not ok:
+        return jsonify({'error': 'Диалог не найден'}), 404
+    return jsonify({'success': True, 'dialog': _dialog_state(
+        get_widget_dialog(session['user_id'], widget_id, visitor, limit=1) or {})})
+
+
+@app.route('/api/widgets/<int:widget_id>/release', methods=['POST'])
+def widget_release(widget_id):
+    """Вернуть диалог боту — он снова отвечает гостю."""
+    w, visitor, err = _owned_widget_visitor(widget_id)
+    if err:
+        return err
+    ok = set_widget_dialog_mode(session['user_id'], widget_id, visitor, 'bot')
+    if ok is None:
+        return jsonify({'error': 'Не удалось переключить режим'}), 500
+    if not ok:
+        return jsonify({'error': 'Диалог не найден'}), 404
+    return jsonify({'success': True, 'dialog': _dialog_state(
+        get_widget_dialog(session['user_id'], widget_id, visitor, limit=1) or {})})
+
+
 @app.route('/api/widgets/<int:widget_id>/dialog')
 def widget_dialog(widget_id):
     """Транскрипт одного диалога виджета для панели (владельцу, догрузка after_id)."""
@@ -2266,8 +2351,7 @@ def widget_dialog(widget_id):
                              limit=request.args.get('limit', type=int) or 50)
     if data is None:
         return jsonify({'error': 'Не удалось прочитать диалог'}), 500
-    dialog = {k: data[k] for k in ('visitor', 'code', 'mode', 'unread',
-                                   'operator_user_id', 'total')}
+    dialog = _dialog_state(data)
     return jsonify({'dialog': dialog,
                     'messages': _with_ts(data['messages']),
                     'has_more': data['has_more']})

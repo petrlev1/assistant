@@ -1179,6 +1179,71 @@ def get_widget_by_key(key):
         return None
 
 
+def add_widget_dialog_message(user_id, widget_id, visitor, role, message):
+    """Записать реплику в диалог виджета (role: user|assistant|operator).
+
+    Область собирается здесь из проверенного widget_id и visitor. Реплика
+    оператора переводит диалог в режим human — ответил человек, значит бот
+    в этом диалоге молчит. Возвращает запись реплики или None при ошибке.
+    """
+    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO chat_history (user_id, role, message, device_id) "
+            "VALUES (%s, %s, %s, %s) RETURNING id, created_at",
+            (user_id, role, message, scope),
+        )
+        msg_id, created = cur.fetchone()
+        cur.execute(
+            "UPDATE conversations SET last_message_at = %s, last_role = %s, "
+            "    mode = CASE WHEN %s = 'operator' THEN 'human' ELSE mode END, "
+            "    operator_user_id = CASE WHEN %s = 'operator' THEN %s ELSE operator_user_id END "
+            "WHERE conv_key = %s AND owner_user_id = %s",
+            (created, role, role, role, user_id, scope, user_id),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {'id': msg_id, 'role': role, 'message': message,
+                'ts': created.timestamp() if hasattr(created, 'timestamp') else 0}
+    except Exception as e:
+        logger.error(f"Ошибка записи реплики в диалог виджета #{widget_id}: {e}")
+        return None
+
+
+def set_widget_dialog_mode(user_id, widget_id, visitor, mode, operator_user_id=None):
+    """Перевести диалог виджета в режим bot|human.
+
+    Владение проверяет вызывающий (widget_id уже проверен на принадлежность),
+    здесь дополнительно страхуемся условием owner_user_id = пользователь.
+    Взятие на себя снимает непрочитанное: оператор диалог уже увидел.
+    True — переключено, False — диалога нет в реестре, None — ошибка БД.
+    """
+    if mode not in ('bot', 'human'):
+        return None
+    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE conversations
+               SET mode = %s,
+                   operator_user_id = %s,
+                   unread_for_owner = CASE WHEN %s = 'human' THEN 0 ELSE unread_for_owner END
+             WHERE conv_key = %s AND owner_user_id = %s
+        """, (mode, (operator_user_id if mode == 'human' else None), mode, scope, user_id))
+        changed = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        conn.close()
+        return changed
+    except Exception as e:
+        logger.error(f"Ошибка смены режима диалога виджета #{widget_id}: {e}")
+        return None
+
+
 def count_unread_conversations(user_id):
     """Сколько реплик гостей ждут владельца — бейдж у кнопки «Диалоги» в кабинете."""
     try:

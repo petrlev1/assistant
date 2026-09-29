@@ -42,6 +42,7 @@
                background: linear-gradient(135deg,#667eea,#764ba2); color: #fff; white-space: nowrap; }
         .btn:hover { filter: brightness(1.08); }
         .btn.sec { background: #eef0f7; color: #374151; }
+        .btn.small { padding: 5px 10px; font-size: 12.5px; }
 
         .board { flex: 1; display: flex; gap: 16px; min-height: 0; }
         @media (max-width: 860px) { .board { flex-direction: column; } }
@@ -140,8 +141,10 @@
                     <div class="empty">Здесь появится переписка гостя с ботом.</div>
                 </div>
                 <div class="composer">
-                    <input type="text" id="reply" disabled placeholder="Ручной ответ появится в следующем шаге">
-                    <span class="note">пока только просмотр</span>
+                    <input type="text" id="reply" disabled placeholder="Выберите диалог слева — и отвечайте гостю"
+                           onkeydown="if (event.key === 'Enter') { event.preventDefault(); sendReply(); }">
+                    <button class="btn" id="sendbtn" disabled onclick="sendReply()">Отправить</button>
+                    <span class="note">ответ переводит диалог на вас</span>
                 </div>
             </div>
         </div>
@@ -195,6 +198,7 @@ function loadWidgets() {
 function pickWidget() {
     localStorage.setItem('inbox_widget', document.getElementById('wsel').value);
     cur = null; lastId = 0;
+    composer(false);
     document.getElementById('chead').innerHTML = '<span class="who">Диалог не выбран</span>' +
         '<span class="meta">выберите гостя слева</span>';
     document.getElementById('thread').innerHTML = '<div class="empty">Здесь появится переписка гостя с ботом.</div>';
@@ -244,20 +248,74 @@ function renderDialogs() {
     }).join('');
 }
 
+function composer(on) {
+    document.getElementById('reply').disabled = !on;
+    document.getElementById('sendbtn').disabled = !on;
+    if (on) document.getElementById('reply').disabled = false;
+}
+
 function openDialog(visitor) {
     cur = dialogs.filter(function (d) { return d.visitor === visitor; })[0] || { visitor: visitor };
     lastId = 0;
+    composer(true);
+    document.getElementById('reply').focus();
     document.getElementById('thread').innerHTML = '<div class="empty">Загрузка…</div>';
     renderDialogs();
     fetchDialog();
 }
 
 function head(d) {
+    var toggle = d.mode === 'human'
+        ? '<button class="btn sec small" onclick="setMode(\'bot\')" title="Бот снова начнёт отвечать гостю">🤖 Вернуть боту</button>'
+        : '<button class="btn small" onclick="setMode(\'human\')" title="Бот в этом диалоге замолчит, отвечаете вы">🧑 Взять на себя</button>';
     return '<span class="who">Гость #' + esc(d.code) + '</span>'
         + '<span class="meta">' + esc(d.visitor) + '</span>'
         + '<span class="meta">сообщений: ' + d.total + '</span>'
         + '<span class="tag' + (d.mode === 'human' ? ' human' : '') + '">' +
-          (d.mode === 'human' ? '🧑 ведёт человек' : '🤖 отвечает бот') + '</span>';
+          (d.mode === 'human' ? '🧑 ведёт человек' : '🤖 отвечает бот') + '</span>'
+        + '<span style="flex:1"></span>' + toggle;
+}
+
+function setMode(mode) {
+    if (!cur) return;
+    var wid = document.getElementById('wsel').value;
+    fetch('/api/widgets/' + wid + '/' + (mode === 'human' ? 'takeover' : 'release'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitor: cur.visitor })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.error) { toast(d.error); return; }
+        cur = Object.assign({}, cur, d.dialog || {});
+        document.getElementById('chead').innerHTML = head(cur);
+        loadDialogs();
+        toast(mode === 'human' ? 'Диалог у вас — бот в нём замолчит'
+                               : 'Диалог снова у бота');
+    });
+}
+
+function sendReply() {
+    if (!cur) { toast('Сначала выберите диалог'); return; }
+    var box = document.getElementById('reply'), text = box.value.trim();
+    if (!text) return;
+    var wid = document.getElementById('wsel').value;
+    document.getElementById('sendbtn').disabled = true;
+    fetch('/api/widgets/' + wid + '/reply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitor: cur.visitor, text: text })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+        document.getElementById('sendbtn').disabled = false;
+        if (d.error) { toast(d.error); return; }
+        box.value = '';
+        var th = document.getElementById('thread');
+        th.insertAdjacentHTML('beforeend', bubble(d.message));
+        th.scrollTop = th.scrollHeight;
+        lastId = d.message.id;
+        cur = Object.assign({}, cur, d.dialog || {});
+        document.getElementById('chead').innerHTML = head(cur);
+        loadDialogs();
+    }).catch(function () {
+        document.getElementById('sendbtn').disabled = false;
+        toast('Нет связи — ответ не отправлен');
+    });
 }
 
 function bubble(m) {

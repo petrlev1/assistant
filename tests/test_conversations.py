@@ -207,11 +207,8 @@ def test_inbox_page(uid, wid, vis1):
     body = r.get_data(as_text=True)
     check('/inbox отдаёт страницу панели',
           r.status_code == 200 and 'Диалоги гостей' in body and '/inbox' in body, r.status_code)
-    check('на странице есть выбор виджета и неактивное поле ответа',
-          'id="wsel"' in body and 'Ручной ответ появится в следующем шаге' in body
-          and 'id="reply" disabled' in body, None)
-    check('страница не тянет ответы (только чтение)',
-          '/reply' not in body and "'POST'" not in body, None)
+    check('на странице есть выбор виджета и поле ответа',
+          'id="wsel"' in body and 'id="reply"' in body and 'id="sendbtn"' in body, None)
 
     check('счётчик непрочитанного пуст', auth_db.count_unread_conversations(uid) == 0,
           auth_db.count_unread_conversations(uid))
@@ -222,6 +219,115 @@ def test_inbox_page(uid, wid, vis1):
     check('в кабинете у кнопки «Диалоги» появляется бейдж',
           'class="cnt">3<' in chat_body, None)
     _q("UPDATE conversations SET unread_for_owner=0 WHERE conv_key = %s", (f'wid:{wid}:{vis1}',))
+
+
+def test_mode_http(uid, wid, vis1, vis2):
+    print('\n7) Режим диалога: takeover / release')
+    import web_app
+    client = web_app.app.test_client()
+    check('takeover без логина — 401',
+          client.post(f'/api/widgets/{wid}/takeover', json={'visitor': vis1}).status_code == 401)
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = uid
+        sess['username'] = 'testconv'
+
+    r = client.post(f'/api/widgets/{wid}/takeover', json={'visitor': 'zz'})
+    check('битый visitor — 400', r.status_code == 400, r.status_code)
+    r = client.post(f'/api/widgets/{wid}/takeover', json={'visitor': 'aabbccdd11223344'})
+    check('незнакомый гость — 404 (диалога нет)', r.status_code == 404, r.status_code)
+
+    uid2, _ = _make_test_user()
+    try:
+        ok, other = auth_db.create_widget(uid2, 'чужой виджет')
+        r = client.post(f'/api/widgets/{other["id"]}/takeover', json={'visitor': vis1})
+        check('чужой виджет — 404', r.status_code == 404, r.status_code)
+    finally:
+        auth_db.delete_user(uid2)
+
+    _q("UPDATE conversations SET unread_for_owner=5 WHERE conv_key = %s", (f'wid:{wid}:{vis1}',))
+    r = client.post(f'/api/widgets/{wid}/takeover', json={'visitor': vis1})
+    d = (r.get_json() or {}).get('dialog') or {}
+    check('takeover отвечает успехом',
+          r.status_code == 200 and (r.get_json() or {}).get('success'),
+          r.get_data(as_text=True)[:200])
+    check('режим human и ведёт владелец',
+          d.get('mode') == 'human' and d.get('operator_user_id') == uid, d)
+    check('непрочитанное снято при взятии', d.get('unread') == 0, d)
+    check('в реестре тоже human',
+          _q("SELECT mode FROM conversations WHERE conv_key = %s", (f'wid:{wid}:{vis1}',))[0][0] == 'human')
+    check('соседний диалог остался у бота',
+          _q("SELECT mode FROM conversations WHERE conv_key = %s", (f'wid:{wid}:{vis2}',))[0][0] == 'bot')
+
+    body = client.get(f'/api/widgets/{wid}/inbox').get_json() or {}
+    modes = {x['visitor']: x['mode'] for x in body.get('dialogs', [])}
+    check('панель отдаёт режим по каждому диалогу',
+          modes.get(vis1) == 'human' and modes.get(vis2) == 'bot', modes)
+
+    r = client.post(f'/api/widgets/{wid}/release', json={'visitor': vis1})
+    d2 = (r.get_json() or {}).get('dialog') or {}
+    check('release возвращает бота',
+          r.status_code == 200 and d2.get('mode') == 'bot' and d2.get('operator_user_id') is None, d2)
+    check('release идемпотентен',
+          client.post(f'/api/widgets/{wid}/release', json={'visitor': vis1}).status_code == 200)
+
+
+def test_reply_http(uid, wid, wkey, vis1, vis2):
+    print('\n8) Ответ оператора: POST /api/widgets/<id>/reply')
+    import web_app
+    client = web_app.app.test_client()
+    check('reply без логина — 401',
+          client.post(f'/api/widgets/{wid}/reply', json={'visitor': vis1, 'text': 'привет'}).status_code == 401)
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = uid
+        sess['username'] = 'testconv'
+
+    r = client.post(f'/api/widgets/{wid}/reply', json={'visitor': vis1, 'text': '   '})
+    check('пустой ответ — 400', r.status_code == 400, r.status_code)
+    r = client.post(f'/api/widgets/{wid}/reply', json={'visitor': vis1, 'text': 'я' * 4001})
+    check('слишком длинный ответ — 400', r.status_code == 400, r.status_code)
+    r = client.post(f'/api/widgets/{wid}/reply', json={'visitor': 'aabbccdd11223344', 'text': 'привет'})
+    check('незнакомый гость — 404', r.status_code == 404, r.status_code)
+
+    uid2, _ = _make_test_user()
+    try:
+        ok, other = auth_db.create_widget(uid2, 'чужой виджет')
+        r = client.post(f'/api/widgets/{other["id"]}/reply', json={'visitor': vis1, 'text': 'привет'})
+        check('чужой виджет — 404', r.status_code == 404, r.status_code)
+    finally:
+        auth_db.delete_user(uid2)
+
+    # Соседний диалог оставляем у бота: ответ в vis1 не должен его трогать
+    text = 'Менеджер: да, самовывоз возможен со склада на Ленина, 5'
+    r = client.post(f'/api/widgets/{wid}/reply', json={'visitor': vis1, 'text': text})
+    body = r.get_json() or {}
+    m = body.get('message') or {}
+    check('ответ записан как реплика оператора',
+          r.status_code == 200 and m.get('role') == 'operator' and m.get('id') and m.get('ts', 0) > 0,
+          body)
+    check('текст ответа сохранён без изменений', m.get('message') == text, m)
+    check('ответ сам перевёл диалог на человека',
+          (body.get('dialog') or {}).get('mode') == 'human'
+          and (body.get('dialog') or {}).get('operator_user_id') == uid, body.get('dialog'))
+    check('соседний диалог остался у бота',
+          _q("SELECT mode FROM conversations WHERE conv_key = %s", (f'wid:{wid}:{vis2}',))[0][0] == 'bot')
+
+    tr = client.get(f'/api/widgets/{wid}/dialog?visitor={vis1}').get_json() or {}
+    last = (tr.get('messages') or [])[-1]
+    check('в транскрипте панели ответ идёт последним и ролью operator',
+          last.get('role') == 'operator' and last.get('message') == text, last)
+
+    # Гость видит этот ответ в своём виджете
+    hist = client.get('/api/widget/history?key=' + wkey + '&visitor_id=' + vis1).get_json() or {}
+    msgs = hist.get('messages') or []
+    check('гость получает ответ менеджера в ленте виджета',
+          msgs and msgs[-1]['role'] == 'operator' and msgs[-1]['message'] == text, msgs[-3:])
+
+    body = client.get(f'/api/widgets/{wid}/inbox').get_json() or {}
+    row = [x for x in body.get('dialogs', []) if x['visitor'] == vis1][0]
+    check('панель показывает последнюю реплику оператора',
+          row['last_role'] == 'operator' and text[:20] in row['last_message'], row)
 
 
 def main():
@@ -293,8 +399,10 @@ def main():
         test_inbox_http(uid, wid, vis1, vis2, s1)
         test_dialog_http(uid, wid, vis1)
         test_inbox_page(uid, wid, vis1)
+        test_mode_http(uid, wid, vis1, vis2)
+        test_reply_http(uid, wid, w['key'], vis1, vis2)
 
-        print('7) Каскад при удалении владельца')
+        print('9) Каскад при удалении владельца')
         auth_db.delete_user(uid)
         check('диалоги удалены вместе с пользователем',
               not _q('SELECT 1 FROM conversations WHERE conv_key LIKE %s', (f'wid:{wid}:%', )))
