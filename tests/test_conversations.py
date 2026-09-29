@@ -220,6 +220,9 @@ def test_inbox_page(uid, wid, vis1):
     chat_body = client.get('/chat').get_data(as_text=True)
     check('в кабинете у кнопки «Диалоги» появляется бейдж',
           'class="cnt">3<' in chat_body, None)
+    check('в шапке кабинета есть ссылка на документацию в новом окне',
+          'href="/docs"' in chat_body and 'class="btn-docs-link"' in chat_body
+          and 'target="_blank"' in chat_body, None)
     _q("UPDATE conversations SET unread_for_owner=0 WHERE conv_key = %s", (f'wid:{wid}:{vis1}',))
 
 

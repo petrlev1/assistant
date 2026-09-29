@@ -62,6 +62,22 @@
         .btn-logout:hover {
             background: rgba(255,255,255,0.3);
         }
+        /* Ссылка на документацию в шапке кабинета: открывается в новом окне,
+           поэтому работа в кабинете не теряется */
+        .btn-docs-link {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            text-decoration: none;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+        .btn-docs-link:hover {
+            background: rgba(255,255,255,0.3);
+        }
         /* Chat container */
         .chat-container {
             flex: 1;
@@ -1050,6 +1066,8 @@
         /* Мобильная версия: панель «Мои документы» — выпадающая почти на всю ширину */
         @media (max-width: 900px) {
             .btn-docs-mobile { display: block; }
+            /* На узких экранах в шапке нет места: документация доступна с главной страницы */
+            .btn-docs-link { display: none; }
             /* Чат на всю ширину: колонка документов не занимает места,
                но панель внутри неё остаётся fixed-оверлеем и может открываться */
             .docs-side { display: contents; }
@@ -1086,6 +1104,9 @@
     <div class="header">
         <h1><a href="{{ url_for('index') }}" title="На главную">RAGSTONE</a></h1>
         <div class="user-info">
+            <!-- Документация — в новом окне, чтобы не терять кабинет -->
+            <a href="{{ url_for('docs') }}" class="btn-docs-link" target="_blank" rel="noopener"
+               title="Документация пользователя — откроется в новом окне">📘 Документация</a>
             <span class="username">👤 {{ session.username }}</span>
             <a href="{{ url_for('logout') }}" class="btn-logout">Выйти</a>
             <button class="btn-docs-mobile" onClick="toggleDocsPanel()" title="Мои документы">☰</button>
