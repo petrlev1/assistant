@@ -19,9 +19,11 @@ from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      get_widget, sync_conversations, list_widget_conversations,
+                     list_max_conversations, get_max_dialog,
                      count_unread_conversations, set_widget_dialog_mode,
                      widget_conversation_mode, widget_conversation_state,
-                     add_widget_dialog_message,
+                     add_widget_dialog_message, add_dialog_message,
+                     scope_conversation_mode, scope_dialog_mode_set,
                      get_widget_dialog,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
                      clear_widget_history)
@@ -2172,17 +2174,21 @@ def _widget_manual(w, visitor):
     return True
 
 
-def _widget_guest_waiting(w, visitor, question):
-    """Вопрос гостя в ручном режиме: в ленту диалога, «непрочитано» и аналитика.
+def _external_guest_waiting(user_id, scope, question, label):
+    """Вопрос собеседника в ручном режиме: в ленту диалога, «непрочитано» и аналитика.
 
-    Модель не вызывается и дневной лимит не тратится (widget_consume), но вопрос
-    не теряется: владелец видит его в панели, аналитика запросов остаётся полной.
+    Модель не вызывается и дневные лимиты не тратятся, но вопрос не теряется:
+    владелец видит его в панели, аналитика запросов остаётся полной.
     """
-    add_widget_dialog_message(w['user_id'], w['id'], visitor, 'user', question,
-                              unread_delta=1)
-    chat_logger.log_message("Виджет «%s»" % w.get('name', ''), w['user_id'], question,
-                            is_bot=False)
-    save_query_analytics(w['user_id'], question, '')
+    add_dialog_message(user_id, scope, 'user', question, unread_delta=1)
+    chat_logger.log_message(label, user_id, question, is_bot=False)
+    save_query_analytics(user_id, question, '')
+
+
+def _widget_guest_waiting(w, visitor, question):
+    """Вопрос гостя виджета в ручном режиме."""
+    _external_guest_waiting(w['user_id'], _widget_scope(w, visitor), question,
+                            "Виджет «%s»" % w.get('name', ''))
 
 
 @app.route('/api/widget/ask', methods=['POST'])
@@ -2316,6 +2322,8 @@ def widget_inbox(widget_id):
 
 
 _VISITOR_RE = re.compile(r'[0-9a-zA-Z_-]{8,64}')
+# Собеседник в мессенджере: id MAX короче гостевого visitor, поэтому порог 4
+_PEER_RE = re.compile(r'[0-9a-zA-Z_-]{4,64}')
 
 
 def _dialog_state(data):
@@ -2422,6 +2430,126 @@ def widget_dialog(widget_id):
     return jsonify({'dialog': dialog,
                     'messages': _with_ts(data['messages']),
                     'has_more': data['has_more']})
+
+
+def _owned_max_channel():
+    """(канал MAX владельца, ответ-ошибка) для роутов панели оператора."""
+    if 'user_id' not in session:
+        return None, (jsonify({'error': 'Необходима авторизация'}), 401)
+    ch = get_max_channel(session['user_id'])
+    if not ch:
+        return None, (jsonify({'error': 'MAX-бот не подключён'}), 404)
+    return ch, None
+
+
+def _max_channel_info(ch):
+    """Карточка канала для панели: без токена и секрета вебхука."""
+    return {'id': ch.get('id'), 'bot_name': ch.get('bot_name') or '',
+            'bot_username': ch.get('bot_username') or '',
+            'active': bool(ch.get('active')), 'mode': ch.get('mode') or 'webhook',
+            'today_hits': int(ch.get('today_hits') or 0),
+            'daily_limit': int(ch.get('daily_limit') or 0)}
+
+
+@app.route('/api/max/inbox')
+def max_inbox():
+    """Диалоги собеседников MAX для панели оператора."""
+    ch, err = _owned_max_channel()
+    if err:
+        return err
+    sync_conversations('max', 'max:%s:%%' % ch['id'])
+    dialogs = list_max_conversations(ch['user_id'], ch['id'])
+    return jsonify({'channel': _max_channel_info(ch), 'dialogs': dialogs,
+                    'unread_total': sum(int(d.get('unread') or 0) for d in dialogs)})
+
+
+@app.route('/api/max/dialog')
+def max_dialog():
+    """Транскрипт диалога в MAX (владельцу, догрузка по after_id)."""
+    ch, err = _owned_max_channel()
+    if err:
+        return err
+    peer = (request.args.get('visitor') or '').strip()
+    if not _PEER_RE.fullmatch(peer):
+        return jsonify({'error': 'Некорректный собеседник.'}), 400
+    data = get_max_dialog(ch['user_id'], ch['id'], peer,
+                          after_id=request.args.get('after_id', type=int),
+                          limit=request.args.get('limit', type=int) or 50)
+    if data is None:
+        return jsonify({'error': 'Не удалось прочитать диалог'}), 500
+    return jsonify({'dialog': _dialog_state(data), 'messages': _with_ts(data['messages']),
+                    'has_more': data['has_more']})
+
+
+@app.route('/api/max/reply', methods=['POST'])
+def max_reply():
+    """Ответ менеджера собеседнику в MAX: доставка через бота + запись в ленту.
+
+    Сначала доставка, потом запись: если MAX не принял сообщение, в ленте не
+    появится ответ, которого собеседник не видел.
+    """
+    ch, err = _owned_max_channel()
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    peer = str(body.get('visitor') or '').strip()
+    if not _PEER_RE.fullmatch(peer):
+        return jsonify({'error': 'Некорректный собеседник.'}), 400
+    text = (body.get('text') or body.get('message') or '').strip()
+    if not text:
+        return jsonify({'error': 'Пустой ответ'}), 400
+    if len(text) > 4000:
+        return jsonify({'error': 'Слишком длинный ответ'}), 400
+    scope = _max_scope(ch['id'], peer)
+    sync_conversations('max', 'max:%s:%%' % ch['id'])
+    data = get_max_dialog(ch['user_id'], ch['id'], peer, limit=1)
+    if not data or not data['total']:
+        return jsonify({'error': 'Диалог не найден'}), 404
+    if not _max_send(ch, text, peer):
+        return jsonify({'error': 'MAX не принял сообщение — ответ не отправлен'}), 502
+    msg = add_dialog_message(ch['user_id'], scope, 'operator', text)
+    if msg is None:
+        return jsonify({'error': 'Ответ доставлен, но не сохранился в ленте'}), 500
+    scope_dialog_mode_set(ch['user_id'], scope, 'human', ch['user_id'])
+    fresh = get_max_dialog(ch['user_id'], ch['id'], peer, limit=1)
+    return jsonify({'success': True, 'message': msg,
+                    'dialog': _dialog_state(fresh) if fresh else {}})
+
+
+def _max_dialog_action(peer, mode):
+    """Переключить режим диалога MAX (общее для takeover/release)."""
+    ch, err = _owned_max_channel()
+    if err:
+        return err
+    if not _PEER_RE.fullmatch(peer or ''):
+        return jsonify({'error': 'Некорректный собеседник.'}), 400
+    scope = _max_scope(ch['id'], peer)
+    sync_conversations('max', 'max:%s:%%' % ch['id'])
+    data = get_max_dialog(ch['user_id'], ch['id'], peer, limit=1)
+    if not data or not data['total']:
+        return jsonify({'error': 'Диалог не найден'}), 404
+    ok = scope_dialog_mode_set(ch['user_id'], scope, mode,
+                               ch['user_id'] if mode == 'human' else None)
+    if ok is None:
+        return jsonify({'error': 'Не удалось переключить режим'}), 500
+    if not ok:
+        return jsonify({'error': 'Диалог не найден'}), 404
+    fresh = get_max_dialog(ch['user_id'], ch['id'], peer, limit=1)
+    return jsonify({'success': True, 'dialog': _dialog_state(fresh) if fresh else {}})
+
+
+@app.route('/api/max/takeover', methods=['POST'])
+def max_takeover():
+    """Взять диалог в MAX на себя: бот в нём замолчит."""
+    body = request.get_json(silent=True) or {}
+    return _max_dialog_action(str(body.get('visitor') or '').strip(), 'human')
+
+
+@app.route('/api/max/release', methods=['POST'])
+def max_release():
+    """Вернуть диалог в MAX боту."""
+    body = request.get_json(silent=True) or {}
+    return _max_dialog_action(str(body.get('visitor') or '').strip(), 'bot')
 
 
 @app.route('/api/widgets/create', methods=['POST'])
@@ -2539,6 +2667,12 @@ def _max_handle_update(channel, update):
     # 10 сообщений/мин на собеседника (каждый ответ — платный вызов LLM)
     if _rate_limited('mx:%s:%s' % (channel['id'], sender), limit=10, window=60):
         logger.info(f"MAX: слишком часто пишет пользователь {sender} (канал #{channel['id']})")
+        return
+    # Диалог ведёт человек: бот молчит, вопрос уходит владельцу в панель
+    if scope_conversation_mode(channel['user_id'], _max_scope(channel['id'], sender)) == 'human':
+        _external_guest_waiting(channel['user_id'], _max_scope(channel['id'], sender), text[:2000],
+                                "MAX «%s»" % (channel.get('bot_name') or 'бот'))
+        _max_send(channel, _MANUAL_WAIT, sender)
         return
     if not max_consume(channel['id']):
         _max_send(channel, 'К сожалению, дневной лимит ответов ассистента исчерпан. Попробуйте завтра.', sender)

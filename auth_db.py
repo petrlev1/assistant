@@ -1184,16 +1184,14 @@ def get_widget_by_key(key):
         return None
 
 
-def add_widget_dialog_message(user_id, widget_id, visitor, role, message, unread_delta=0):
-    """Записать реплику в диалог виджета (role: user|assistant|operator).
+def add_dialog_message(user_id, scope, role, message, unread_delta=0):
+    """Записать реплику в диалог по его области (wid:… / max:… / tg:…).
 
-    Область собирается здесь из проверенного widget_id и visitor. Состояние
-    диалога обновляется в той же транзакции и создаётся, если записи ещё нет
-    (гость мог написать раньше, чем отработал бэкфилл); «непрочитано» растёт
-    на unread_delta; реплика оператора переводит диалог в режим human — иначе
-    бот ответил бы поверх менеджера. Возвращает запись реплики или None.
+    Состояние диалога обновляется в той же транзакции и создаётся, если записи ещё
+    нет (собеседник мог написать раньше, чем отработал бэкфилл); «непрочитано»
+    растёт на unread_delta; реплика оператора переводит диалог в режим human —
+    иначе бот ответил бы поверх менеджера. Возвращает запись реплики или None.
     """
-    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -1207,7 +1205,7 @@ def add_widget_dialog_message(user_id, widget_id, visitor, role, message, unread
             INSERT INTO conversations
                 (channel, owner_user_id, conv_key, mode, last_message_at, last_role,
                  unread_for_owner, operator_user_id)
-            VALUES ('widget', %(uid)s, %(scope)s, 'bot', %(ts)s, %(role)s,
+            VALUES (%(channel)s, %(uid)s, %(scope)s, 'bot', %(ts)s, %(role)s,
                     GREATEST(%(delta)s, 0), NULL)
             ON CONFLICT (conv_key) DO UPDATE
                SET last_message_at = EXCLUDED.last_message_at,
@@ -1219,16 +1217,23 @@ def add_widget_dialog_message(user_id, widget_id, visitor, role, message, unread
                                            THEN %(uid)s
                                            ELSE conversations.operator_user_id END
              WHERE conversations.owner_user_id = EXCLUDED.owner_user_id
-        """, {'uid': user_id, 'scope': scope, 'ts': created, 'role': role,
-              'delta': int(unread_delta or 0)})
+        """, {'channel': _SCOPE_TABLES.get(scope.split(':', 1)[0], (None, 'widget'))[1][:16],
+              'uid': user_id,
+              'scope': scope, 'ts': created, 'role': role, 'delta': int(unread_delta or 0)})
         conn.commit()
         cur.close()
         conn.close()
         return {'id': msg_id, 'role': role, 'message': message,
                 'ts': created.timestamp() if hasattr(created, 'timestamp') else 0}
     except Exception as e:
-        logger.error(f"Ошибка записи реплики в диалог виджета #{widget_id}: {e}")
+        logger.error(f"Ошибка записи реплики в диалог {scope}: {e}")
         return None
+
+
+def add_widget_dialog_message(user_id, widget_id, visitor, role, message, unread_delta=0):
+    """Реплика в диалоге виджета (role: user|assistant|operator)."""
+    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
+    return add_dialog_message(user_id, scope, role, message, unread_delta=unread_delta)
 
 
 def widget_conversation_state(user_id, widget_id, visitor):
@@ -1256,12 +1261,11 @@ def widget_conversation_state(user_id, widget_id, visitor):
         return 'bot', None
 
 
-def widget_conversation_mode(user_id, widget_id, visitor):
-    """Режим диалога виджета: 'human', если владелец взял его на себя.
+def scope_conversation_mode(user_id, scope):
+    """Режим диалога по его области (wid:… / max:…): 'human', если ведёт человек.
 
     Ошибка чтения возвращает 'bot' — лучше ответ бота, чем молчание из-за сбоя БД.
     """
-    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -1272,21 +1276,25 @@ def widget_conversation_mode(user_id, widget_id, visitor):
         conn.close()
         return (row[0] if row else 'bot') or 'bot'
     except Exception as e:
-        logger.error(f"Ошибка чтения режима диалога виджета #{widget_id}: {e}")
+        logger.error(f"Ошибка чтения режима диалога {scope}: {e}")
         return 'bot'
 
 
-def set_widget_dialog_mode(user_id, widget_id, visitor, mode, operator_user_id=None):
-    """Перевести диалог виджета в режим bot|human.
+def widget_conversation_mode(user_id, widget_id, visitor):
+    """Режим диалога виджета: 'human', если владелец взял его на себя."""
+    return scope_conversation_mode(user_id, 'wid:%d:%s' % (int(widget_id or 0), visitor or ''))
 
-    Владение проверяет вызывающий (widget_id уже проверен на принадлежность),
-    здесь дополнительно страхуемся условием owner_user_id = пользователь.
+
+def scope_dialog_mode_set(user_id, scope, mode, operator_user_id=None):
+    """Перевести диалог в режим bot|human по его области (wid:… / max:…).
+
+    Владение проверяет вызывающий (виджет или канал уже проверены на
+    принадлежность), здесь дополнительно страхуемся условием owner_user_id.
     Взятие на себя снимает непрочитанное: оператор диалог уже увидел.
     True — переключено, False — диалога нет в реестре, None — ошибка БД.
     """
     if mode not in ('bot', 'human'):
         return None
-    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -1303,8 +1311,14 @@ def set_widget_dialog_mode(user_id, widget_id, visitor, mode, operator_user_id=N
         conn.close()
         return changed
     except Exception as e:
-        logger.error(f"Ошибка смены режима диалога виджета #{widget_id}: {e}")
+        logger.error(f"Ошибка смены режима диалога {scope}: {e}")
         return None
+
+
+def set_widget_dialog_mode(user_id, widget_id, visitor, mode, operator_user_id=None):
+    """Перевести диалог виджета в режим bot|human."""
+    return scope_dialog_mode_set(user_id, 'wid:%d:%s' % (int(widget_id or 0), visitor or ''),
+                                 mode, operator_user_id)
 
 
 def count_unread_conversations(user_id):
@@ -1647,15 +1661,14 @@ def _short_text(text, limit):
     return flat if len(flat) <= limit else flat[:limit - 1].rstrip() + '…'
 
 
-def list_widget_conversations(user_id, widget_id, limit=200):
-    """Диалоги гостей виджета для панели оператора (только виджеты владельца).
+def _list_scope_conversations(user_id, scope_like, limit, title_default):
+    """Диалоги одной области (wid:… или max:…) для панели оператора.
 
     Содержимое диалога (последняя реплика, авто-заголовок из первого вопроса,
     число сообщений) читается из chat_history, состояние (режим, непрочитанное) —
     из conversations. Порядок: непрочитанные, затем ждущие ответа человека
     (кто дольше ждёт — выше), затем остальные по свежести.
     """
-    scope_like = 'wid:%d:%%' % int(widget_id or 0)
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1695,21 +1708,23 @@ def list_widget_conversations(user_id, widget_id, limit=200):
         cur.close()
         conn.close()
     except Exception as e:
-        logger.error(f"Ошибка списка диалогов виджета #{widget_id}: {e}")
+        logger.error(f"Ошибка списка диалогов ({scope_like}): {e}")
         return []
     dialogs = []
     for r in rows:
         key = r.get('conv_key') or ''
-        visitor = key.split(':', 2)[2] if key.count(':') >= 2 else ''
+        # Хвост области — собеседник: visitor виджета или id пользователя MAX.
+        # Поле называется одинаково, чтобы панель работала с обоими каналами однотипно.
+        peer = key.split(':', 2)[2] if key.count(':') >= 2 else ''
         ts = r.get('last_message_at')
         dialogs.append({
-            'visitor': visitor,
-            'code': visitor[-4:],
+            'visitor': peer,
+            'code': peer[-4:],
             'mode': r.get('mode') or 'bot',
             'unread': int(r.get('unread_for_owner') or 0),
             'operator_user_id': r.get('operator_user_id'),
             'messages': int(r.get('messages') or 0),
-            'title': _short_text(r.get('first_question'), 80) or 'Диалог гостя',
+            'title': _short_text(r.get('first_question'), 80) or title_default,
             'last_message': _short_text(r.get('last_message'), 140),
             'last_role': r.get('last_role'),
             # epoch-метка серверного времени — как 'ts' в истории виджета (_with_ts)
@@ -1718,16 +1733,26 @@ def list_widget_conversations(user_id, widget_id, limit=200):
     return dialogs
 
 
-def get_widget_dialog(user_id, widget_id, visitor, after_id=None, limit=50):
-    """Транскрипт одного диалога виджета для панели оператора.
+def list_widget_conversations(user_id, widget_id, limit=200):
+    """Диалоги гостей виджета (только виджеты владельца)."""
+    return _list_scope_conversations(user_id, 'wid:%d:%%' % int(widget_id or 0), limit,
+                                     'Диалог гостя')
+
+
+def list_max_conversations(user_id, channel_id, limit=200):
+    """Диалоги собеседников MAX: один канал на владельца, у каждого своя лента."""
+    return _list_scope_conversations(user_id, 'max:%s:%%' % int(channel_id or 0), limit,
+                                     'Диалог в MAX')
+
+
+def _dialog_payload(user_id, scope, peer, after_id, limit, label):
+    """Транскрипт диалога по области (wid:… / max:…). None — ошибка БД.
 
     after_id — отдать только сообщения новее указанного id (опрос из панели);
     без after_id отдаются последние `limit` сообщений (хвост разговора).
-    Область (device_id) собирается здесь из id виджета и посетителя: строку от
-    клиента не принимаем никогда, иначе ответ уедет в чужой диалог.
-    None — ошибка БД.
+    Область собирается вызывающим из проверенных id: строку от клиента не
+    принимаем никогда, иначе ответ уедет в чужой диалог.
     """
-    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
     limit = max(1, min(int(limit or 50), 200))
     try:
         conn = get_db_connection()
@@ -1764,11 +1789,11 @@ def get_widget_dialog(user_id, widget_id, visitor, after_id=None, limit=50):
         cur.close()
         conn.close()
     except Exception as e:
-        logger.error(f"Ошибка транскрипта диалога виджета #{widget_id}: {e}")
+        logger.error(f"Ошибка транскрипта {label}: {e}")
         return None
     return {
-        'visitor': visitor,
-        'code': (visitor or '')[-4:],
+        'visitor': peer,
+        'code': (peer or '')[-4:],
         'mode': state.get('mode') or 'bot',
         'unread': int(state.get('unread_for_owner') or 0),
         'operator_user_id': state.get('operator_user_id'),
@@ -1776,6 +1801,20 @@ def get_widget_dialog(user_id, widget_id, visitor, after_id=None, limit=50):
         'has_more': has_more,
         'messages': messages,
     }
+
+
+def get_widget_dialog(user_id, widget_id, visitor, after_id=None, limit=50):
+    """Транскрипт одного диалога виджета для панели оператора."""
+    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
+    return _dialog_payload(user_id, scope, visitor, after_id, limit,
+                           "диалога виджета #%d" % int(widget_id or 0))
+
+
+def get_max_dialog(user_id, channel_id, max_user_id, after_id=None, limit=50):
+    """Транскрипт диалога в MAX: собеседник — пользователь мессенджера."""
+    scope = 'max:%s:%s' % (int(channel_id or 0), max_user_id or '')
+    return _dialog_payload(user_id, scope, str(max_user_id or ''), after_id, limit,
+                           "диалога MAX #%d" % int(channel_id or 0))
 
 
 def get_max_channel(user_id):

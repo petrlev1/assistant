@@ -615,6 +615,127 @@ def test_auto_return(uid, wid, wkey, vis_idle):
         auth_db.set_widget_dialog_mode(uid, wid, vis_idle, 'bot')
 
 
+def test_max_panel(uid):
+    print('\n14) MAX-канал в панели: диалоги, транскрипт, ответ оператора, ветка human')
+    import web_app, auth_db
+    client = web_app.app.test_client()
+    peer1, peer2 = '111222333', '444555666'
+    real_send = web_app._max_send
+
+    try:
+        check('MAX-панель без логина — 401', client.get('/api/max/inbox').status_code == 401)
+
+        uid2, _ = _make_test_user()
+        try:
+            with client.session_transaction() as sess:
+                sess['user_id'] = uid2
+                sess['username'] = 'nomax'
+            check('MAX не подключён — 404', client.get('/api/max/inbox').status_code == 404)
+        finally:
+            auth_db.delete_user(uid2)
+
+        ok, ch = auth_db.save_max_channel(uid, 'test-token', 999, 'Тест-бот', 'test_bot',
+                                          'hookkey0123456789', 'secret0123456789')
+        check('MAX-канал подключён для теста', bool(ok and ch), None)
+
+        # Ленту собеседников в MAX пишет сам бот — воспроизводим её как есть
+        auth_db.save_message(uid, 'user', 'вопрос из MAX', device_id=f"max:{ch['id']}:{peer1}")
+        auth_db.save_message(uid, 'assistant', 'ответ в MAX', device_id=f"max:{ch['id']}:{peer1}")
+        auth_db.save_message(uid, 'user', 'второй собеседник', device_id=f"max:{ch['id']}:{peer2}")
+
+        with client.session_transaction() as sess:
+            sess['user_id'] = uid
+            sess['username'] = 'testconv'
+
+        body = client.get('/api/max/inbox').get_json() or {}
+        peers = {d['visitor'] for d in body.get('dialogs', [])}
+        check('панель показывает диалоги MAX', peers == {peer1, peer2}, list(peers))
+        info = body.get('channel') or {}
+        check('карточка канала отдаётся без токена и секрета',
+              info.get('bot_username') == 'test_bot' and 'token' not in info and 'hook_secret' not in info,
+              info)
+        check('виджетные диалоги в MAX-список не подмешиваются',
+              all(d['visitor'].isdigit() for d in body.get('dialogs', [])), None)
+
+        d = client.get(f'/api/max/dialog?visitor={peer1}').get_json() or {}
+        roles = [m['role'] for m in d.get('messages', [])]
+        check('транскрипт MAX отдаётся с ролями и id',
+              roles == ['user', 'assistant'] and all('id' in m for m in d.get('messages', [])), roles)
+        last = d['messages'][-1]['id']
+        d2 = client.get(f'/api/max/dialog?visitor={peer1}&after_id={last}').get_json() or {}
+        check('after_id работает и в MAX', d2.get('messages') == [], d2.get('messages'))
+        check('битый собеседник — 400', client.get('/api/max/dialog?visitor=x').status_code == 400)
+
+        # Ответ оператора: доставка в MAX, затем запись в ленту
+        sent = []
+        web_app._max_send = lambda channel, text, peer: (sent.append((peer, text)), True)[1]
+        r = client.post('/api/max/reply', json={'visitor': peer1, 'text': 'Отвечает менеджер'})
+        b = r.get_json() or {}
+        check('ответ оператора доставлен в MAX', r.status_code == 200
+              and sent == [(peer1, 'Отвечает менеджер')], (sent, b))
+        check('ответ записан ролью operator, диалог переведён на человека',
+              (b.get('message') or {}).get('role') == 'operator'
+              and (b.get('dialog') or {}).get('mode') == 'human', b)
+        check('пустой и слишком длинный ответ — 400',
+              client.post('/api/max/reply', json={'visitor': peer1, 'text': '   '}).status_code == 400
+              and client.post('/api/max/reply', json={'visitor': peer1,
+                                                      'text': 'я' * 4001}).status_code == 400)
+        check('ответ незнакомому собеседнику — 404',
+              client.post('/api/max/reply', json={'visitor': 'zzzz9999', 'text': 'привет'}).status_code == 404)
+
+        web_app._max_send = lambda channel, text, peer: False    # MAX не принял сообщение
+        before = _q("SELECT count(*) FROM chat_history WHERE device_id = %s AND role = 'operator'",
+                    (f"max:{ch['id']}:{peer1}", ))[0][0]
+        r = client.post('/api/max/reply', json={'visitor': peer1, 'text': 'не доехало'})
+        after = _q("SELECT count(*) FROM chat_history WHERE device_id = %s AND role = 'operator'",
+                   (f"max:{ch['id']}:{peer1}", ))[0][0]
+        check('недоставленный ответ не оседает в ленте', r.status_code == 502 and before == after,
+              (r.status_code, before, after))
+
+        check('takeover в MAX переключает режим',
+              client.post('/api/max/takeover', json={'visitor': peer2}).status_code == 200
+              and auth_db.scope_conversation_mode(uid, f"max:{ch['id']}:{peer2}") == 'human')
+        check('release в MAX возвращает бота',
+              client.post('/api/max/release', json={'visitor': peer2}).status_code == 200
+              and auth_db.scope_conversation_mode(uid, f"max:{ch['id']}:{peer2}") == 'bot')
+
+        # Боевой путь MAX: в ручном режиме бот молчит
+        fake = _FakeRAG()
+        real_rag, real_ready = web_app.get_user_rag, web_app.rag_ready
+        web_app.get_user_rag = lambda user_id: fake
+        web_app.rag_ready = True
+        replies = []
+        web_app._max_send = lambda channel, text, peer: (replies.append((peer, text)), True)[1]
+        try:
+            channel = auth_db.get_max_channel(uid)
+            client.post('/api/max/takeover', json={'visitor': peer1})
+            web_app._max_handle_update(channel, {
+                'update_type': 'message_created',
+                'message': {'sender': {'user_id': peer1}, 'body': {'text': 'вопрос при менеджере'}}})
+            check('в ручном режиме MAX модель не вызывается', fake.calls == 0, fake.calls)
+            check('собеседнику в MAX уходит «менеджер смотрит вопрос»',
+                  replies and replies[-1][1] == web_app._MANUAL_WAIT, replies)
+            check('вопрос из MAX записан и ждёт владельца',
+                  _q("SELECT count(*) FROM chat_history WHERE device_id = %s AND role = 'user'",
+                     (f"max:{ch['id']}:{peer1}", ))[0][0] == 2
+                  and _q("SELECT unread_for_owner FROM conversations WHERE conv_key = %s",
+                         (f"max:{ch['id']}:{peer1}", ))[0][0] >= 1)
+
+            client.post('/api/max/release', json={'visitor': peer1})
+            replies[:] = []
+            web_app._max_handle_update(channel, {
+                'update_type': 'message_created',
+                'message': {'sender': {'user_id': peer1}, 'body': {'text': 'вопрос боту'}}})
+            check('после возврата бот в MAX отвечает',
+                  fake.calls == 1 and replies and replies[-1][1].startswith('БОТ:'), (fake.calls, replies))
+        finally:
+            web_app.get_user_rag, web_app.rag_ready = real_rag, real_ready
+    finally:
+        web_app._max_send = real_send
+        import auth_db as _adb
+        _adb.delete_max_channel(uid)
+
+
 def main():
     auth_db.init_db()
     auth_db.init_chat_history()
@@ -691,8 +812,9 @@ def main():
         test_race(uid, wid, w['key'], 'deadbeef55667788')
         test_bot_pause(uid, wid, w['key'], 'cafebabe12345678')
         test_auto_return(uid, wid, w['key'], 'abcdef0199aabbcc')
+        test_max_panel(uid)
 
-        print('14) Каскад при удалении владельца')
+        print('15) Каскад при удалении владельца')
         auth_db.delete_user(uid)
         check('диалоги удалены вместе с пользователем',
               not _q('SELECT 1 FROM conversations WHERE conv_key LIKE %s', (f'wid:{wid}:%', )))
