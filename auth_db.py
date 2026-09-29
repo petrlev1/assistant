@@ -1179,12 +1179,14 @@ def get_widget_by_key(key):
         return None
 
 
-def add_widget_dialog_message(user_id, widget_id, visitor, role, message):
+def add_widget_dialog_message(user_id, widget_id, visitor, role, message, unread_delta=0):
     """Записать реплику в диалог виджета (role: user|assistant|operator).
 
-    Область собирается здесь из проверенного widget_id и visitor. Реплика
-    оператора переводит диалог в режим human — ответил человек, значит бот
-    в этом диалоге молчит. Возвращает запись реплики или None при ошибке.
+    Область собирается здесь из проверенного widget_id и visitor. Состояние
+    диалога обновляется в той же транзакции и создаётся, если записи ещё нет
+    (гость мог написать раньше, чем отработал бэкфилл); «непрочитано» растёт
+    на unread_delta; реплика оператора переводит диалог в режим human — иначе
+    бот ответил бы поверх менеджера. Возвращает запись реплики или None.
     """
     scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
     try:
@@ -1196,13 +1198,24 @@ def add_widget_dialog_message(user_id, widget_id, visitor, role, message):
             (user_id, role, message, scope),
         )
         msg_id, created = cur.fetchone()
-        cur.execute(
-            "UPDATE conversations SET last_message_at = %s, last_role = %s, "
-            "    mode = CASE WHEN %s = 'operator' THEN 'human' ELSE mode END, "
-            "    operator_user_id = CASE WHEN %s = 'operator' THEN %s ELSE operator_user_id END "
-            "WHERE conv_key = %s AND owner_user_id = %s",
-            (created, role, role, role, user_id, scope, user_id),
-        )
+        cur.execute("""
+            INSERT INTO conversations
+                (channel, owner_user_id, conv_key, mode, last_message_at, last_role,
+                 unread_for_owner, operator_user_id)
+            VALUES ('widget', %(uid)s, %(scope)s, 'bot', %(ts)s, %(role)s,
+                    GREATEST(%(delta)s, 0), NULL)
+            ON CONFLICT (conv_key) DO UPDATE
+               SET last_message_at = EXCLUDED.last_message_at,
+                   last_role = EXCLUDED.last_role,
+                   unread_for_owner = GREATEST(conversations.unread_for_owner + %(delta)s, 0),
+                   mode = CASE WHEN EXCLUDED.last_role = 'operator'
+                               THEN 'human' ELSE conversations.mode END,
+                   operator_user_id = CASE WHEN EXCLUDED.last_role = 'operator'
+                                           THEN %(uid)s
+                                           ELSE conversations.operator_user_id END
+             WHERE conversations.owner_user_id = EXCLUDED.owner_user_id
+        """, {'uid': user_id, 'scope': scope, 'ts': created, 'role': role,
+              'delta': int(unread_delta or 0)})
         conn.commit()
         cur.close()
         conn.close()
@@ -1211,6 +1224,26 @@ def add_widget_dialog_message(user_id, widget_id, visitor, role, message):
     except Exception as e:
         logger.error(f"Ошибка записи реплики в диалог виджета #{widget_id}: {e}")
         return None
+
+
+def widget_conversation_mode(user_id, widget_id, visitor):
+    """Режим диалога виджета: 'human', если владелец взял его на себя.
+
+    Ошибка чтения возвращает 'bot' — лучше ответ бота, чем молчание из-за сбоя БД.
+    """
+    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT mode FROM conversations WHERE conv_key = %s AND owner_user_id = %s",
+                    (scope, user_id))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return (row[0] if row else 'bot') or 'bot'
+    except Exception as e:
+        logger.error(f"Ошибка чтения режима диалога виджета #{widget_id}: {e}")
+        return 'bot'
 
 
 def set_widget_dialog_mode(user_id, widget_id, visitor, mode, operator_user_id=None):

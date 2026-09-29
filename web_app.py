@@ -20,6 +20,7 @@ from auth_db import init_db, register_user, login_user, init_chat_history, save_
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      get_widget, sync_conversations, list_widget_conversations,
                      count_unread_conversations, set_widget_dialog_mode,
+                     widget_conversation_mode,
                      add_widget_dialog_message,
                      get_widget_dialog,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
@@ -2135,6 +2136,29 @@ def widget_history_api():
                     'session_started_at': started.timestamp() if started else 0})
 
 
+_MANUAL_WAIT = 'Менеджер уже смотрит ваш вопрос — ответ придёт сюда же.'
+
+
+def _widget_manual(w, visitor):
+    """Бот в этом диалоге молчит: диалог ведёт человек или бот на паузе у виджета."""
+    if w.get('bot_paused'):
+        return True
+    return widget_conversation_mode(w['user_id'], w['id'], visitor) == 'human'
+
+
+def _widget_guest_waiting(w, visitor, question):
+    """Вопрос гостя в ручном режиме: в ленту диалога, «непрочитано» и аналитика.
+
+    Модель не вызывается и дневной лимит не тратится (widget_consume), но вопрос
+    не теряется: владелец видит его в панели, аналитика запросов остаётся полной.
+    """
+    add_widget_dialog_message(w['user_id'], w['id'], visitor, 'user', question,
+                              unread_delta=1)
+    chat_logger.log_message("Виджет «%s»" % w.get('name', ''), w['user_id'], question,
+                            is_bot=False)
+    save_query_analytics(w['user_id'], question, '')
+
+
 @app.route('/api/widget/ask', methods=['POST'])
 def widget_ask():
     """Вопрос посетителя сайта через виджет (доступ по ключу, без логина)."""
@@ -2148,6 +2172,10 @@ def widget_ask():
     # 10 сообщений/мин на посетителя + дневной лимит на виджет (за каждым — платный LLM-вызов)
     if _rate_limited('wg:%s:%s' % (w['key'], visitor), limit=10, window=60):
         return jsonify({'error': 'Слишком много сообщений. Подождите минуту.'}), 429
+    # Диалог ведёт человек: модель не зовём, дневной лимит не тратим
+    if _widget_manual(w, visitor):
+        _widget_guest_waiting(w, visitor, question)
+        return jsonify({'answer': _MANUAL_WAIT, 'human': True})
     if not widget_consume(w['id']):
         return jsonify({'answer': 'К сожалению, дневной лимит вопросов ассистенту исчерпан. Попробуйте завтра.'})
     if not rag_ready:

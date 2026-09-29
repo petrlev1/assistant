@@ -330,6 +330,85 @@ def test_reply_http(uid, wid, wkey, vis1, vis2):
           row['last_role'] == 'operator' and text[:20] in row['last_message'], row)
 
 
+class _FakeRAG:
+    """Заглушка RAGCore: считает вызовы модели и отвечает предсказуемо."""
+
+    def __init__(self):
+        self.calls = 0
+        self.settings = {}          # _rag_provider_model читает провайдера/модель отсюда
+
+    def ask_model(self, question, user_prompt=None, history=None):
+        self.calls += 1
+        return 'БОТ: ответ на «%s»' % question
+
+
+def test_manual_mode(uid, wid, wkey, vis_new):
+    print('\n9) Ручной режим в боевом пути /api/widget/ask')
+    import web_app
+    fake = _FakeRAG()
+    real_rag_getter, real_ready = web_app.get_user_rag, web_app.rag_ready
+    web_app.get_user_rag = lambda user_id: fake
+    web_app.rag_ready = True
+    client = web_app.app.test_client()
+    with client.session_transaction() as sess:
+        sess['user_id'] = uid
+        sess['username'] = 'testconv'
+    pack = {'key': wkey, 'visitor_id': vis_new, 'site': ''}
+
+    def ask(question):
+        return client.post('/api/widget/ask', json=dict(pack, question=question))
+
+    def hits():
+        rows = _q("SELECT hits FROM widget_hits WHERE widget_id = %s AND day = CURRENT_DATE", (wid, ))
+        return rows[0][0] if rows else 0
+
+    try:
+        r = ask('обычный вопрос боту')
+        check('в режиме bot модель вызывается и отвечает',
+              r.status_code == 200 and (r.get_json() or {}).get('answer', '').startswith('БОТ:')
+              and fake.calls == 1, (r.get_json(), fake.calls))
+
+        r = client.post(f'/api/widgets/{wid}/takeover', json={'visitor': vis_new})
+        check('взятие диалога на себя успешно',
+              r.status_code == 200 and (r.get_json() or {}).get('success'), r.get_data(as_text=True)[:200])
+
+        hits_before = hits()
+        r = ask('вопрос в ручном режиме')
+        body = r.get_json() or {}
+        check('в ручном режиме модель НЕ вызывается', fake.calls == 1, fake.calls)
+        check('гостю приходит «менеджер обрабатывает»',
+              body.get('human') is True and 'Менеджер' in (body.get('answer') or ''), body)
+        check('дневной лимит виджета не тратится', hits() == hits_before, (hits_before, hits()))
+        check('вопрос гостя записан в ленту диалога',
+              _q("SELECT count(*) FROM chat_history WHERE device_id = %s AND role = 'user'",
+                 (f'wid:{wid}:{vis_new}', ))[0][0] == 2)
+        check('нет сохранённого ответа бота в ручном режиме',
+              _q("SELECT count(*) FROM chat_history WHERE device_id = %s AND role = 'assistant'",
+                 (f'wid:{wid}:{vis_new}', ))[0][0] == 1)
+        check('вопрос попал в аналитику (аналитика не слепнет)',
+              _q("SELECT count(*) FROM query_analytics WHERE user_id = %s AND question = %s",
+                 (uid, 'вопрос в ручном режиме'))[0][0] == 1)
+        row = _q("SELECT unread_for_owner, last_role FROM conversations WHERE conv_key = %s",
+                 (f'wid:{wid}:{vis_new}', ))[0]
+        check('диалог помечен непрочитанным и ждёт человека',
+              row[0] == 1 and row[1] == 'user', row)
+
+        body = client.get(f'/api/widgets/{wid}/inbox').get_json() or {}
+        d = [x for x in body.get('dialogs', []) if x['visitor'] == vis_new][0]
+        check('панель показывает ожидающий вопрос',
+              d['unread'] == 1 and d['mode'] == 'human'
+              and d['last_message'].startswith('вопрос в ручном'), d)
+
+        r = client.post(f'/api/widgets/{wid}/release', json={'visitor': vis_new})
+        check('возврат боту успешен', r.status_code == 200, r.get_data(as_text=True)[:120])
+        r = ask('вопрос после возврата')
+        check('после возврата бот снова отвечает',
+              fake.calls == 2 and (r.get_json() or {}).get('answer', '').startswith('БОТ:'),
+              (fake.calls, r.get_json()))
+    finally:
+        web_app.get_user_rag, web_app.rag_ready = real_rag_getter, real_ready
+
+
 def main():
     auth_db.init_db()
     auth_db.init_chat_history()
@@ -401,8 +480,9 @@ def main():
         test_inbox_page(uid, wid, vis1)
         test_mode_http(uid, wid, vis1, vis2)
         test_reply_http(uid, wid, w['key'], vis1, vis2)
+        test_manual_mode(uid, wid, w['key'], 'feedface11223344')
 
-        print('9) Каскад при удалении владельца')
+        print('10) Каскад при удалении владельца')
         auth_db.delete_user(uid)
         check('диалоги удалены вместе с пользователем',
               not _q('SELECT 1 FROM conversations WHERE conv_key LIKE %s', (f'wid:{wid}:%', )))
