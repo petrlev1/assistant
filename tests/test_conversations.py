@@ -492,6 +492,67 @@ def test_race(uid, wid, wkey, vis_race):
         auth_db.set_widget_dialog_mode(uid, wid, vis_race, 'bot')
 
 
+def test_bot_pause(uid, wid, wkey, vis_pause):
+    print('\n12) Пауза бота у всего виджета')
+    import web_app, auth_db
+    client = web_app.app.test_client()
+    pack = {'key': wkey, 'visitor_id': vis_pause, 'site': ''}
+    real_rag_getter, real_ready = web_app.get_user_rag, web_app.rag_ready
+
+    class _Fake:
+        def __init__(self):
+            self.calls = 0
+            self.settings = {}
+
+        def ask_model(self, question, user_prompt=None, history=None):
+            self.calls += 1
+            return 'БОТ: ответ'
+
+    fake = _Fake()
+    web_app.get_user_rag = lambda uid_: fake
+    web_app.rag_ready = True
+    try:
+        check('пауза без логина — 401',
+              client.post(f'/api/widgets/{wid}', json={'bot_paused': True}).status_code == 401)
+
+        with client.session_transaction() as sess:
+            sess['user_id'] = uid
+            sess['username'] = 'testconv'
+
+        uid2, _ = _make_test_user()
+        try:
+            ok, other = auth_db.create_widget(uid2, 'чужой виджет')
+            r = client.post(f'/api/widgets/{other["id"]}', json={'bot_paused': True})
+            check('чужой виджет на паузу не поставить', r.status_code == 404, r.status_code)
+        finally:
+            auth_db.delete_user(uid2)
+
+        r = client.post(f'/api/widgets/{wid}', json={'bot_paused': True})
+        check('пауза сохраняется', r.status_code == 200 and (r.get_json() or {}).get('success'),
+              r.get_data(as_text=True)[:150])
+        ws = [x for x in (client.get('/api/widgets').get_json() or {}).get('widgets', []) if x['id'] == wid]
+        check('пауза видна в списке виджетов', bool(ws) and ws[0]['bot_paused'] is True, ws[:1])
+
+        r = client.post('/api/widget/ask', json=dict(pack, question='вопрос при паузе'))
+        body = r.get_json() or {}
+        check('при паузе модель не вызывается', fake.calls == 0, fake.calls)
+        check('гостю при паузе уходит «менеджер обрабатывает»',
+              body.get('human') is True and 'Менеджер' in (body.get('answer') or ''), body)
+        check('пауза не выдаёт себя за перехват диалога (режим остаётся bot)',
+              auth_db.widget_conversation_mode(uid, wid, vis_pause) == 'bot')
+        check('вопрос при паузе ждёт владельца', _q(
+            "SELECT unread_for_owner FROM conversations WHERE conv_key = %s",
+            (f'wid:{wid}:{vis_pause}', ))[0][0] == 1)
+
+        client.post(f'/api/widgets/{wid}', json={'bot_paused': False})
+        r = client.post('/api/widget/ask', json=dict(pack, question='после снятия паузы'))
+        check('после снятия паузы бот отвечает',
+              fake.calls == 1 and (r.get_json() or {}).get('answer') == 'БОТ: ответ', (fake.calls, r.get_json()))
+    finally:
+        web_app.get_user_rag, web_app.rag_ready = real_rag_getter, real_ready
+        auth_db.update_widget(uid, wid, {'bot_paused': False})
+
+
 def main():
     auth_db.init_db()
     auth_db.init_chat_history()
@@ -566,8 +627,9 @@ def main():
         test_manual_mode(uid, wid, w['key'], 'feedface11223344')
         test_frame_poll(uid, wid, w['key'], vis1)
         test_race(uid, wid, w['key'], 'deadbeef55667788')
+        test_bot_pause(uid, wid, w['key'], 'cafebabe12345678')
 
-        print('12) Каскад при удалении владельца')
+        print('13) Каскад при удалении владельца')
         auth_db.delete_user(uid)
         check('диалоги удалены вместе с пользователем',
               not _q('SELECT 1 FROM conversations WHERE conv_key LIKE %s', (f'wid:{wid}:%', )))

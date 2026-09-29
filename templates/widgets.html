@@ -165,7 +165,8 @@ function load() {
                 +   '<span class="w-dot" style="background:' + esc(w.theme_color) + '"></span>'
                 +   '<span class="w-name">' + esc(w.name) + '</span>'
                 +   '<span class="w-stats">сегодня <b>' + (w.today_hits || 0) + '/' + w.daily_limit + '</b> · всего ' + w.total_requests
-                +     ' · последн. ' + fmtDate(w.last_used_at) + '</span>'
+                +     ' · последн. ' + fmtDate(w.last_used_at)
+                +     (w.bot_paused ? ' · ⏸️ <b>бот на паузе</b>' : '') + '</span>'
                 + '</div>'
                 + '<div class="w-form">'
                 +   '<div><label>Название</label><input type="text" value="' + esc(w.name) + '" data-f="name" maxlength="100"></div>'
@@ -181,6 +182,8 @@ function load() {
                 +   '<button class="btn small" onclick="saveWidget(' + w.id + ')">💾 Сохранить</button>'
                 +   '<button class="btn sec small" onclick="toggleActive(' + w.id + ',' + (w.active ? 'false' : 'true') + ')">'
                 +     (w.active ? '⏸️ Отключить' : '▶️ Включить') + '</button>'
+                +   '<button class="' + (w.bot_paused ? 'btn' : 'btn sec') + ' small" onclick="toggleBotPause(' + w.id + ',' + (w.bot_paused ? 'false' : 'true') + ')">'
+                +     (w.bot_paused ? '🤖 Бот молчит — вернуть бота' : '✋ Пауза бота (отвечаю сам)') + '</button>'
                 +   '<span class="spacer"></span>'
                 +   '<button class="btn danger small" onclick="delWidget(' + w.id + ')">🗑️ Удалить</button>'
                 + '</div></div>';
@@ -228,6 +231,19 @@ function toggleActive(id, val) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: val })
     }).then(function (r) { return r.json(); }).then(function () { load(); });
+}
+
+// Пауза бота: гости продолжают писать, но отвечает человек — в панели «Диалоги».
+// Это не то же, что «Отключить»: отключённый виджет вообще не принимает вопросы.
+function toggleBotPause(id, val) {
+    fetch('/api/widgets/' + id, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bot_paused: val })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.error) { toast(d.error); return; }
+        toast(val ? 'Бот на паузе — отвечайте в панели «Диалоги»' : 'Бот снова отвечает');
+        load();
+    });
 }
 
 function delWidget(id) {

@@ -2268,6 +2268,9 @@ def _widget_sanitize_fields(body):
         out['theme_color'] = c
     if 'active' in body:
         out['active'] = bool(body.get('active'))
+    if 'bot_paused' in body:
+        # Пауза бота: гости пишут как обычно, отвечает человек из панели «Диалоги»
+        out['bot_paused'] = bool(body.get('bot_paused'))
     return out, None
 
 

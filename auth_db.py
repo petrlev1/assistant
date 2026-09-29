@@ -1116,11 +1116,14 @@ def init_widgets():
                 theme_color VARCHAR(9) DEFAULT '#667eea',
                 daily_limit INTEGER DEFAULT 200,
                 active BOOLEAN DEFAULT TRUE,
+                bot_paused BOOLEAN DEFAULT FALSE,
                 total_requests INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_used_at TIMESTAMP
             )
         """)
+        # Виджеты, созданные до появления паузы бота, догоняем отдельной колонкой
+        cur.execute("ALTER TABLE widgets ADD COLUMN IF NOT EXISTS bot_paused BOOLEAN DEFAULT FALSE")
         # Счётчик обращений по дням: дневной лимит снимается атомарно (widget_consume)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS widget_hits (
@@ -1330,7 +1333,7 @@ def list_user_widgets(user_id):
         return []
 
 
-_WIDGET_COLS = {'name', 'allowed_domains', 'daily_limit', 'theme_color', 'active'}
+_WIDGET_COLS = {'name', 'allowed_domains', 'daily_limit', 'theme_color', 'active', 'bot_paused'}
 
 
 def update_widget(user_id, widget_id, fields):
