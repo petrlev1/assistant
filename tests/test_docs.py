@@ -70,6 +70,13 @@ class DocsCase(unittest.TestCase):
             for pattern, description in checks:
                 self.assertFalse(re.search(pattern, html), f'{path.name}: {description}')
 
+    def test_dialogs_page_explains_manual_mode(self):
+        """Страница про диалоги обязана объяснять перехват, ответ и паузу бота."""
+        text = (DOCS_DIR / 'dialogs.md').read_text(encoding='utf-8')
+        for expected in ('Взять на себя', 'Вернуть боту', 'ведёт человек', 'Пауза бота',
+                         'Авто-возврат', 'Менеджер', 'MAX', 'Аналитик'):
+            self.assertIn(expected, text, f'в docs/dialogs.md нет упоминания: {expected}')
+
     def test_site_page_lists_limits_and_update(self):
         """Страница про сайт обязана объяснять лимит страниц, обновление и ограничения."""
         text = (DOCS_DIR / 'site.md').read_text(encoding='utf-8')

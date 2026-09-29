@@ -419,6 +419,7 @@ DOCS_PAGES = [
     ('analytics', 'Аналитика запросов'),
     ('widget', 'Виджет на сайт'),
     ('max', 'Бот в мессенджере MAX'),
+    ('dialogs', 'Диалоги и ответы вручную'),
     ('faq', 'Частые вопросы'),
 ]
 _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs')
