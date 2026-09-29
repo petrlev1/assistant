@@ -206,9 +206,11 @@ def test_inbox_page(uid, wid, vis1):
     r = client.get('/inbox')
     body = r.get_data(as_text=True)
     check('/inbox отдаёт страницу панели',
-          r.status_code == 200 and 'Диалоги гостей' in body and '/inbox' in body, r.status_code)
-    check('на странице есть выбор виджета и поле ответа',
+          r.status_code == 200 and '📥 Диалоги' in body and '/inbox' in body, r.status_code)
+    check('на странице есть выбор источника и поле ответа',
           'id="wsel"' in body and 'id="reply"' in body and 'id="sendbtn"' in body, None)
+    check('панель умеет переключаться на MAX-канал',
+          '/api/max/' in body and "wid:'" in body and 'srcKind' in body, None)
 
     check('счётчик непрочитанного пуст', auth_db.count_unread_conversations(uid) == 0,
           auth_db.count_unread_conversations(uid))

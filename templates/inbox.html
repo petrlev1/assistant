@@ -115,7 +115,7 @@
 
     <div class="wrap">
         <div class="topbar">
-            <h2>📥 Диалоги гостей</h2>
+            <h2>📥 Диалоги</h2>
             <span class="meta" id="total"></span>
             <span class="spacer"></span>
             <select id="wsel" onchange="pickWidget()"></select>
@@ -161,6 +161,16 @@ var POLL_MS = 5000, LIST_MS = 15000;
 // держат открытой в фоне, поэтому «ждёт ответа» должно быть видно и слышно.
 var SOUND = localStorage.getItem('inbox_sound') !== '0';
 var lastUnread = null;
+// Источник диалогов: 'wid:<id>' — виджет на сайте, 'max:<id>' — бот в MAX.
+// Оба канала лежат в одном реестре, поэтому панель просто переключает адрес.
+var src = '', maxInfo = null;
+
+function srcKind() { return (src || '').split(':')[0]; }
+function srcId() { return (src || '').split(':')[1] || ''; }
+function ep(action) {
+    return srcKind() === 'max' ? '/api/max/' + action
+                               : '/api/widgets/' + srcId() + '/' + action;
+}
 
 function title(unread) {
     document.title = (unread ? '(' + unread + ') ' : '') + 'Диалоги — RAGSTONE';
@@ -209,30 +219,50 @@ function clock(ts) {
 }
 
 function loadWidgets() {
-    fetch('/api/widgets').then(function (r) { return r.json(); }).then(function (d) {
-        widgets = d.widgets || [];
+    // Список источников: виджеты владельца + его MAX-бот (если подключён)
+    Promise.all([
+        fetch('/api/widgets').then(function (r) { return r.json(); }).catch(function () { return {}; }),
+        fetch('/api/max/inbox').then(function (r) { return r.json(); }).catch(function () { return {}; })
+    ]).then(function (res) {
+        widgets = (res[0] || {}).widgets || [];
+        maxInfo = (res[1] && res[1].channel) ? res[1].channel : null;
         var sel = document.getElementById('wsel');
-        if (!widgets.length) {
-            sel.innerHTML = '<option>виджетов нет</option>';
+        var opts = widgets.map(function (w) {
+            return '<option value="wid:' + w.id + '">🪶 ' + esc(w.name) +
+                   (w.active ? '' : ' (выключен)') + '</option>';
+        });
+        if (maxInfo) {
+            opts.push('<option value="max:' + maxInfo.id + '">🤖 MAX — ' +
+                      esc(maxInfo.bot_name || maxInfo.bot_username || 'бот') +
+                      (maxInfo.active ? '' : ' (выключен)') + '</option>');
+        }
+        if (!opts.length) {
+            sel.innerHTML = '<option>каналов нет</option>';
             document.getElementById('dlgs').innerHTML =
-                '<div class="empty">Виджетов нет — создайте его на странице 🪶 Виджет.</div>';
+                '<div class="empty">Каналов нет — подключите виджет на странице 🪶 Виджет или 🤖 MAX-бот.</div>';
             return;
         }
-        sel.innerHTML = widgets.map(function (w) {
-            return '<option value="' + w.id + '">' + esc(w.name) + (w.active ? '' : ' (выключен)') + '</option>';
-        }).join('');
+        sel.innerHTML = opts.join('');
         var saved = localStorage.getItem('inbox_widget');
-        if (saved && widgets.some(function (w) { return String(w.id) === saved; })) sel.value = saved;
+        if (saved) {
+            Array.prototype.some.call(sel.options, function (o) {
+                if (o.value === saved) { sel.value = saved; return true; }
+                return false;
+            });
+        }
+        src = sel.value;
         loadDialogs();
     });
 }
 function pickWidget() {
-    localStorage.setItem('inbox_widget', document.getElementById('wsel').value);
+    src = document.getElementById('wsel').value;
+    localStorage.setItem('inbox_widget', src);
     cur = null; lastId = 0;
     composer(false);
     document.getElementById('chead').innerHTML = '<span class="who">Диалог не выбран</span>' +
-        '<span class="meta">выберите гостя слева</span>';
-    document.getElementById('thread').innerHTML = '<div class="empty">Здесь появится переписка гостя с ботом.</div>';
+        '<span class="meta">выберите собеседника слева</span>';
+    document.getElementById('thread').innerHTML = '<div class="empty">Здесь появится переписка собеседника с ботом.</div>';
+    lastUnread = null;          // у нового источника свой счётчик непрочитанных
     loadDialogs();
 }
 function setFilter(f) {
@@ -244,9 +274,8 @@ function setFilter(f) {
 }
 
 function loadDialogs() {
-    var wid = document.getElementById('wsel').value;
-    if (!wid || !widgets.length) return;
-    fetch('/api/widgets/' + wid + '/inbox').then(function (r) { return r.json(); }).then(function (d) {
+    if (!src) return;
+    fetch(ep('inbox')).then(function (r) { return r.json(); }).then(function (d) {
         if (d.error) { toast(d.error); return; }
         dialogs = d.dialogs || [];
         var un = d.unread_total || 0;
@@ -267,7 +296,8 @@ function renderDialogs() {
     });
     if (!list.length) { box.innerHTML = '<div class="empty">Ничего нет в этом фильтре.</div>'; return; }
     box.innerHTML = list.map(function (d) {
-        var tags = '<span class="tag' + (d.mode === 'human' ? ' human' : '') + '">' +
+        var tags = (srcKind() === 'max' ? '<span class="tag">MAX</span>' : '')
+            + '<span class="tag' + (d.mode === 'human' ? ' human' : '') + '">' +
             (d.mode === 'human' ? '🧑 ведёт человек' : '🤖 бот') + '</span>';
         if (d.last_role === 'user') tags += '<span class="tag wait">ждёт ответа</span>';
         return '<div class="dlg' + (cur && cur.visitor === d.visitor ? ' on' : '') + '" onclick="openDialog(\'' +
@@ -302,8 +332,8 @@ function head(d) {
     var toggle = d.mode === 'human'
         ? '<button class="btn sec small" onclick="setMode(\'bot\')" title="Бот снова начнёт отвечать гостю">🤖 Вернуть боту</button>'
         : '<button class="btn small" onclick="setMode(\'human\')" title="Бот в этом диалоге замолчит, отвечаете вы">🧑 Взять на себя</button>';
-    return '<span class="who">Гость #' + esc(d.code) + '</span>'
-        + '<span class="meta">' + esc(d.visitor) + '</span>'
+    return '<span class="who">' + (srcKind() === 'max' ? 'Собеседник #' : 'Гость #') + esc(d.code) + '</span>'
+        + '<span class="meta">' + (srcKind() === 'max' ? 'MAX ' : '') + esc(d.visitor) + '</span>'
         + '<span class="meta">сообщений: ' + d.total + '</span>'
         + '<span class="tag' + (d.mode === 'human' ? ' human' : '') + '">' +
           (d.mode === 'human' ? '🧑 ведёт человек' : '🤖 отвечает бот') + '</span>'
@@ -312,8 +342,7 @@ function head(d) {
 
 function setMode(mode) {
     if (!cur) return;
-    var wid = document.getElementById('wsel').value;
-    fetch('/api/widgets/' + wid + '/' + (mode === 'human' ? 'takeover' : 'release'), {
+    fetch(ep(mode === 'human' ? 'takeover' : 'release'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ visitor: cur.visitor })
     }).then(function (r) { return r.json(); }).then(function (d) {
@@ -330,9 +359,8 @@ function sendReply() {
     if (!cur) { toast('Сначала выберите диалог'); return; }
     var box = document.getElementById('reply'), text = box.value.trim();
     if (!text) return;
-    var wid = document.getElementById('wsel').value;
     document.getElementById('sendbtn').disabled = true;
-    fetch('/api/widgets/' + wid + '/reply', {
+    fetch(ep('reply'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ visitor: cur.visitor, text: text })
     }).then(function (r) { return r.json(); }).then(function (d) {
@@ -361,8 +389,7 @@ function bubble(m) {
 
 function fetchDialog() {
     if (!cur) return;
-    var wid = document.getElementById('wsel').value;
-    var url = '/api/widgets/' + wid + '/dialog?visitor=' + encodeURIComponent(cur.visitor);
+    var url = ep('dialog') + '?visitor=' + encodeURIComponent(cur.visitor);
     if (lastId) url += '&after_id=' + lastId;
     fetch(url).then(function (r) { return r.json(); }).then(function (d) {
         if (d.error) { toast(d.error); return; }
