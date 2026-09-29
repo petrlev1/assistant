@@ -119,6 +119,7 @@
             <span class="meta" id="total"></span>
             <span class="spacer"></span>
             <select id="wsel" onchange="pickWidget()"></select>
+            <button class="btn sec" id="sndbtn" onclick="toggleSound()" title="Звук новых сообщений">🔔</button>
             <button class="btn sec" onclick="loadDialogs()">🔄 Обновить</button>
         </div>
 
@@ -156,8 +157,38 @@
 var ORIGIN = location.origin;
 var widgets = [], dialogs = [], cur = null, lastId = 0, filter = 'all';
 var POLL_MS = 5000, LIST_MS = 15000;
+// Звук новых сообщений и счётчик непрочитанных в заголовке вкладки: панель часто
+// держат открытой в фоне, поэтому «ждёт ответа» должно быть видно и слышно.
+var SOUND = localStorage.getItem('inbox_sound') !== '0';
+var lastUnread = null;
+
+function title(unread) {
+    document.title = (unread ? '(' + unread + ') ' : '') + 'Диалоги — RAGSTONE';
+}
+function toggleSound() {
+    SOUND = !SOUND;
+    localStorage.setItem('inbox_sound', SOUND ? '1' : '0');
+    document.getElementById('sndbtn').textContent = SOUND ? '🔔' : '🔇';
+    toast(SOUND ? 'Звук новых сообщений включён' : 'Звук выключен');
+}
+function beep() {
+    if (!SOUND) return;
+    try {
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        var ctx = new Ctx(), o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = 880;
+        g.gain.value = 0.05;
+        o.connect(g); g.connect(ctx.destination);
+        o.start();
+        setTimeout(function () { o.stop(); ctx.close(); }, 180);
+    } catch (e) {}
+}
 
 function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+document.addEventListener('DOMContentLoaded', function () {
+    var b = document.getElementById('sndbtn');
+    if (b) b.textContent = SOUND ? '🔔' : '🔇';
+});
 function toast(msg) {
     var t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
     setTimeout(function () { t.classList.remove('show'); }, 2200);
@@ -220,6 +251,9 @@ function loadDialogs() {
         dialogs = d.dialogs || [];
         var un = d.unread_total || 0;
         document.getElementById('total').textContent = dialogs.length + ' диалог(ов), непрочитанных: ' + un;
+        if (lastUnread !== null && un > lastUnread) beep();   // первый опрос молчит
+        lastUnread = un;
+        title(un);
         renderDialogs();
     });
 }

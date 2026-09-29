@@ -173,6 +173,8 @@ function load() {
                 +   '<div><label>Дневной лимит вопросов (всех посетителей)</label><input type="number" value="' + w.daily_limit + '" data-f="daily_limit" min="1" max="10000"></div>'
                 +   '<div><label>Разрешённые домены (через запятую; пусто = любой сайт; *.shop.ru — с поддоменами)</label>'
                 +     '<input type="text" value="' + esc(w.allowed_domains) + '" data-f="allowed_domains" placeholder="example.ru, *.shop.ru"></div>'
+                +   '<div><label>Авто-возврат бота, мин (0 — диалог остаётся у человека)</label>'
+                +     '<input type="number" value="' + (w.bot_idle_minutes || 0) + '" data-f="bot_idle_minutes" min="0" max="1440"></div>'
                 +   '<div><label>Цвет кнопки</label><input type="color" value="' + esc(w.theme_color) + '" data-f="theme_color" style="width:100%;height:37px;border:1px solid #d8dbe6;border-radius:8px;background:#fff;cursor:pointer"></div>'
                 +   '<div class="w-code"><label>Код вставки на сайт</label>'
                 +     '<div class="codebox"><pre>' + esc(embedCode(w)) + '</pre>'

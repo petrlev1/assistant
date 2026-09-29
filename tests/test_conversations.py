@@ -553,6 +553,68 @@ def test_bot_pause(uid, wid, wkey, vis_pause):
         auth_db.update_widget(uid, wid, {'bot_paused': False})
 
 
+def test_auto_return(uid, wid, wkey, vis_idle):
+    print('\n13) Авто-возврат бота к застоявшемуся диалогу')
+    import web_app, auth_db
+    client = web_app.app.test_client()
+    pack = {'key': wkey, 'visitor_id': vis_idle, 'site': ''}
+    real_rag_getter, real_ready = web_app.get_user_rag, web_app.rag_ready
+    scope = f'wid:{wid}:{vis_idle}'
+
+    class _Fake:
+        def __init__(self):
+            self.calls = 0
+            self.settings = {}
+
+        def ask_model(self, question, user_prompt=None, history=None):
+            self.calls += 1
+            return 'БОТ: ответ'
+
+    fake = _Fake()
+    web_app.get_user_rag = lambda uid_: fake
+    web_app.rag_ready = True
+    try:
+        with client.session_transaction() as sess:
+            sess['user_id'] = uid
+            sess['username'] = 'testconv'
+        check('авто-возврат не число — 400',
+              client.post(f'/api/widgets/{wid}', json={'bot_idle_minutes': 'abc'}).status_code == 400)
+
+        client.post(f'/api/widgets/{wid}', json={'bot_idle_minutes': 60})    # 1 час: не сработает
+        r = client.post('/api/widget/ask', json=dict(pack, question='первый вопрос'))
+        check('первый вопрос отвечает бот', fake.calls == 1 and r.status_code == 200, r.get_json())
+
+        client.post(f'/api/widgets/{wid}', json={'bot_idle_minutes': 1})
+        client.post(f'/api/widgets/{wid}/takeover', json={'visitor': vis_idle})
+        r = client.post('/api/widget/ask', json=dict(pack, question='вопрос сразу после перехвата'))
+        check('свежий диалог человека авто-возврат не трогает',
+              fake.calls == 1 and (r.get_json() or {}).get('human') is True, (fake.calls, r.get_json()))
+
+        # Гость вернулся через два часа тишины — диалог снова у бота
+        _q("UPDATE conversations SET last_message_at = CURRENT_TIMESTAMP - INTERVAL '2 hours' "
+           "WHERE conv_key = %s", (scope, ))
+        r = client.post('/api/widget/ask', json=dict(pack, question='вопрос через два часа'))
+        body = r.get_json() or {}
+        check('застоявшийся диалог возвращается боту',
+              fake.calls == 2 and not body.get('human') and body.get('answer') == 'БОТ: ответ',
+              (fake.calls, body))
+        check('режим в реестре снова bot',
+              auth_db.widget_conversation_mode(uid, wid, vis_idle) == 'bot')
+
+        # Авто-возврат выключен: диалог остаётся у человека сколько угодно
+        client.post(f'/api/widgets/{wid}', json={'bot_idle_minutes': 0})
+        client.post(f'/api/widgets/{wid}/takeover', json={'visitor': vis_idle})
+        _q("UPDATE conversations SET last_message_at = CURRENT_TIMESTAMP - INTERVAL '5 hours' "
+           "WHERE conv_key = %s", (scope, ))
+        r = client.post('/api/widget/ask', json=dict(pack, question='вопрос при выключенном авто-возврате'))
+        check('при bot_idle_minutes=0 диалог остаётся у человека',
+              fake.calls == 2 and (r.get_json() or {}).get('human') is True, (fake.calls, r.get_json()))
+    finally:
+        web_app.get_user_rag, web_app.rag_ready = real_rag_getter, real_ready
+        auth_db.update_widget(uid, wid, {'bot_idle_minutes': 0})
+        auth_db.set_widget_dialog_mode(uid, wid, vis_idle, 'bot')
+
+
 def main():
     auth_db.init_db()
     auth_db.init_chat_history()
@@ -628,8 +690,9 @@ def main():
         test_frame_poll(uid, wid, w['key'], vis1)
         test_race(uid, wid, w['key'], 'deadbeef55667788')
         test_bot_pause(uid, wid, w['key'], 'cafebabe12345678')
+        test_auto_return(uid, wid, w['key'], 'abcdef0199aabbcc')
 
-        print('13) Каскад при удалении владельца')
+        print('14) Каскад при удалении владельца')
         auth_db.delete_user(uid)
         check('диалоги удалены вместе с пользователем',
               not _q('SELECT 1 FROM conversations WHERE conv_key LIKE %s', (f'wid:{wid}:%', )))

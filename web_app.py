@@ -20,7 +20,7 @@ from auth_db import init_db, register_user, login_user, init_chat_history, save_
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      get_widget, sync_conversations, list_widget_conversations,
                      count_unread_conversations, set_widget_dialog_mode,
-                     widget_conversation_mode,
+                     widget_conversation_mode, widget_conversation_state,
                      add_widget_dialog_message,
                      get_widget_dialog,
                      delete_widget, widget_consume, get_widget_by_key, get_widget_history,
@@ -2155,10 +2155,21 @@ _MANUAL_WAIT = 'Менеджер уже смотрит ваш вопрос — �
 
 
 def _widget_manual(w, visitor):
-    """Бот в этом диалоге молчит: диалог ведёт человек или бот на паузе у виджета."""
+    """Бот в этом диалоге молчит: диалог ведёт человек или бот на паузе у виджета.
+
+    Если включён авто-возврат (bot_idle_minutes), гость, написавший после долгой
+    тишины, снова получает ответ бота: менеджер мог просто забыть вернуть диалог.
+    """
     if w.get('bot_paused'):
         return True
-    return widget_conversation_mode(w['user_id'], w['id'], visitor) == 'human'
+    mode, idle = widget_conversation_state(w['user_id'], w['id'], visitor)
+    if mode != 'human':
+        return False
+    minutes = int(w.get('bot_idle_minutes') or 0)
+    if minutes > 0 and idle is not None and idle > minutes * 60:
+        set_widget_dialog_mode(w['user_id'], w['id'], visitor, 'bot')
+        return False
+    return True
 
 
 def _widget_guest_waiting(w, visitor, question):
@@ -2271,6 +2282,12 @@ def _widget_sanitize_fields(body):
     if 'bot_paused' in body:
         # Пауза бота: гости пишут как обычно, отвечает человек из панели «Диалоги»
         out['bot_paused'] = bool(body.get('bot_paused'))
+    if 'bot_idle_minutes' in body:
+        try:
+            idle = int(body.get('bot_idle_minutes'))
+        except (TypeError, ValueError):
+            return None, 'Авто-возврат бота — целое число минут'
+        out['bot_idle_minutes'] = max(0, min(idle, 1440))   # 0 = диалог остаётся у человека
     return out, None
 
 

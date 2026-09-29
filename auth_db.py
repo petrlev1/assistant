@@ -1117,6 +1117,7 @@ def init_widgets():
                 daily_limit INTEGER DEFAULT 200,
                 active BOOLEAN DEFAULT TRUE,
                 bot_paused BOOLEAN DEFAULT FALSE,
+                bot_idle_minutes INTEGER DEFAULT 0,
                 total_requests INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_used_at TIMESTAMP
@@ -1124,6 +1125,7 @@ def init_widgets():
         """)
         # Виджеты, созданные до появления паузы бота, догоняем отдельной колонкой
         cur.execute("ALTER TABLE widgets ADD COLUMN IF NOT EXISTS bot_paused BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE widgets ADD COLUMN IF NOT EXISTS bot_idle_minutes INTEGER DEFAULT 0")
         # Счётчик обращений по дням: дневной лимит снимается атомарно (widget_consume)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS widget_hits (
@@ -1227,6 +1229,31 @@ def add_widget_dialog_message(user_id, widget_id, visitor, role, message, unread
     except Exception as e:
         logger.error(f"Ошибка записи реплики в диалог виджета #{widget_id}: {e}")
         return None
+
+
+def widget_conversation_state(user_id, widget_id, visitor):
+    """Состояние диалога виджета: (mode, секунд с последней реплики или None).
+
+    Нет записи в реестре — ('bot', None): диалог ещё никто не вёл.
+    """
+    scope = 'wid:%d:%s' % (int(widget_id or 0), visitor or '')
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Простой считает сама СУБД: и часы одни, и пояса сходятся
+        cur.execute("SELECT mode, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - last_message_at)) "
+                    "FROM conversations WHERE conv_key = %s AND owner_user_id = %s",
+                    (scope, user_id))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return 'bot', None
+        idle = max(0.0, float(row[1])) if row[1] is not None else None
+        return (row[0] or 'bot'), idle
+    except Exception as e:
+        logger.error(f"Ошибка чтения состояния диалога виджета #{widget_id}: {e}")
+        return 'bot', None
 
 
 def widget_conversation_mode(user_id, widget_id, visitor):
@@ -1333,7 +1360,8 @@ def list_user_widgets(user_id):
         return []
 
 
-_WIDGET_COLS = {'name', 'allowed_domains', 'daily_limit', 'theme_color', 'active', 'bot_paused'}
+_WIDGET_COLS = {'name', 'allowed_domains', 'daily_limit', 'theme_color', 'active',
+                'bot_paused', 'bot_idle_minutes'}
 
 
 def update_widget(user_id, widget_id, fields):
