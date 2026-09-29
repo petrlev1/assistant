@@ -409,6 +409,89 @@ def test_manual_mode(uid, wid, wkey, vis_new):
         web_app.get_user_rag, web_app.rag_ready = real_rag_getter, real_ready
 
 
+def test_frame_poll(uid, wid, wkey, vis1):
+    print('\n10) Лента виджета: догрузка after_id, роль operator, опрос в кадре')
+    import web_app
+    client = web_app.app.test_client()
+    base = f'/api/widget/history?key={wkey}&visitor_id={vis1}'
+
+    d = client.get(base).get_json() or {}
+    msgs = d.get('messages') or []
+    check('история отдаёт id сообщений и признак ручного режима',
+          bool(msgs) and all('id' in m for m in msgs) and 'human' in d, list(d.keys()))
+    last = msgs[-1]['id']
+    d2 = client.get(base + f'&after_id={last}').get_json() or {}
+    check('after_id без новых сообщений — пусто', d2.get('messages') == [], d2.get('messages'))
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = uid
+        sess['username'] = 'testconv'
+    client.post(f'/api/widgets/{wid}/reply', json={'visitor': vis1, 'text': 'Ответ через опрос ленты'})
+
+    d3 = client.get(base + f'&after_id={last}').get_json() or {}
+    new = d3.get('messages') or []
+    check('догрузка приносит ответ менеджера без перезагрузки страницы',
+          len(new) == 1 and new[0]['role'] == 'operator'
+          and new[0]['message'] == 'Ответ через опрос ленты', new)
+    check('лента помечает, что отвечает человек', d3.get('human') is True, d3.get('human'))
+
+    page = client.get(f'/widget/{wkey}').get_data(as_text=True)
+    check('кадр виджета рисует роль менеджера отдельным пузырём',
+          'Менеджер' in page and 'msg.op' in page, None)
+    check('кадр опрашивает ленту по after_id',
+          'setInterval(poll' in page and 'after_id' in page, None)
+
+
+def test_race(uid, wid, wkey, vis_race):
+    print('\n11) Перехват во время генерации: опоздавший ответ бота не доходит')
+    import web_app, auth_db
+    client = web_app.app.test_client()
+    pack = {'key': wkey, 'visitor_id': vis_race, 'site': ''}
+    real_rag_getter, real_ready = web_app.get_user_rag, web_app.rag_ready
+
+    class _Plain:
+        def __init__(self):
+            self.calls = 0
+            self.settings = {}
+
+        def ask_model(self, question, user_prompt=None, history=None):
+            self.calls += 1
+            return 'БОТ: ответ'
+
+    plain = _Plain()
+    web_app.get_user_rag = lambda uid_: plain
+    web_app.rag_ready = True
+    try:
+        r = client.post('/api/widget/ask', json=dict(pack, question='первый вопрос'))
+        check('обычный ответ бота проходит',
+              (r.get_json() or {}).get('answer') == 'БОТ: ответ', r.get_json())
+        # Панель досыпает реестр — как в жизни, когда владелец открыл диалоги
+        auth_db.sync_conversations('wid', 'wid:%d:%%' % wid)
+
+        class _Racing(_Plain):
+            def ask_model(self, question, user_prompt=None, history=None):
+                self.calls += 1
+                # Менеджер берёт диалог на себя, пока модель «думает»
+                auth_db.set_widget_dialog_mode(uid, wid, vis_race, 'human', operator_user_id=uid)
+                return 'БОТ: опоздавший ответ'
+
+        racing = _Racing()
+        web_app.get_user_rag = lambda uid_: racing
+        r = client.post('/api/widget/ask', json=dict(pack, question='вопрос в момент перехвата'))
+        body = r.get_json() or {}
+        check('гостю уходит «менеджер смотрит вопрос» вместо опоздавшего ответа',
+              body.get('human') is True and 'Менеджер' in (body.get('answer') or ''), body)
+        check('опоздавший ответ бота не сохранён в ленту',
+              _q("SELECT count(*) FROM chat_history WHERE device_id = %s AND role = 'assistant'",
+                 (f'wid:{wid}:{vis_race}', ))[0][0] == 1, None)
+        check('вопрос гостя всё равно записан',
+              _q("SELECT count(*) FROM chat_history WHERE device_id = %s AND role = 'user'",
+                 (f'wid:{wid}:{vis_race}', ))[0][0] == 2, None)
+    finally:
+        web_app.get_user_rag, web_app.rag_ready = real_rag_getter, real_ready
+        auth_db.set_widget_dialog_mode(uid, wid, vis_race, 'bot')
+
+
 def main():
     auth_db.init_db()
     auth_db.init_chat_history()
@@ -481,8 +564,10 @@ def main():
         test_mode_http(uid, wid, vis1, vis2)
         test_reply_http(uid, wid, w['key'], vis1, vis2)
         test_manual_mode(uid, wid, w['key'], 'feedface11223344')
+        test_frame_poll(uid, wid, w['key'], vis1)
+        test_race(uid, wid, w['key'], 'deadbeef55667788')
 
-        print('10) Каскад при удалении владельца')
+        print('12) Каскад при удалении владельца')
         auth_db.delete_user(uid)
         check('диалоги удалены вместе с пользователем',
               not _q('SELECT 1 FROM conversations WHERE conv_key LIKE %s', (f'wid:{wid}:%', )))

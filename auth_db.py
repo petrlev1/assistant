@@ -1397,16 +1397,27 @@ def widget_consume(widget_id):
         return False
 
 
-def get_widget_history(user_id, device_scope, limit=100):
-    """История чата одного посетителя виджета (строго своя область, без fallback на 'web')."""
+def get_widget_history(user_id, device_scope, limit=100, after_id=None):
+    """История чата одного посетителя виджета (строго своя область, без fallback на 'web').
+
+    after_id — отдать только сообщения новее указанного id (гость опрашивает ленту,
+    чтобы увидеть ответ менеджера, не перезагружая страницу).
+    """
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(
-            "SELECT id, role, message, created_at FROM chat_history "
-            "WHERE user_id = %s AND device_id = %s ORDER BY created_at ASC LIMIT %s",
-            (user_id, device_scope, limit),
-        )
+        if after_id is not None:
+            cur.execute(
+                "SELECT id, role, message, created_at FROM chat_history "
+                "WHERE user_id = %s AND device_id = %s AND id > %s ORDER BY id ASC LIMIT %s",
+                (user_id, device_scope, int(after_id), limit),
+            )
+        else:
+            cur.execute(
+                "SELECT id, role, message, created_at FROM chat_history "
+                "WHERE user_id = %s AND device_id = %s ORDER BY created_at ASC LIMIT %s",
+                (user_id, device_scope, limit),
+            )
         messages = [dict(m) for m in cur.fetchall()]
         cur.close()
         conn.close()

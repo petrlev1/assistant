@@ -2007,11 +2007,15 @@ _WIDGET_SOURCES_RE = re.compile(r'\n*Источники:.*$', re.S)
 _WIDGET_HEX_RE = re.compile(r'#[0-9a-fA-F]{6}')
 
 
-def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_sources=True):
+def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_sources=True,
+                    still_wanted=None):
     """Единый путь ответа внешнему собеседнику: виджет на сайте и чат-бот в MAX.
 
     Диалог изолирован по device_id=scope — у каждого собеседника своя лента,
     без fallback на основной чат владельца ('web').
+    still_wanted — необязательная проверка после генерации: пока модель думала,
+    диалог могли забрать на себя, и тогда опоздавший ответ бота не сохраняется
+    и не отдаётся собеседнику (иначе бот говорит поверх менеджера).
     Возвращает (answer, err): при ошибке answer=None, err — текст для собеседника.
     """
     try:
@@ -2022,6 +2026,12 @@ def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_s
                                 provider=provider, model=model)
         history = _chat_context(user_id, scope, external=True)
         answer = user_rag.ask_model(question, user_prompt=get_user_prompt(user_id), history=history)
+        if still_wanted is not None and not still_wanted():
+            # Диалог перехватили, пока модель думала: ответ бота устарел
+            chat_logger.log_message(label, user_id,
+                                    '(ответ бота отброшен: диалог взял менеджер)',
+                                    is_bot=True, provider=provider, model=model)
+            return None, None
         # Внешнему собеседнику источники не показываем (файлы базы — внутренние)
         if strip_sources:
             answer = _WIDGET_SOURCES_RE.sub('', answer or '').strip()
@@ -2132,8 +2142,13 @@ def widget_history_api():
         return err
     scope = _widget_scope(w, visitor)
     started = get_session_start(w['user_id'], scope)
-    return jsonify({'messages': _with_ts(get_widget_history(w['user_id'], scope)),
-                    'session_started_at': started.timestamp() if started else 0})
+    return jsonify({
+        # Гость опрашивает ленту с after_id, чтобы получить ответ менеджера без перезагрузки
+        'messages': _with_ts(get_widget_history(w['user_id'], scope,
+                                               after_id=request.args.get('after_id', type=int))),
+        'session_started_at': started.timestamp() if started else 0,
+        'human': widget_conversation_mode(w['user_id'], w['id'], visitor) == 'human',
+    })
 
 
 _MANUAL_WAIT = 'Менеджер уже смотрит ваш вопрос — ответ придёт сюда же.'
@@ -2181,10 +2196,14 @@ def widget_ask():
     if not rag_ready:
         return jsonify({'answer': 'Ассистент ещё просыпается. Попробуйте через минуту...'})
     answer, err_msg = _visitor_answer(w['user_id'], question, _widget_scope(w, visitor),
-                                      "Виджет «%s»" % w['name'], bot_label='Бот (виджет)')
+                                      "Виджет «%s»" % w['name'], bot_label='Бот (виджет)',
+                                      still_wanted=lambda: not _widget_manual(w, visitor))
     if err_msg:
         logger.error(f"Виджет «{w['name']}»: {err_msg}")
         return jsonify({'error': err_msg}), 500
+    if answer is None:
+        # Диалог перехватили, пока модель думала — ответ бота не отдаём
+        return jsonify({'answer': _MANUAL_WAIT, 'human': True})
     return jsonify({'answer': answer})
 
 
