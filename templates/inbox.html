@@ -251,6 +251,9 @@ function loadWidgets() {
             });
         }
         src = sel.value;
+        document.getElementById('reply').placeholder = srcKind() === 'max'
+            ? 'Ответ собеседнику в MAX — Enter, чтобы отправить'
+            : 'Ответ гостю — Enter, чтобы отправить';
         loadDialogs();
     });
 }
@@ -263,6 +266,9 @@ function pickWidget() {
         '<span class="meta">выберите собеседника слева</span>';
     document.getElementById('thread').innerHTML = '<div class="empty">Здесь появится переписка собеседника с ботом.</div>';
     lastUnread = null;          // у нового источника свой счётчик непрочитанных
+    document.getElementById('reply').placeholder = srcKind() === 'max'
+        ? 'Ответ собеседнику в MAX — Enter, чтобы отправить'
+        : 'Ответ гостю — Enter, чтобы отправить';
     loadDialogs();
 }
 function setFilter(f) {
@@ -382,7 +388,8 @@ function sendReply() {
 
 function bubble(m) {
     var cls = m.role === 'user' ? 'user' : (m.role === 'operator' ? 'operator' : 'bot');
-    var who = m.role === 'user' ? 'Гость' : (m.role === 'operator' ? 'Менеджер' : 'Бот');
+    var who = m.role === 'user' ? (srcKind() === 'max' ? 'Собеседник' : 'Гость')
+                                : (m.role === 'operator' ? 'Менеджер' : 'Бот');
     return '<div class="msg ' + cls + '"><div class="who-row">' + who + ' · ' + clock(m.ts) + '</div>'
         + esc(m.message) + '</div>';
 }
@@ -398,7 +405,7 @@ function fetchDialog() {
         if (!lastId) {
             document.getElementById('chead').innerHTML = head(d.dialog || {});
             thread.innerHTML = msgs.length ? msgs.map(bubble).join('')
-                : '<div class="empty">Гость ещё ничего не написал.</div>';
+                : '<div class="empty">Собеседник ещё ничего не написал.</div>';
         } else if (msgs.length) {
             var box = document.getElementById('thread');
             var nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
