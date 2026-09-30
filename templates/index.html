@@ -500,6 +500,8 @@
             box-sizing: border-box;
         }
         .prompt-body textarea:focus { outline: none; border-color: #2196f3; }
+        /* Общее приветствие — короткая фраза: не растягиваем его на всю панель */
+        .prompt-body textarea#commonGreeting { flex: 0 0 auto; min-height: 72px; max-height: 180px; resize: vertical; }
         .prompt-hint {
             font-size: 12px;
             color: #777;
