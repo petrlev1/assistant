@@ -8,6 +8,13 @@
                           → дальше штатный конвейер (add_document + переиндексация),
                             который сам создаёт pkl эмбеддингов и BM25.
 
+    URL → [обход страниц] → строки-факты → Database/user_N/site_<домен>_<раздел>.txt
+
+Режим раздела (`section=True`, галочка «Только этот раздел»): обходятся не все
+страницы сайта, а только те, чей путь лежит под путём введённого адреса, — у раздела
+свой файл БЗ, своя запись в «Документах» и свой pkl эмбеддингов. Кэш страниц общий
+на домен, поэтому обход раздела не перекачивает страницы, уже взятые общим обходом.
+
 Правила сборки TXT (совпадают с форматом БЗ проекта, см. навык
 rag-knowledge-base-formatting): одна строка = один факт, 40–250 символов,
 ключевые слова в начале строки, строки-разделители начинаются с «#» (система их
@@ -17,7 +24,8 @@ rag-knowledge-base-formatting): одна строка = один факт, 40–
 Повторный запуск по тому же URL инкрементальный: страницы запрашиваются с
 If-None-Match / If-Modified-Since, ответ 304 — текст берётся из кэша, txt
 перезаписывается целиком, эмбеддинги пересчитывает существующий конвейер
-(pkl по хэшу фрагментов: не изменилось — берётся из кэша).
+(сначала по хэшу всего файла: не изменилось — берётся готовый pkl; если файл
+изменился — по построчному кэшу векторов, считаются только новые строки).
 
 Зависимостей вне stdlib нет (requests уже в проекте). Если в окружении есть
 trafilatura, она используется для выделения основного текста вместо встроенного
@@ -47,8 +55,9 @@ logger = logging.getLogger(__name__)
 # === Параметры обхода (значения по умолчанию; лимит страниц может приходить из
 # настроек приложения app_settings.site_pages_limit или из запроса) ===
 
-DEFAULT_PAGE_LIMIT = 50
-MAX_PAGE_LIMIT = 300
+DEFAULT_PAGE_LIMIT = 300        # страниц за один обход (раздел каталога в 50 не влезал)
+MAX_PAGE_LIMIT = 1000           # потолок для настройки app_settings.site_pages_limit
+SECTION_SLUG_MAX_CHARS = 60     # длина слага раздела в имени файла БЗ
 MAX_LINES = 10000               # больше строк с одного сайта не берём
 MAX_LINE_CHARS = 250            # длиннее — режем по предложениям
 MIN_LINE_CHARS = 40             # короче — только с контекстом раздела, иначе мусор-навигация
@@ -109,6 +118,24 @@ def normalize_url(url: str) -> str:
     return urlunparse((scheme, netloc, path, "", urlencode(query), ""))
 
 
+def normalize_redirect(url: str) -> str:
+    """Нормализация адреса из Location: как normalize_url, но завершающий слэш значим.
+
+    normalize_url убирает хвостовой слэш, чтобы /a и /a/ не обходились дважды. Но для
+    каталогов слэш — часть канонического адреса: сервер отвечает 301 с /catalog на
+    /catalog/ , и без слэша мы бесконечно ходили по кругу, а страница-каталог (как раз
+    типичный адрес раздела) выпадала из обхода.
+    """
+    normalized = normalize_url(url)
+    if not normalized:
+        return ""
+    if (urlparse(url).path or "/").endswith("/"):
+        parsed = urlparse(normalized)
+        if not parsed.path.endswith("/"):
+            return urlunparse((parsed.scheme, parsed.netloc, parsed.path + "/", "", parsed.query, ""))
+    return normalized
+
+
 def same_host(a: str, b: str) -> bool:
     """Один и тот же сайт (www.example.com и example.com считаются одним)."""
     ha = (urlparse(a).hostname or "").lower()
@@ -161,13 +188,43 @@ def _site_dir(user_id: int, domain: str) -> str:
     return os.path.join(CACHE_ROOT, f"user_{user_id}", domain)
 
 
-def _manifest_path(user_id: int, domain: str) -> str:
-    return os.path.join(_site_dir(user_id, domain), "manifest.json")
+def section_prefix(url: str) -> str:
+    """Префикс пути для режима «только этот раздел» ('' — главная страница сайта).
+
+    /catalog/ → '/catalog'. Сравнение идёт по сегментам пути: /catalog не должен
+    захватывать /catalog-sale/ или /catalogovyj.
+    """
+    path = (urlparse(url).path or "/").rstrip("/")
+    return "" if path in ("", "/") else path
 
 
-def _load_manifest(user_id: int, domain: str) -> dict:
+def section_slug(prefix: str) -> str:
+    """Слаг раздела для имени файла БЗ: '/catalog/termostaty' → 'catalog_termostaty'."""
+    slug = re.sub(r"[^0-9A-Za-zА-Яа-я._-]+", "_", (prefix or "").strip("/")).strip("_")
+    if not slug:
+        return ""
+    if len(slug) > SECTION_SLUG_MAX_CHARS:
+        # Длинный путь в имя файла не влезает: добавляем хвост хэша, иначе два
+        # разных раздела склеятся в один файл БЗ.
+        digest = hashlib.md5(prefix.encode("utf-8")).hexdigest()[:6]
+        slug = f"{slug[:SECTION_SLUG_MAX_CHARS].rstrip('_')}_{digest}"
+    return slug
+
+
+def _manifest_path(user_id: int, domain: str, prefix: str = "") -> str:
+    """Манифест обхода — свой на каждый файл БЗ (весь сайт и каждый раздел отдельно).
+
+    Иначе повторный обход раздела затирал бы манифест обхода всего сайта: пропадала
+    бы статистика и «Обновить с сайта» у другого файла перестала бы работать.
+    """
+    slug = section_slug(prefix)
+    return os.path.join(_site_dir(user_id, domain),
+                        f"manifest_{slug}.json" if slug else "manifest.json")
+
+
+def _load_manifest(user_id: int, domain: str, prefix: str = "") -> dict:
     try:
-        with open(_manifest_path(user_id, domain), "r", encoding="utf-8") as f:
+        with open(_manifest_path(user_id, domain, prefix), "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
                 data.setdefault("pages", {})
@@ -177,8 +234,8 @@ def _load_manifest(user_id: int, domain: str) -> dict:
     return {}
 
 
-def _save_manifest(user_id: int, domain: str, manifest: dict) -> None:
-    path = _manifest_path(user_id, domain)
+def _save_manifest(user_id: int, domain: str, manifest: dict, prefix: str = "") -> None:
+    path = _manifest_path(user_id, domain, prefix)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -192,23 +249,80 @@ def _cache_file(user_id: int, domain: str, kind: str, url: str) -> str:
     return os.path.join(_site_dir(user_id, domain), kind, f"{name}.{ext}")
 
 
-def site_filename(domain: str) -> str:
-    """Имя файла БЗ для сайта: site_<домен>.txt"""
+def site_filename(domain: str, prefix: str = "") -> str:
+    """Имя файла БЗ: site_<домен>.txt (весь сайт) или site_<домен>_<раздел>.txt.
+
+    Раздел получает отдельный файл — свою запись в «Документах», свой документ БЗ
+    и свой pkl эмбеддингов, поэтому обход раздела не переписывает базу по сайту.
+    """
     safe = re.sub(r"[^0-9A-Za-zА-Яа-я._-]", "_", domain or "site")
-    return f"site_{safe}.txt"
+    slug = section_slug(prefix)
+    return f"site_{safe}_{slug}.txt" if slug else f"site_{safe}.txt"
+
+
+def in_section(url: str, start_url: str, prefix: str = "") -> bool:
+    """Страница относится к обходу: тот же сайт и (для раздела) путь под префиксом."""
+    if not same_host(url, start_url):
+        return False
+    if not prefix:
+        return True
+    path = (urlparse(url).path or "/").rstrip("/") or "/"
+    return path == prefix or path.startswith(prefix + "/")
+
+
+def list_manifests(user_id: int, domain: str) -> list:
+    """Все сохранённые обходы домена: весь сайт и каждый раздел отдельным файлом.
+
+    Нужно интерфейсу: показать, что уже проиндексировано по этому сайту, и
+    предупредить о пересечении разделов до запуска обхода.
+    """
+    site_dir = _site_dir(user_id, domain)
+    if not os.path.isdir(site_dir):
+        return []
+    found = []
+    for name in sorted(os.listdir(site_dir)):
+        if not name.startswith("manifest") or not name.endswith(".json"):
+            continue
+        prefix = "" if name == "manifest.json" else name[len("manifest_"):-len(".json")]
+        manifest = _load_manifest(user_id, domain, prefix)
+        if not manifest:
+            continue
+        found.append({
+            "prefix": manifest.get("section", "") or "",
+            "filename": manifest.get("filename", ""),
+            "url": manifest.get("start_url", ""),
+            "pages": len(manifest.get("pages", {})),
+            "lines": manifest.get("lines", 0),
+            "fetched_at": manifest.get("fetched_at", ""),
+        })
+    return found
 
 
 def info_for_filename(user_id: int, filename: str) -> dict | None:
-    """Сведения о последнем обходе сайта по имени файла БЗ (для кнопки «Обновить»)."""
+    """Сведения о последнем обходе по имени файла БЗ (для кнопки «Обновить с сайта»).
+
+    У домена может быть несколько файлов (весь сайт и отдельные разделы), поэтому
+    просматриваются все манифесты каталога домена. Манифест помнит режим обхода,
+    так что обновление раздела не превращается в обход всего сайта.
+    """
     root = os.path.join(CACHE_ROOT, f"user_{user_id}")
     if not os.path.isdir(root):
         return None
-    for domain in os.listdir(root):
-        manifest = _load_manifest(user_id, domain)
-        if manifest.get("filename") == filename:
+    for domain in sorted(os.listdir(root)):
+        if not os.path.isdir(_site_dir(user_id, domain)):
+            continue
+        for name in sorted(os.listdir(_site_dir(user_id, domain))):
+            if not name.startswith("manifest") or not name.endswith(".json"):
+                continue
+            prefix = "" if name == "manifest.json" else name[len("manifest_"):-len(".json")]
+            manifest = _load_manifest(user_id, domain, prefix)
+            if manifest.get("filename") != filename:
+                continue
             return {
                 "url": manifest.get("start_url", ""),
                 "domain": domain,
+                "filename": manifest.get("filename", filename),
+                "section": manifest.get("section", "") or "",
                 "page_limit": manifest.get("page_limit", DEFAULT_PAGE_LIMIT),
                 "respect_robots": manifest.get("respect_robots", True),
                 "pages": len(manifest.get("pages", {})),
@@ -487,8 +601,12 @@ def fetch(session: requests.Session, url: str, etag: str = "",
         headers["If-Modified-Since"] = last_modified
 
     current = url
+    visited_hops = set()
     for _ in range(MAX_REDIRECTS + 1):
         assert_public_url(current)
+        if current in visited_hops:
+            return {"url": current, "status": 0, "html": None, "error": "Циклический редирект"}
+        visited_hops.add(current)
         try:
             response = session.get(current, headers=headers, timeout=PAGE_TIMEOUT,
                                    allow_redirects=False, stream=True)
@@ -500,7 +618,7 @@ def fetch(session: requests.Session, url: str, etag: str = "",
                 if not location:
                     return {"url": current, "status": response.status_code, "html": None,
                             "error": "Редирект без адреса"}
-                current = normalize_url(urljoin(current, location))
+                current = normalize_redirect(urljoin(current, location))
                 if not current:
                     return {"url": url, "status": 0, "html": None, "error": "Некорректный редирект"}
                 continue
@@ -610,8 +728,12 @@ def _sitemap_urls(session: requests.Session, base_url: str, sitemaps: list) -> l
 # === Обход сайта ===
 
 def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
-          respect_robots: bool = True, on_progress=None, cancel_event=None) -> dict:
+          respect_robots: bool = True, on_progress=None, cancel_event=None,
+          section: bool = False) -> dict:
     """Обход сайта и запись TXT для базы знаний. Возвращает словарь-итог.
+
+    section=True — обходим только страницы под путём введённого адреса (раздел),
+    они попадают в отдельный файл БЗ. Кэш страниц при этом общий на домен.
 
     Инкрементальность: страницы из прошлого обхода запрашиваются с If-None-Match /
     If-Modified-Since. Ответ 304 — текст и ссылки берутся из кэша, страница
@@ -626,8 +748,11 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
 
     page_limit = max(1, min(int(page_limit or DEFAULT_PAGE_LIMIT), MAX_PAGE_LIMIT))
     domain = domain_of(start_url)
-    filename = site_filename(domain)
-    manifest = _load_manifest(user_id, domain)
+    prefix = section_prefix(start_url) if section else ""
+    if section and not prefix:
+        logger.warning("🌐 Включён режим раздела, но адрес — главная страница: обходим весь сайт")
+    filename = site_filename(domain, prefix)
+    manifest = _load_manifest(user_id, domain, prefix)
     old_pages = manifest.get("pages", {}) or {}
 
     session = requests.Session()
@@ -638,6 +763,10 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
 
     def _allowed(url: str) -> bool:
         return (not respect_robots) or _robots_allowed(url, disallow, allow)
+
+    def _in_scope(url: str) -> bool:
+        """Страница входит в обход: тот же сайт и (для раздела) путь под префиксом."""
+        return in_section(url, start_url, prefix)
 
     stats = {"pages": 0, "changed": 0, "new": 0, "gone": 0, "unchanged": 0, "carried": 0,
              "skipped": 0, "errors": 0, "lines": 0, "truncated": False}
@@ -660,18 +789,18 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
                 absolute = normalize_url(urljoin(base_url, href))
             except ValueError:
                 continue
-            if absolute and same_host(absolute, start_url) and absolute not in visited:
+            if absolute and _in_scope(absolute) and absolute not in visited:
                 _push(absolute)
 
     _push(start_url)
     for loc in _sitemap_urls(session, start_url, sitemaps):
-        if same_host(loc, start_url):
+        if _in_scope(loc):
             _push(loc)
     # Страницы прошлого обхода обязательно проверяем снова: перелинковка на сайте
     # могла измениться, и страница не должна выпасть из файла только потому, что
     # её перестали линковать (иначе второй обход выкинул бы половину базы).
     for old_url in old_pages:
-        if same_host(old_url, start_url):
+        if _in_scope(old_url):
             _push(old_url)
 
     def _progress(phase: str, current: str = ""):
@@ -690,7 +819,7 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
         if not url or url in visited:
             continue
         visited.add(url)
-        if not same_host(url, start_url) or _SKIP_EXT_RE.search(urlparse(url).path or ""):
+        if not _in_scope(url) or _SKIP_EXT_RE.search(urlparse(url).path or ""):
             stats["skipped"] += 1
             continue
         if not _allowed(url):
@@ -772,7 +901,7 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
     stats["gone"] = sum(1 for url in old_pages if url in hard_gone)
     carried = []
     for old_url in old_pages:
-        if old_url in pages_out or old_url in hard_gone or not same_host(old_url, start_url):
+        if old_url in pages_out or old_url in hard_gone or not _in_scope(old_url):
             continue
         text_path = _cache_file(user_id, domain, "text", old_url)
         if not os.path.exists(text_path):
@@ -820,17 +949,20 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
         "start_url": start_url,
         "domain": domain,
         "filename": filename,
+        "section": prefix,
+        "mode": "section" if prefix else "site",
         "page_limit": page_limit,
         "respect_robots": respect_robots,
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
         "lines": sum(1 for line in lines_out if not line.startswith("#")),
         "pages": {url: pages_out[url] for url in order},
     }
-    _save_manifest(user_id, domain, manifest)
+    _save_manifest(user_id, domain, manifest, prefix)
 
     return {"ok": True, "domain": domain, "filename": filename, "txt_path": os.path.abspath(txt_path),
             "lines": manifest["lines"], "total_lines": len(lines_out), "stats": stats,
-            "url": start_url, "page_limit": page_limit, "respect_robots": respect_robots}
+            "url": start_url, "section": prefix, "page_limit": page_limit,
+            "respect_robots": respect_robots}
 
 
 # === Фоновый джоб (одна операция за раз, прогресс и отмена) ===
@@ -866,7 +998,7 @@ def cancel() -> bool:
 
 
 def start_job(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
-              respect_robots: bool = True, on_finish=None) -> dict:
+              respect_robots: bool = True, section: bool = False, on_finish=None) -> dict:
     """Запускает обход в фоне. Бросает CrawlError, если обход уже идёт или адрес небезопасен."""
     start_url = normalize_url(start_url)
     if not start_url:
@@ -881,6 +1013,8 @@ def start_job(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT
         cancel_event = threading.Event()
         job = {
             "user_id": user_id, "url": start_url, "domain": domain_of(start_url),
+            "section": section_prefix(start_url) if section else "",
+            "filename": site_filename(domain_of(start_url), section_prefix(start_url) if section else ""),
             "phase": "crawl", "pages": 0, "pages_total": page_limit, "changed": 0,
             "new": 0, "gone": 0, "lines": 0, "current": "", "truncated": False,
             "started_at": time.time(), "finished_at": 0.0, "message": "",
@@ -898,7 +1032,7 @@ def start_job(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT
 
         try:
             result = crawl(user_id, start_url, page_limit, respect_robots,
-                           on_progress=on_progress, cancel_event=cancel_event)
+                           on_progress=on_progress, cancel_event=cancel_event, section=section)
             job["result"] = result
             job["phase"] = "cancelled" if result["stats"].get("cancelled") else "done"
             job["message"] = ("Обход отменён — в файл попало то, что успели обойти"
@@ -944,11 +1078,12 @@ if __name__ == "__main__":                       # ручная проверка
     import sys
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if len(sys.argv) < 2:
-        print("Использование: python site_crawler.py <url> [user_id] [pages]")
+        print("Использование: python site_crawler.py <url> [user_id] [pages] [section]")
         raise SystemExit(2)
     _uid = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     _limit = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_PAGE_LIMIT
-    _out = crawl(_uid, sys.argv[1], _limit,
+    _section = len(sys.argv) > 4 and sys.argv[4].lower() in ("1", "yes", "true", "section", "раздел")
+    _out = crawl(_uid, sys.argv[1], _limit, section=_section,
                  on_progress=lambda s: print(f"  {s['phase']}: {s['pages']}/{s['pages_total']} "
                                              f"строк {s['lines']} {s['current'][:70]}"))
     print(json.dumps({k: v for k, v in _out.items() if k != "stats"}, ensure_ascii=False, indent=1))
