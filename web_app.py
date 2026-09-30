@@ -2713,7 +2713,10 @@ def _max_handle_update(channel, update):
     # Команда «новый диалог»: контекст модели очищается, ответа от LLM не требуется
     if _norm_command(text) in ('/new', '/новый', '/начать', 'новый диалог', 'начать заново'):
         start_new_chat_session(channel['user_id'], _max_scope(channel['id'], sender))
-        _max_send(channel, 'Начали новый диалог. Слушаю ваш вопрос.', sender)
+        # Новый диалог начинается так же, как первый: бот здоровается настроенным
+        # приветствием. Заодно это единственный способ проверить текст в уже
+        # существующем диалоге — событие «бот запущен» MAX второй раз не шлёт.
+        _max_send(channel, _greeting_for(channel['user_id'], channel.get('greeting'), 'гость'), sender)
         return
     # 10 сообщений/мин на собеседника (каждый ответ — платный вызов LLM)
     if _rate_limited('mx:%s:%s' % (channel['id'], sender), limit=10, window=60):

@@ -859,6 +859,25 @@ def test_greeting(uid, wid, key):
             'update_type': 'bot_started', 'message': {'sender': {'user_id': '555666777'}, 'body': {}}})
         check('своё приветствие бота перекрывает общее',
               sent2 == [('555666777', 'Своё приветствие бота.')], sent2)
+
+        # Команда «/new»: новый диалог начинается с настроенного приветствия —
+        # так текст можно проверить прямо в существующем диалоге
+        sent2[:] = []
+        web_app._max_handle_update(auth_db.get_max_channel(uid), {
+            'update_type': 'message_created',
+            'message': {'sender': {'user_id': '555666777'}, 'body': {'text': '/new'}}})
+        check('«/new» в MAX отвечает настроенным приветствием',
+              sent2 == [('555666777', 'Своё приветствие бота.')], sent2)
+        check('служебная фраза «Начали новый диалог» больше не уходит',
+              all('Начали новый диалог' not in (txt or '') for _, txt in sent2), sent2)
+
+        auth_db.update_max_channel(uid, {'greeting': ''})
+        sent2[:] = []
+        web_app._max_handle_update(auth_db.get_max_channel(uid), {
+            'update_type': 'message_created',
+            'message': {'sender': {'user_id': '555666777'}, 'body': {'text': 'новый диалог'}}})
+        check('«новый диалог» без своего текста берёт общее приветствие',
+              sent2 == [('555666777', common)], sent2)
     finally:
         web_app._max_send = real_send2
         auth_db.delete_max_channel(uid)
