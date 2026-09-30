@@ -1939,7 +1939,9 @@
             document.getElementById('siteRobots').checked = true;
             const sectionBox = document.getElementById('siteSection');
             sectionBox.checked = false;
-            sectionBox.onchange = scheduleSitePreview;
+            // План дробления считается с запросом к карте сайта, поэтому не на каждый
+            // символ, а при переключении галочки раздела
+            sectionBox.onchange = () => loadSitePreview(true);
             showSitePreview(null);
             const startBtn = document.getElementById('siteModalStart');
             startBtn.disabled = false;
@@ -1961,11 +1963,12 @@
             sitePreviewTimer = setTimeout(loadSitePreview, 350);
         }
 
-        function loadSitePreview() {
+        function loadSitePreview(withPlan) {
             const url = (document.getElementById('siteUrl').value || '').trim();
             if (!url) { showSitePreview(null); return; }
             const section = document.getElementById('siteSection').checked ? '1' : '0';
-            fetch('/api/site/preview?url=' + encodeURIComponent(url) + '&section=' + section)
+            fetch('/api/site/preview?url=' + encodeURIComponent(url) + '&section=' + section +
+                  (withPlan ? '&plan=1' : ''))
                 .then(r => r.json())
                 .then(data => showSitePreview(data))
                 .catch(() => showSitePreview(null));
@@ -2002,7 +2005,8 @@
                 url: url,
                 pages: pages,
                 respect_robots: document.getElementById('siteRobots').checked,
-                section: document.getElementById('siteSection').checked
+                section: document.getElementById('siteSection').checked,
+                split: document.getElementById('siteSection').checked
             }, () => {
                 const startBtn = document.getElementById('siteModalStart');
                 startBtn.disabled = false;
@@ -2079,8 +2083,13 @@
                 bar.classList.add('active');
                 icon.textContent = '🔍';
                 cancelBtn.style.display = '';
+                const partInfo = job.split
+                    ? ' · подраздел ' + (job.part_no || 1) +
+                      (job.parts_total ? ' из ' + job.parts_total : '') +
+                      (job.parts && job.parts.length ? ' (файлов готово ' + job.parts.length + ')' : '')
+                    : '';
                 text.textContent = 'Обход ' + (job.section ? 'раздела ' + job.section : 'сайта') +
-                    ': страниц ' + (job.pages || 0) +
+                    partInfo + ': страниц ' + (job.pages || 0) +
                     (job.pages_total ? ' из ' + job.pages_total : '') +
                     ' · строк ' + (job.lines || 0) + (current ? ' · ' + current : '');
                 fill.style.width = (job.pages_total
@@ -2112,8 +2121,10 @@
                     (job.indexed ? ' · файл обновлён в базе знаний' : '');
             } else {
                 icon.textContent = '✅';
-                text.textContent = (job.section ? 'Раздел ' + job.section + ' добавлен'
-                    : 'Сайт добавлен') + ' в базу знаний: строк ' + (job.lines || 0) + tail;
+                text.textContent = job.split
+                    ? (job.message || 'Раздел разбит на подразделы') + ': строк ' + (job.lines || 0)
+                    : (job.section ? 'Раздел ' + job.section + ' добавлен'
+                      : 'Сайт добавлен') + ' в базу знаний: строк ' + (job.lines || 0) + tail;
             }
             setTimeout(() => {
                 if (!sitePollTimer) bar.classList.remove('active');

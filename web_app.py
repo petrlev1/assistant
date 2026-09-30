@@ -887,12 +887,8 @@ def _site_pages_limit():
     return min(value, site_crawler.MAX_PAGE_LIMIT)
 
 
-def _site_crawl_finished(user_id, result):
-    """Итог обхода: файл сайта становится документом БЗ + фоновая переиндексация.
-
-    Вызывается из потока обхода (после записи TXT). Прежний документ с тем же
-    именем заменяется — как повторная загрузка файла, без дубликатов в списке.
-    """
+def _site_save_document(user_id, result):
+    """Один файл обхода → документ БЗ. Прежний документ с тем же именем заменяется."""
     filename = result['filename']
     os.makedirs(os.path.join('Database', f'user_{user_id}'), exist_ok=True)
 
@@ -907,7 +903,7 @@ def _site_crawl_finished(user_id, result):
         group = f"🌐 {result['domain']} · {result['section']}"
     success, doc_id = add_document(user_id, filename, filename, doc_group=group)
     if not success:
-        raise RuntimeError('не удалось добавить документ в базу знаний')
+        raise RuntimeError(f'не удалось добавить документ {filename} в базу знаний')
 
     stats = result.get('stats') or {}
     logger.info(f"🌐 {result['domain']}{result.get('section') or ''}: строк {result['lines']}, "
@@ -915,6 +911,27 @@ def _site_crawl_finished(user_id, result):
                 f"(новых {stats.get('new', 0)}, изменённых {stats.get('changed', 0)}, "
                 f"неизменных {stats.get('unchanged', 0)}, ушло {stats.get('gone', 0)}) "
                 f"→ {filename} (doc {doc_id})")
+    return doc_id
+
+
+def _site_crawl_finished(user_id, result):
+    """Итог обхода: файл сайта становится документом БЗ + фоновая переиндексация."""
+    _site_save_document(user_id, result)
+    if rag_ready:
+        _reindex_user_async(user_id)
+
+
+def _site_parts_finished(user_id, results):
+    """Итог дробления раздела: каждый подраздел — свой документ, переиндексация одна.
+
+    Перезагрузка базы знаний — это секунды работы, поэтому при десятках файлов её
+    делаем один раз в конце, а не после каждого файла.
+    """
+    for result in results:
+        _site_save_document(user_id, result)
+    logger.info(f"✂️ Раздел разбит: файлов {len(results)}, строк "
+                f"{sum(r.get('lines', 0) for r in results)} — переиндексация БЗ "
+                f"пользователя {user_id}")
     if rag_ready:
         _reindex_user_async(user_id)
 
@@ -937,17 +954,20 @@ def site_crawl_start():
         pages = _site_pages_limit()
     respect_robots = bool(data.get('respect_robots', True))
     section = bool(data.get('section', False))          # «Только этот раздел» — свой файл БЗ
+    # Дробление больших разделов по подразделам: включаем вместе с режимом раздела
+    split = section and bool(data.get('split', True))
 
     try:
         job = site_crawler.start_job(session['user_id'], url, pages, respect_robots,
-                                     section=section, on_finish=_site_crawl_finished)
+                                     section=section, on_finish=_site_crawl_finished,
+                                     split=split, on_finish_parts=_site_parts_finished)
     except site_crawler.CrawlError as e:
         return jsonify({'error': str(e)}), 400
 
     mode = f"только раздел {site_crawler.section_prefix(site_crawler.normalize_url(url))}" \
         if section else "весь сайт"
     logger.info(f"🌐 Пользователь {session.get('username')} запустил обход сайта: {url} "
-                f"({mode}, лимит {pages})")
+                f"({mode}, лимит {pages}{', дробление по подразделам' if split else ''})")
     return jsonify({'success': True, 'job': site_crawler.public_job(job)})
 
 
@@ -969,6 +989,9 @@ def site_preview():
     if '://' not in url:
         url = 'https://' + url
     section = str(request.args.get('section', '')).lower() in ('1', 'true', 'on', 'yes')
+    # plan=1 — посчитать план дробления (нужен запрос к карте сайта, поэтому только
+    # по явному действию: предпросмотр вызывается на каждый ввод символа)
+    want_plan = str(request.args.get('plan', '')).lower() in ('1', 'true', 'on', 'yes')
 
     normalized = site_crawler.normalize_url(url)
     if not normalized:
@@ -1005,10 +1028,27 @@ def site_preview():
                 warnings.append(f"Раздел {manifest['prefix']} проиндексирован отдельно "
                                 f"({manifest['filename']}): его страницы попадут и в общий файл сайта.")
 
+    plan = None
+    if prefix:
+        try:
+            plan = site_crawler.plan_split(session['user_id'], normalized,
+                                           use_cache_only=not want_plan)
+        except site_crawler.CrawlError:
+            plan = None
+        if plan and plan.get('needed'):
+            names = ', '.join(f"«{p['prefix']}»" for p in plan['parts'][:3])
+            warnings.append(f"Раздел большой ({plan['pages']} страниц по карте сайта): будет разбит "
+                            f"на {len(plan['parts'])} подразделов, по файлу на каждый ({names}"
+                            f"{' и др.' if len(plan['parts']) > 3 else ''}). В один файл влезает "
+                            f"около {plan['page_budget']} страниц — остальное отбрасывается.")
+        elif plan and plan.get('reason') == 'unsplittable':
+            warnings.append(f"Раздел большой ({plan['pages']} страниц) и не дробится на подразделы: "
+                            f"часть страниц в файл не попадёт (потолок {site_crawler.MAX_LINES} строк).")
+
     return jsonify({'ok': True, 'url': normalized, 'domain': domain, 'section': prefix,
                     'filename': filename, 'mode': 'section' if prefix else 'site',
                     'page_limit': _site_pages_limit(), 'warnings': warnings,
-                    'existing': existing})
+                    'existing': existing, 'split': plan})
 
 
 @app.route('/api/site/status')

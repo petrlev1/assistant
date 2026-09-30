@@ -332,6 +332,56 @@ class SiteRouteCase(unittest.TestCase):
         self.assertEqual(self.reindexed, [990003],
                          'новый файл на диске не запустил переиндексацию')
 
+    def test_preview_route_reports_split_plan(self):
+        """Предпросмотр показывает, что большой раздел будет разбит на подразделы."""
+        domain = '127.0.0.1'
+        folder = os.path.join('site_cache', f'user_{990003}', domain)
+        os.makedirs(folder, exist_ok=True)
+        # Манифесты прошлых обходов в этом же временном каталоге дали бы другую плотность
+        # строк на страницу — убираем их, чтобы бюджет файла считался по значению
+        # по умолчанию (60 строк на страницу → около 166 страниц в файл)
+        for name in os.listdir(folder):
+            if name.startswith('manifest') and name.endswith('.json'):
+                os.remove(os.path.join(folder, name))
+        urls = [self.base + '/catalog/'] + [self.base + f'/catalog/s{i % 5}/{i}.html'
+                                           for i in range(300)]
+        with open(os.path.join(folder, 'sitemap_urls.json'), 'w', encoding='utf-8') as f:
+            json.dump({'urls': urls}, f)
+
+        response = self.client.get('/api/site/preview?url=' + self.base +
+                                   '/catalog/&section=1&plan=1')
+        data = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        plan = data.get('split') or {}
+        self.assertTrue(plan.get('needed'), 'план дробления не посчитан')
+        self.assertEqual(plan.get('reason'), 'split')
+        self.assertGreater(len(plan.get('parts') or []), 1)
+        warning = ' '.join(data.get('warnings') or [])
+        self.assertIn('разбит', warning)
+        self.assertIn('подраздел', warning)
+
+    def test_crawl_route_passes_split_flag(self):
+        """Режим раздела запускает обход с дроблением и обработчиком частей."""
+        captured = {}
+        real_start = self.sc.start_job
+
+        def fake_start_job(user_id, url, pages, respect_robots, **kwargs):
+            captured.update(kwargs)
+            return {'user_id': user_id, 'url': url, 'phase': 'crawl'}
+
+        self.sc.start_job = fake_start_job
+        try:
+            response = self.client.post('/api/site/crawl',
+                                        json={'url': self.base + '/catalog/', 'pages': 5,
+                                              'section': True})
+        finally:
+            self.sc.start_job = real_start
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(captured.get('split'), 'дробление не включено')
+        self.assertIsNotNone(captured.get('on_finish_parts'), 'нет обработчика частей')
+        self.assertIsNotNone(captured.get('on_finish'))
+
     def test_preview_route_shows_filename_and_overlaps(self):
         preview = self.client.get('/api/site/preview?url=' + self.base + '/catalog/&section=1').get_json()
         self.assertTrue(preview['ok'])
