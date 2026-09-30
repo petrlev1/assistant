@@ -1034,15 +1034,23 @@ def start_job(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT
             result = crawl(user_id, start_url, page_limit, respect_robots,
                            on_progress=on_progress, cancel_event=cancel_event, section=section)
             job["result"] = result
-            job["phase"] = "cancelled" if result["stats"].get("cancelled") else "done"
+            cancelled = bool(result["stats"].get("cancelled"))
+            job["phase"] = "cancelled" if cancelled else "done"
             job["message"] = ("Обход отменён — в файл попало то, что успели обойти"
-                              if job["phase"] == "cancelled" else "")
-            if on_finish and job["phase"] == "done":
+                              if cancelled else "")
+            # Файл записывается и при отменённом обходе, поэтому базу знаний обновляем в
+            # обоих случаях: иначе в индексе остаётся прежняя версия файла, а на диске
+            # уже другая, и ассистент отвечает по устаревшим данным.
+            if on_finish:
                 try:
                     on_finish(user_id, result)
-                    job["message"] = "Файл добавлен в базу знаний"
-                    job["phase"] = "index"
                     job["indexed"] = True
+                    if cancelled:
+                        job["message"] = ("Обход отменён — в файл и базу знаний попало то, "
+                                          "что успели обойти")
+                    else:
+                        job["message"] = "Файл добавлен в базу знаний"
+                        job["phase"] = "index"
                 except Exception as e:
                     logger.error(f"❌ Не удалось добавить файл сайта в БЗ: {e}")
                     job["message"] = f"Сайт обойдён, но файл не добавлен в БЗ: {e}"

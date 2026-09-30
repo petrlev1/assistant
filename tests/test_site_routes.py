@@ -267,6 +267,71 @@ class SiteRouteCase(unittest.TestCase):
         self.assertEqual(info['url'], self.base + '/catalog')
         self.assertEqual(info['page_limit'], 5)
 
+    def test_cancelled_crawl_still_indexes_written_file(self):
+        """Обход отменили, но файл записан — он обязан попасть в базу знаний.
+
+        Иначе в индексе остаётся прежняя версия файла, а на диске уже другая:
+        ассистент отвечает по устаревшим данным, и «файла эмбеддинга» для нового
+        документа не появляется.
+        """
+        sc, real_crawl = self.sc, self.sc.crawl
+        filename = 'site_127.0.0.1_catalog.txt'
+
+        def fake_crawl(user_id, url, limit, respect_robots=True, on_progress=None,
+                       cancel_event=None, section=False):
+            folder = os.path.join('Database', f'user_{user_id}')
+            os.makedirs(folder, exist_ok=True)
+            path = os.path.join(folder, filename)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('# Каталог — ' + url + '\n'
+                        'Термочехлы для трубопроводов поставляются со склада в Москве в течение суток.\n')
+            return {'ok': True, 'domain': '127.0.0.1', 'filename': filename,
+                    'txt_path': os.path.abspath(path), 'lines': 1, 'total_lines': 2,
+                    'section': '/catalog', 'url': url, 'page_limit': limit,
+                    'respect_robots': respect_robots,
+                    'stats': {'cancelled': True, 'pages': 1, 'lines': 1}}
+
+        sc.crawl = fake_crawl
+        try:
+            response = self.client.post('/api/site/crawl',
+                                        json={'url': self.base + '/catalog/', 'pages': 5,
+                                              'section': True})
+            self.assertEqual(response.status_code, 200)
+            state = self._wait_done()
+        finally:
+            sc.crawl = real_crawl
+
+        job = state['job']
+        self.assertEqual(job['phase'], 'cancelled')
+        self.assertTrue(job.get('indexed'), 'отменённый обход не добавил файл в базу знаний')
+        self.assertEqual([d['filename'] for d in self.docs], [filename])
+        self.assertEqual(self.docs[0]['doc_group'], '🌐 127.0.0.1 · /catalog')
+        self.assertEqual(self.reindexed, [990003])
+
+    def test_documents_panel_indexes_new_files_from_disk(self):
+        """Файл появился в папке пользователя — панель обязана запустить переиндексацию."""
+        web_app = self.web_app
+        folder = os.path.join('Database', 'user_990003')
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, 'dropped.txt'), 'w', encoding='utf-8') as f:
+            f.write('Термочехлы изготавливаются из многослойного материала и служат не менее десяти лет.\n')
+
+        real_price = web_app.get_price_files
+        real_backfill = web_app._backfill_doc_groups_async
+        web_app.get_price_files = lambda user_id: {}
+        web_app._backfill_doc_groups_async = lambda user_id, docs: None
+        try:
+            response = self.client.get('/api/documents')
+        finally:
+            web_app.get_price_files = real_price
+            web_app._backfill_doc_groups_async = real_backfill
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('dropped.txt', [d['filename'] for d in self.docs],
+                      'файл с диска не зарегистрирован в базе знаний')
+        self.assertEqual(self.reindexed, [990003],
+                         'новый файл на диске не запустил переиндексацию')
+
     def test_preview_route_shows_filename_and_overlaps(self):
         preview = self.client.get('/api/site/preview?url=' + self.base + '/catalog/&section=1').get_json()
         self.assertTrue(preview['ok'])

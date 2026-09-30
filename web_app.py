@@ -688,15 +688,27 @@ def get_documents():
         db_filenames = {d['filename'] for d in db_docs}
 
         # Файлы, которые есть на диске, но нет в БД — добавляем
+        added_files = []
         for fname in files_on_disk:
             file_path = os.path.join(user_db_folder, fname)
             if os.path.isfile(file_path) and fname not in db_filenames:
                 add_document(user_id, fname, fname)
+                added_files.append(fname)
 
         # Файлы, которые есть в БД, но нет на диске — удаляем записи
+        removed_files = []
         for doc in db_docs:
             if doc['filename'] not in files_on_disk:
                 delete_document(doc['id'], user_id)
+                removed_files.append(doc['filename'])
+
+        # Состав базы знаний изменился (например, файл записал обход сайта) — без
+        # переиндексации ассистент его не увидит: в памяти остаётся прежняя БЗ.
+        if added_files or removed_files:
+            logger.info(f"📄 Файлы на диске изменились (добавлено {len(added_files)}, "
+                        f"удалено {len(removed_files)}) — переиндексация БЗ пользователя {user_id}")
+            if rag_ready:
+                _reindex_user_async(user_id)
 
     # Возвращаем актуальный список
     docs = get_user_documents(user_id)

@@ -2108,7 +2108,8 @@
                 icon.textContent = '⏹';
                 text.textContent = (job.section ? 'Обход раздела ' + job.section : 'Обход сайта') +
                     ' остановлен: в базу знаний попали строки ' + (job.lines || 0) +
-                    ' — то, что успели собрать' + tail;
+                    ' — то, что успели собрать' + tail +
+                    (job.indexed ? ' · файл обновлён в базе знаний' : '');
             } else {
                 icon.textContent = '✅';
                 text.textContent = (job.section ? 'Раздел ' + job.section + ' добавлен'
