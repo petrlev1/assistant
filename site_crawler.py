@@ -1135,7 +1135,12 @@ def plan_split(user_id: int, start_url: str, respect_robots: bool = True,
         raise CrawlError("Некорректный адрес сайта")
     domain = domain_of(start_url)
     prefix = section_prefix(start_url)
-    budget = int(page_budget or part_page_budget(user_id, domain))
+    # Потолок файла задан в строках, поэтому бюджет из плотности строк — жёсткий:
+    # переданный лимит страниц может его только уменьшить. Иначе при лимите 1000
+    # в часть попало бы больше страниц, чем влезает в MAX_LINES, и текст снова
+    # обрезался бы — ровно то, от чего дробление и лечит.
+    line_budget = part_page_budget(user_id, domain)
+    budget = max(1, min(int(page_budget or line_budget), line_budget))
     urls = load_sitemap_urls(user_id, domain)
     if urls is None and not use_cache_only:
         session = requests.Session()

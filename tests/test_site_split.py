@@ -133,6 +133,15 @@ class PlanSplitCase(unittest.TestCase):
         self.assertFalse(plan["needed"])
         self.assertEqual(plan["oversized"], ["/catalog/a"])
 
+    def test_page_limit_cannot_raise_file_budget(self):
+        """Лимит страниц не может поднять бюджет файла выше потолка строк."""
+        # манифестов нет → плотность по умолчанию 60 строк на страницу → 166 страниц в файл
+        self._write_sitemap([f"/catalog/s{i % 2}/{i}.html" for i in range(200)])
+        plan = sc.plan_split(TEST_USER, f"https://{self.DOMAIN}/catalog/",
+                             page_budget=1000, use_cache_only=True)
+        self.assertEqual(plan["page_budget"], sc.MAX_LINES // sc.DEFAULT_LINES_PER_PAGE)
+        self.assertTrue(plan["needed"], "лимит страниц поднял бюджет файла выше потолка строк")
+
     def test_section_without_subsections_reports_unsplittable(self):
         """Дробить не на что (все страницы — файлы раздела): один файл, часть страниц не влезет."""
         self._write_sitemap([f"/catalog/{i}.html" for i in range(5)])
