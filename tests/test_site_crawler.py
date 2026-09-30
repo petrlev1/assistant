@@ -9,6 +9,7 @@
 
 import http.server
 import json
+import requests
 import os
 import shutil
 import socketserver
@@ -220,6 +221,26 @@ class TestFullCrawl(CrawlerCase):
         path = os.path.join("Database", f"user_{TEST_USER}", sc.site_filename("127.0.0.1"))
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
+
+    def test_sitemap_index_reads_all_submaps(self):
+        """Карта сайта из нескольких под-карт (Битрикс) читается целиком, а не до пятой."""
+        names = []
+        for i in range(1, 8):
+            name = f"sm-sub-{i}.xml"
+            with open(os.path.join(self.site_dir, name), "w", encoding="utf-8") as f:
+                f.write('<?xml version="1.0" encoding="UTF-8"?><urlset>'
+                        f'<url><loc>{self.base}/page-{i}.html</loc></url></urlset>')
+            names.append(name)
+        index_name = "sm-index.xml"
+        with open(os.path.join(self.site_dir, index_name), "w", encoding="utf-8") as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?><sitemapindex>' +
+                    ''.join(f'<sitemap><loc>{self.base}/{n}</loc></sitemap>' for n in names) +
+                    '</sitemapindex>')
+
+        found = sc._sitemap_urls(requests.Session(), f"{self.base}/{index_name}",
+                                 [f"{self.base}/{index_name}"])
+        self.assertEqual(len(found), 7, "прочитаны не все под-карты сайта")
+        self.assertIn(f"{self.base}/page-7.html", found, "последняя под-карта не прочитана")
 
     def test_crawl_builds_knowledge_file(self):
         result = sc.crawl(TEST_USER, self.base + "/index.html", PAGE_LIMIT)

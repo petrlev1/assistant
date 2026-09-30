@@ -62,11 +62,14 @@ MAX_LINES = 10000               # больше строк с одного сай
 MAX_LINE_CHARS = 250            # длиннее — режем по предложениям
 MIN_LINE_CHARS = 40             # короче — только с контекстом раздела, иначе мусор-навигация
 MIN_SECTION_CHARS = 15          # осмысленный заголовок раздела
+SPLIT_MAX_DEPTH = 4             # глубже 4 сегментов не дробим: слишком мелкие файлы
+DEFAULT_LINES_PER_PAGE = 60     # оценка плотности, пока нет своих замеров по домену
+SITEMAP_CACHE_TTL = 6 * 3600    # сколько держать список адресов карты сайта
 MAX_PAGE_BYTES = 3 * 1024 * 1024
 PAGE_TIMEOUT = 10
 CRAWL_DELAY = 0.3               # пауза между запросами, сек
 MAX_REDIRECTS = 5
-MAX_SITEMAPS = 5
+MAX_SITEMAPS = 25               # под-карт сайта бывает много: карту каталога (iblock) читаем тоже
 USER_AGENT = "RAGSTONE-bot/1.0 (+https://ragstone.ru)"
 CACHE_ROOT = "site_cache"
 DATABASE_ROOT = "Database"
@@ -729,11 +732,14 @@ def _sitemap_urls(session: requests.Session, base_url: str, sitemaps: list) -> l
 
 def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
           respect_robots: bool = True, on_progress=None, cancel_event=None,
-          section: bool = False) -> dict:
+          section: bool = False, extra_seeds=None) -> dict:
     """Обход сайта и запись TXT для базы знаний. Возвращает словарь-итог.
 
     section=True — обходим только страницы под путём введённого адреса (раздел),
     они попадают в отдельный файл БЗ. Кэш страниц при этом общий на домен.
+
+    extra_seeds — дополнительные адреса вне раздела, которые тоже нужно взять
+    (так при дроблении в первый файл попадает корневая страница раздела).
 
     Инкрементальность: страницы из прошлого обхода запрашиваются с If-None-Match /
     If-Modified-Since. Ответ 304 — текст и ссылки берутся из кэша, страница
@@ -764,6 +770,15 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
     def _allowed(url: str) -> bool:
         return (not respect_robots) or _robots_allowed(url, disallow, allow)
 
+    def _budget_spent() -> bool:
+        """Строковый бюджет файла исчерпан: дальше страницы в него всё равно не влезут."""
+        if stats["lines"] >= MAX_LINES:
+            stats["truncated"] = True
+            logger.info(f"📏 Файл достиг потолка {MAX_LINES} строк — обход остановлен "
+                        f"(страниц: {stats['pages']}, файл {filename})")
+            return True
+        return False
+
     def _in_scope(url: str) -> bool:
         """Страница входит в обход: тот же сайт и (для раздела) путь под префиксом."""
         return in_section(url, start_url, prefix)
@@ -792,7 +807,12 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
             if absolute and _in_scope(absolute) and absolute not in visited:
                 _push(absolute)
 
+    seeds = [normalize_url(u) for u in (extra_seeds or [])]
+    seeds = [u for u in seeds if u]
     _push(start_url)
+    for seed in seeds:
+        if seed not in visited:
+            _push(seed)
     for loc in _sitemap_urls(session, start_url, sitemaps):
         if _in_scope(loc):
             _push(loc)
@@ -819,7 +839,7 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
         if not url or url in visited:
             continue
         visited.add(url)
-        if not _in_scope(url) or _SKIP_EXT_RE.search(urlparse(url).path or ""):
+        if (url not in seeds) and (not _in_scope(url) or _SKIP_EXT_RE.search(urlparse(url).path or "")):
             stats["skipped"] += 1
             continue
         if not _allowed(url):
@@ -847,6 +867,9 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
                 order.append(url)
                 stats["unchanged"] += 1
                 stats["lines"] += len(lines) - 1 if lines else 0
+                if _budget_spent():
+                    _progress("crawl", url)
+                    break
                 # Ссылки берём из сохранённого HTML: страница не изменилась, но обход
                 # должен идти дальше — иначе новые страницы сайта не будут найдены.
                 cached_html_path = _cache_file(user_id, domain, "html", url)
@@ -886,8 +909,9 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
         order.append(url)
         stats["new" if url not in old_pages else "changed"] += 1
         stats["lines"] += len(page_lines)
-        if stats["lines"] >= MAX_LINES:
-            stats["truncated"] = True
+        if _budget_spent():
+            _progress("crawl", url)
+            break
 
         _enqueue_links(links, final_url)
 
@@ -965,6 +989,186 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
             "respect_robots": respect_robots}
 
 
+# === Дробление раздела на подразделы ===
+# Раздел каталога может быть больше потолка строк на файл. Тогда его режем не
+# «по живому» (файл 1, файл 2, ...), а по подразделам: части совпадают с реальными
+# разделами каталога, каждая со своим txt, группой и эмбеддингами. Если подраздел
+# сам не влезает — уходим на уровень глубже.
+
+
+def _dir_url(start_url: str, prefix: str) -> str:
+    """Адрес каталога по префиксу пути: префикс '/catalog' → '<схема>://<хост>/catalog/'."""
+    parts = urlparse(start_url)
+    return f"{parts.scheme}://{parts.netloc}{prefix}/"
+
+
+def _depth(prefix: str) -> int:
+    return len([seg for seg in (prefix or "").split("/") if seg])
+
+
+def lines_per_page_estimate(user_id: int, domain: str) -> int:
+    """Средняя плотность строк на страницу по прошлым обходам домена.
+
+    От неё зависит, сколько страниц разумно положить в один файл: потолок задан
+    в строках, а карта сайта — в страницах.
+    """
+    folder = _site_dir(user_id, domain)
+    total_lines = total_pages = 0
+    if os.path.isdir(folder):
+        for name in sorted(os.listdir(folder)):
+            if not (name.startswith("manifest") and name.endswith(".json")):
+                continue
+            try:
+                with open(os.path.join(folder, name), encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                continue
+            pages = data.get("pages") or {}
+            lines = int(data.get("lines") or 0)
+            if pages and lines:
+                total_lines += lines
+                total_pages += len(pages)
+    if total_pages and total_lines:
+        return max(1, total_lines // total_pages)
+    return DEFAULT_LINES_PER_PAGE
+
+
+def part_page_budget(user_id: int, domain: str) -> int:
+    """Сколько страниц класть в один файл, чтобы он не упёрся в потолок строк."""
+    return max(1, MAX_LINES // lines_per_page_estimate(user_id, domain))
+
+
+def _sitemap_cache_path(user_id: int, domain: str) -> str:
+    return os.path.join(_site_dir(user_id, domain), "sitemap_urls.json")
+
+
+def load_sitemap_urls(user_id: int, domain: str, max_age: int = SITEMAP_CACHE_TTL):
+    """Список адресов из карты сайта домена — из кэша, если он свежий (иначе None)."""
+    path = _sitemap_cache_path(user_id, domain)
+    try:
+        age = time.time() - os.stat(path).st_mtime
+    except OSError:
+        return None
+    if max_age is not None and age > max_age:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            urls = (json.load(f) or {}).get("urls") or []
+    except (OSError, ValueError):
+        return None
+    return urls or None
+
+
+def _fetch_sitemap_urls(user_id: int, domain: str, session, start_url: str, sitemaps) -> list:
+    """Читает карту сайта (включая вложенные) и кэширует список адресов."""
+    urls = []
+    for loc in _sitemap_urls(session, start_url, sitemaps):
+        if loc not in urls:
+            urls.append(loc)
+    if urls:
+        try:
+            os.makedirs(_site_dir(user_id, domain), exist_ok=True)
+            with open(_sitemap_cache_path(user_id, domain), "w", encoding="utf-8") as f:
+                json.dump({"fetched_at": datetime.now().isoformat(timespec="seconds"),
+                           "urls": urls}, f, ensure_ascii=False)
+        except OSError as e:
+            logger.warning(f"⚠️ Не удалось сохранить список адресов карты сайта: {e}")
+    return urls
+
+
+def plan_parts_from_urls(urls, prefix: str, page_budget: int, max_depth: int = SPLIT_MAX_DEPTH):
+    """Делит адреса раздела на части по подразделам.
+
+    Возвращает {"parts": [{"prefix", "urls", "extra"}], "own": [адреса самого раздела],
+    "oversized": [части, которые не влезли в бюджет и не делятся дальше]}.
+    В "extra" части лежат страницы самого раздела (например сама /catalog/): их надо
+    взять первым файлом, иначе они потеряются. Части идут в порядке карты сайта — так
+    файлы не перетасовываются между обходами.
+    """
+    groups, index, own = [], {}, []
+    for url in urls:
+        path = urlparse(url).path or "/"
+        rest = path[len(prefix):].lstrip("/") if prefix else path.lstrip("/")
+        if "/" not in rest:
+            own.append(url)          # страница самого раздела либо файл прямо в нём
+            continue
+        seg = rest.split("/")[0]
+        child = f"{prefix}/{seg}"
+        if child not in index:
+            index[child] = []
+            groups.append((child, index[child]))
+        index[child].append(url)
+
+    parts, oversized = [], []
+    for child, items in groups:
+        if len(items) <= page_budget:
+            parts.append({"prefix": child, "urls": items, "extra": []})
+            continue
+        if _depth(child) >= max_depth:
+            parts.append({"prefix": child, "urls": items, "extra": []})
+            oversized.append(child)
+            continue
+        deeper = plan_parts_from_urls(items, child, page_budget, max_depth)
+        if deeper["parts"]:
+            # корневая страница подраздела достаётся первому файлу этого подраздела
+            deeper["parts"][0]["extra"].extend(deeper["own"])
+            parts.extend(deeper["parts"])
+            oversized.extend(deeper["oversized"])
+        else:
+            # делить дальше нечего: в подразделе только страницы-файлы — берём как есть
+            parts.append({"prefix": child, "urls": items, "extra": []})
+            oversized.append(child)
+    if parts and own:
+        parts[0]["extra"].extend(own)            # страницы раздела — первому файлу
+    return {"parts": parts, "own": own, "oversized": oversized}
+
+
+def plan_split(user_id: int, start_url: str, respect_robots: bool = True,
+               page_budget: int = None, use_cache_only: bool = False) -> dict:
+    """Нужно ли дробить раздел и на какие подразделы.
+
+    use_cache_only=True — ничего не запрашивать у сайта (для предпросмотра в диалоге:
+    он вызывается на каждый ввод символа).
+    """
+    start_url = normalize_url(start_url)
+    if not start_url:
+        raise CrawlError("Некорректный адрес сайта")
+    domain = domain_of(start_url)
+    prefix = section_prefix(start_url)
+    budget = int(page_budget or part_page_budget(user_id, domain))
+    urls = load_sitemap_urls(user_id, domain)
+    if urls is None and not use_cache_only:
+        session = requests.Session()
+        sitemaps = []
+        if respect_robots:
+            _disallow, _allow, sitemaps = _robots_rules(session, start_url)
+        urls = _fetch_sitemap_urls(user_id, domain, session, start_url, sitemaps)
+    if urls is None:
+        return {"needed": None, "reason": "unknown", "page_budget": budget, "pages": 0, "parts": []}
+
+    in_scope = [u for u in urls if in_section(u, start_url, prefix)] if prefix else list(urls)
+    base = {"page_budget": budget, "pages": len(in_scope)}
+    if not in_scope:
+        return dict(base, needed=False, reason="no_sitemap", parts=[])
+    if len(in_scope) <= budget:
+        return dict(base, needed=False, reason="fits", parts=[])
+
+    plan = plan_parts_from_urls(in_scope, prefix, budget)
+    parts = []
+    for part in plan["parts"]:
+        item = {"prefix": part["prefix"], "url": _dir_url(start_url, part["prefix"]),
+                "pages": len(part["urls"]), "filename": site_filename(domain, part["prefix"])}
+        if part.get("extra"):
+            # страницы самого раздела (например сама /catalog/) берём вместе с первым файлом
+            item["extra_seeds"] = list(part["extra"])
+        parts.append(item)
+    if len(parts) <= 1:
+        # дробить не на что: раздел обойдётся одним файлом, часть страниц не влезет
+        return dict(base, needed=False, reason="unsplittable", parts=[],
+                    oversized=list(plan["oversized"]) or [prefix])
+    return dict(base, needed=True, reason="split", parts=parts, oversized=plan["oversized"])
+
+
 # === Фоновый джоб (одна операция за раз, прогресс и отмена) ===
 
 _JOB_LOCK = threading.Lock()
@@ -998,13 +1202,21 @@ def cancel() -> bool:
 
 
 def start_job(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
-              respect_robots: bool = True, section: bool = False, on_finish=None) -> dict:
-    """Запускает обход в фоне. Бросает CrawlError, если обход уже идёт или адрес небезопасен."""
+              respect_robots: bool = True, section: bool = False, on_finish=None,
+              split: bool = False, on_finish_parts=None) -> dict:
+    """Запускает обход в фоне. Бросает CrawlError, если обход идёт или адрес небезопасен.
+
+    split=True — если раздел не влезает в потолок строк на файл, он автоматически
+    режется по подразделам: по txt на подраздел, и все они сразу попадают в БЗ.
+    on_finish(user_id, result) — одиночный файл, on_finish_parts(user_id, results) — части.
+    """
     start_url = normalize_url(start_url)
     if not start_url:
         raise CrawlError("Некорректный адрес сайта")
     assert_public_url(start_url)                 # проверяем сразу — ошибку видно в интерфейсе
     page_limit = max(1, min(int(page_limit or DEFAULT_PAGE_LIMIT), MAX_PAGE_LIMIT))
+    domain = domain_of(start_url)
+    prefix = section_prefix(start_url) if section else ""
 
     with _JOB_LOCK:
         if _JOB["active"]:
@@ -1012,36 +1224,116 @@ def start_job(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT
             raise CrawlError(f"Уже идёт обход сайта {current.get('url', '') or '—'}")
         cancel_event = threading.Event()
         job = {
-            "user_id": user_id, "url": start_url, "domain": domain_of(start_url),
-            "section": section_prefix(start_url) if section else "",
-            "filename": site_filename(domain_of(start_url), section_prefix(start_url) if section else ""),
+            "user_id": user_id, "url": start_url, "domain": domain,
+            "section": prefix,
+            "filename": site_filename(domain, prefix),
             "phase": "crawl", "pages": 0, "pages_total": page_limit, "changed": 0,
             "new": 0, "gone": 0, "lines": 0, "current": "", "truncated": False,
             "started_at": time.time(), "finished_at": 0.0, "message": "",
-            "result": None, "_cancel_event": cancel_event,
+            "result": None, "split": False, "parts_total": 0, "part_no": 0,
+            "part_name": "", "part_lines": 0, "parts": [], "_cancel_event": cancel_event,
         }
         _JOB.update(active=True, job=job, finished_at=0.0)
 
-    def worker():
-        def on_progress(state):
-            with _JOB_LOCK:
-                for key in ("phase", "pages", "pages_total", "changed", "new", "gone",
-                            "lines", "current", "truncated"):
-                    if key in state:
-                        job[key] = state[key]
+    progress_keys = ("phase", "pages", "pages_total", "changed", "new", "gone",
+                     "lines", "current", "truncated")
 
+    def worker():
+        results = []
         try:
-            result = crawl(user_id, start_url, page_limit, respect_robots,
-                           on_progress=on_progress, cancel_event=cancel_event, section=section)
-            job["result"] = result
-            cancelled = bool(result["stats"].get("cancelled"))
+            parts = None
+            if split and prefix:
+                plan = plan_split(user_id, start_url, respect_robots, page_budget=page_limit)
+                if plan.get("needed"):
+                    parts = plan["parts"]
+                    with _JOB_LOCK:
+                        job["split"] = True
+                        job["parts_total"] = len(parts)
+                        job["pages_total"] = plan.get("pages") or page_limit
+                        job["message"] = f"Раздел разбит на {len(parts)} подразделов"
+                    logger.info(f"✂️ {prefix}: страниц по карте сайта {plan.get('pages')}, "
+                                f"файлов {len(parts)} (потолок {MAX_LINES} строк, "
+                                f"бюджет {plan.get('page_budget')} страниц на файл)")
+                elif plan.get("oversized"):
+                    logger.warning(f"✂️ {prefix}: подраздел {', '.join(plan['oversized'])} "
+                                   f"не влезает в потолок даже целиком — файл будет обрезан")
+
+            if parts:
+                base_pages = base_lines = 0
+                for number, part in enumerate(parts, start=1):
+                    if cancel_event.is_set():
+                        break
+
+                    def on_progress(state, number=number, part=part,
+                                    base_pages=base_pages, base_lines=base_lines):
+                        with _JOB_LOCK:
+                            for key in progress_keys:
+                                if key in state:
+                                    job[key] = state[key]
+                            job["pages"] = base_pages + state.get("pages", 0)
+                            job["lines"] = base_lines + state.get("lines", 0)
+                            job["part_no"] = number
+                            job["part_lines"] = state.get("lines", 0)
+                            job["part_name"] = state.get("current") or part["url"]
+                            job["filename"] = part["filename"]
+
+                    result = crawl(user_id, part["url"], page_limit, respect_robots,
+                                   on_progress=on_progress, cancel_event=cancel_event,
+                                   section=True, extra_seeds=part.get("extra_seeds"))
+                    results.append(result)
+                    base_pages += result["stats"].get("pages", 0)
+                    base_lines += result["stats"].get("lines", 0)
+                    with _JOB_LOCK:
+                        job["parts"].append({"filename": result["filename"],
+                                             "section": result.get("section", ""),
+                                             "url": part["url"],
+                                             "lines": result.get("lines", 0),
+                                             "pages": result["stats"].get("pages", 0)})
+                        job["pages"] = base_pages
+                        job["lines"] = base_lines
+            else:
+                def on_progress(state):
+                    with _JOB_LOCK:
+                        for key in progress_keys:
+                            if key in state:
+                                job[key] = state[key]
+
+                results.append(crawl(user_id, start_url, page_limit, respect_robots,
+                                     on_progress=on_progress, cancel_event=cancel_event,
+                                     section=section))
+
+            cancelled = any(r["stats"].get("cancelled") for r in results)
+            if len(results) > 1:
+                job["result"] = {"split": True, "files": [r["filename"] for r in results],
+                                 "lines": sum(r.get("lines", 0) for r in results),
+                                 "pages": sum(r["stats"].get("pages", 0) for r in results)}
+            elif results:
+                job["result"] = results[0]
             job["phase"] = "cancelled" if cancelled else "done"
-            job["message"] = ("Обход отменён — в файл попало то, что успели обойти"
-                              if cancelled else "")
-            # Файл записывается и при отменённом обходе, поэтому базу знаний обновляем в
+            if cancelled:
+                job["message"] = "Обход отменён — в файл попало то, что успели обойти"
+
+            # Файлы записываются и при отменённом обходе, поэтому базу знаний обновляем в
             # обоих случаях: иначе в индексе остаётся прежняя версия файла, а на диске
             # уже другая, и ассистент отвечает по устаревшим данным.
-            if on_finish:
+            # В режиме дробления итог уходит обработчику частей, даже если успел
+            # собраться только один подраздел (отмена в середине обхода).
+            if on_finish_parts and job.get("split") and results:
+                try:
+                    on_finish_parts(user_id, results)
+                    job["indexed"] = True
+                    if cancelled:
+                        job["message"] = ("Обход отменён — в базу знаний попало то, "
+                                          "что успели обойти")
+                    else:
+                        job["message"] = (f"Раздел разбит на {len(results)} файлов — "
+                                          f"все добавлены в базу знаний")
+                        job["phase"] = "index"
+                except Exception as e:
+                    logger.error(f"❌ Не удалось добавить файлы сайта в БЗ: {e}")
+                    job["message"] = f"Сайт обойдён, но файлы не добавлены в БЗ: {e}"
+            elif on_finish and results:
+                result = results[-1]
                 try:
                     on_finish(user_id, result)
                     job["indexed"] = True
