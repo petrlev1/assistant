@@ -1224,8 +1224,13 @@ class RAGCore:
         filename = Path(file_path).stem
         current_hash = self._get_content_hash(knowledge_content)
         
-        # Ищем старые кэш-файлы с этим именем (с хэшем в имени)
-        old_cache_files = list(cache_dir.glob(f"{filename}_*.pkl"))
+        # Ищем старые кэш-файлы с этим именем (в имени — md5, 32 hex-символа).
+        # Широкий шаблон «<имя>_*» захватывал бы кэши других документов, чьё имя
+        # начинается так же (site_<домен>.pkl и site_<домен>_<раздел>.pkl), и
+        # «миграция» удаляла бы чужой кэш.
+        old_pattern = re.compile(rf"^{re.escape(filename)}_[0-9a-f]{{32}}\.pkl$")
+        old_cache_files = [p for p in cache_dir.glob(f"{filename}_*.pkl")
+                           if old_pattern.match(p.name)]
         
         if old_cache_files:
             # Берем самый свежий файл (по времени изменения)
@@ -1291,6 +1296,105 @@ class RAGCore:
         with open(cache_path, 'rb') as f:
             return pickle.load(f)
 
+    def _get_line_cache_path(self, file_path):
+        """Путь к построчному кэшу векторов: <имя файла БЗ>.lines.pkl.
+
+        Лежит рядом с общим кэшем файла: <имя>.pkl — векторы всего файла,
+        <имя>.lines.pkl — векторы по строкам (основа для инкрементального пересчёта).
+        """
+        return self._get_file_embedding_cache_path(file_path).with_suffix('.lines.pkl')
+
+    @staticmethod
+    def _line_key(text):
+        """Ключ строки для построчного кэша: md5 от нормализованного текста."""
+        return hashlib.md5(str(text).strip().encode('utf-8')).hexdigest()
+
+    def _load_line_cache(self, file_path):
+        """Построчный кэш векторов: ([ключи строк], матрица) или ([], None)."""
+        path = self._get_line_cache_path(file_path)
+        if not path.exists():
+            return [], None
+        try:
+            data = self._load_cache_pickle(path)
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось прочитать построчный кэш {path.name}: {e}")
+            return [], None
+        if not isinstance(data, dict):
+            return [], None
+        keys = list(data.get('keys') or [])
+        vectors = data.get('vectors')
+        if not isinstance(vectors, torch.Tensor) or vectors.dim() != 2 or vectors.shape[0] != len(keys):
+            return [], None
+        return keys, vectors.cpu()
+
+    def _save_line_cache(self, file_path, keys, vectors):
+        """Сохраняет построчный кэш. Векторы — на CPU: кэш должен читаться и на машине без GPU."""
+        path = self._get_line_cache_path(file_path)
+        try:
+            with open(path, 'wb') as f:
+                pickle.dump({'version': 1, 'keys': list(keys), 'vectors': vectors.cpu()}, f)
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось сохранить построчный кэш {path.name}: {e}")
+
+    def _embed_with_line_cache(self, file_path, knowledge_content):
+        """Считает эмбеддинги по строкам, переиспользуя уже посчитанные векторы.
+
+        Зачем: эмбеддинги считаются по всему файлу целиком, и раньше изменение
+        одной строки вызывало полный пересчёт файла. Для больших баз знаний,
+        которые обновляются (разделы сайта, прайсы), это минуты работы CPU на
+        каждое обновление. Построчный кэш пересчитывает только новые строки.
+        Вектор строки зависит только от её текста, поэтому переиспользование
+        корректно и порядок строк в файле на результат не влияет.
+        """
+        lines = list(knowledge_content)
+        if not lines:
+            return self.model.encode(lines, convert_to_tensor=True)
+
+        keys = [self._line_key(text) for text in lines]
+        cached_keys, cached_vectors = self._load_line_cache(file_path)
+        position = {key: index for index, key in enumerate(cached_keys)}
+
+        texts, missing, missing_set = {}, [], set()
+        for key, text in zip(keys, lines):
+            texts.setdefault(key, text)
+            if key not in position and key not in missing_set:
+                missing_set.add(key)
+                missing.append(key)
+
+        if missing:
+            batch_size = 256
+            fresh_batches = []
+            for start in range(0, len(missing), batch_size):
+                chunk = missing[start:start + batch_size]
+                vectors = self.model.encode([texts[key] for key in chunk], convert_to_tensor=True)
+                if isinstance(vectors, torch.Tensor) and vectors.dim() == 1:
+                    vectors = vectors.unsqueeze(0)
+                fresh_batches.append(vectors.detach().cpu())
+                logger.info(f"🧠 Эмбеддинги по строкам: {min(start + batch_size, len(missing))} "
+                            f"из {len(missing)} новых строк (всего строк в файле {len(lines)})")
+            fresh = torch.cat(fresh_batches, dim=0)
+            if cached_vectors is not None and cached_keys:
+                matrix = torch.cat([cached_vectors, fresh], dim=0)
+                all_keys = cached_keys + missing
+            else:
+                matrix, all_keys = fresh, missing
+        else:
+            matrix, all_keys = cached_vectors, cached_keys
+            logger.info(f"✅ Эмбеддинги: все {len(lines)} строк взяты из построчного кэша")
+
+        if matrix is None or not all_keys:
+            return self.model.encode(lines, convert_to_tensor=True)
+
+        row_of = {key: index for index, key in enumerate(all_keys)}
+        used_keys = list(dict.fromkeys(keys))                    # без повторов, порядок файла
+        used_matrix = matrix[[row_of[key] for key in used_keys]]
+        self._save_line_cache(file_path, used_keys, used_matrix)  # заодно чистим устаревшие строки
+
+        used_row = {key: index for index, key in enumerate(used_keys)}
+        embeddings = used_matrix[[used_row[key] for key in keys]]
+        return embeddings.to(self.model.device)
+
+
     def _load_or_create_embeddings(self, file_path, knowledge_content):
         """Загружает эмбеддинги из кэша или создает их заново"""
         cache_path = self._get_file_embedding_cache_path(file_path)
@@ -1348,7 +1452,7 @@ class RAGCore:
         # Если кэш не существует или неактуален — создаем заново
         if embeddings is None or cached_hash != current_hash:
             logger.info(f"🧠 Создание эмбеддингов для {os.path.basename(file_path)}...")
-            embeddings = self.model.encode(knowledge_content, convert_to_tensor=True)
+            embeddings = self._embed_with_line_cache(file_path, knowledge_content)
             
             # Сохраняем эмбеддинги вместе с хэшем
             cache_data = {
@@ -1457,6 +1561,10 @@ class RAGCore:
         for cache_file in cache_files:
             # Извлекаем имя файла без расширения
             cache_filename = cache_file.stem
+            # Построчный кэш (<имя>.lines.pkl) живёт вместе с кэшем файла:
+            # его судьба решается по имени самого документа БЗ.
+            if cache_filename.endswith('.lines'):
+                cache_filename = cache_filename[:-len('.lines')]
             
             # Если файла нет в текущей базе знаний — удаляем кэш
             if cache_filename not in current_file_names:
