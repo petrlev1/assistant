@@ -38,6 +38,17 @@ PAGES = {
     "about.html": '<html><head><title>О нас</title></head><body>'
                   '<p>Производство термочехлов работает с 2012 года, выпуск более двух тысяч изделий в год.</p>'
                   '</body></html>',
+    # раздел каталога — для проверки постраничной индексации (галочка «Только этот раздел»)
+    "catalog/index.html": '<html><head><title>Каталог термочехлов</title></head><body>'
+                          '<p>В каталоге собраны термочехлы для трубопроводов, насосов и запорной арматуры.</p>'
+                          '<a href="/catalog/aeratsiya/index.html">Аэрация</a>'
+                          '<a href="/catalog-sale/index.html">Распродажа</a></body></html>',
+    "catalog/aeratsiya/index.html": '<html><head><title>Аэрация для воды</title></head><body>'
+                                    '<p>Аэрационные колонны удаляют железо и сероводород, подбираются по расходу воды.</p>'
+                                    '</body></html>',
+    "catalog-sale/index.html": '<html><head><title>Распродажа</title></head><body>'
+                               '<p>Ликвидация складских остатков: скидки на термочехлы до конца месяца.</p>'
+                               '</body></html>',
 }
 
 
@@ -60,7 +71,9 @@ class SiteRouteCase(unittest.TestCase):
         cls.cwd = os.getcwd()
         os.chdir(cls.tmp)                                    # Database/ и site_cache/ — в temp
         for name, content in PAGES.items():
-            with open(os.path.join(cls.src, name), "w", encoding="utf-8") as f:
+            path = os.path.join(cls.src, name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)   # у каталога есть подпапки
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
         handler = lambda *a, **kw: _Handler(*a, directory=cls.src, **kw)
         cls.server = _Server(("127.0.0.1", 0), handler)
@@ -222,6 +235,95 @@ class SiteRouteCase(unittest.TestCase):
             self.assertEqual(self.client.post('/api/site/cancel').status_code, 409)
         finally:
             sc.get_status, sc.cancel = real_status, real_cancel
+
+    def test_section_crawl_route_makes_separate_document(self):
+        """Галочка «Только этот раздел»: свой файл БЗ, своё имя документа, свой манифест."""
+        response = self.client.post('/api/site/crawl',
+                                    json={'url': self.base + '/catalog/', 'pages': 5,
+                                          'section': True})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['job']['section'], '/catalog')
+
+        state = self._wait_done()
+        job = state['job']
+        self.assertEqual(job['phase'], 'index')
+
+        txt = os.path.join('Database', 'user_990003', 'site_127.0.0.1_catalog.txt')
+        self.assertTrue(os.path.exists(txt), 'TXT раздела не создан')
+        with open(txt, encoding='utf-8') as f:
+            text = f.read()
+        self.assertIn('термочехлы для трубопроводов', text)
+        self.assertIn('Аэрационные колонны', text)
+        self.assertNotIn('с 2012 года', text, 'в файл раздела попало содержимое всего сайта')
+        self.assertNotIn('Ликвидация складских остатков', text)
+
+        self.assertEqual([d['filename'] for d in self.docs], ['site_127.0.0.1_catalog.txt'])
+        self.assertEqual(self.docs[0]['doc_group'], '🌐 127.0.0.1 · /catalog')
+        self.assertEqual(self.reindexed, [990003])
+
+        # «⟳ Обновить с сайта» у файла раздела: адрес, лимит и режим берутся из манифеста
+        info = self.client.get('/api/site/info?filename=site_127.0.0.1_catalog.txt').get_json()
+        self.assertEqual(info['section'], '/catalog')
+        self.assertEqual(info['url'], self.base + '/catalog')
+        self.assertEqual(info['page_limit'], 5)
+
+    def test_preview_route_shows_filename_and_overlaps(self):
+        preview = self.client.get('/api/site/preview?url=' + self.base + '/catalog/&section=1').get_json()
+        self.assertTrue(preview['ok'])
+        self.assertEqual(preview['filename'], 'site_127.0.0.1_catalog.txt')
+        self.assertEqual(preview['section'], '/catalog')
+        self.assertEqual(preview['mode'], 'section')
+        self.assertEqual(preview['warnings'], [])
+
+        # без галочки тот же адрес — это обход всего сайта
+        whole = self.client.get('/api/site/preview?url=' + self.base + '/catalog/').get_json()
+        self.assertEqual(whole['filename'], 'site_127.0.0.1.txt')
+        self.assertEqual(whole['mode'], 'site')
+
+        # галочка на главной странице смысла не имеет — предупреждаем
+        home = self.client.get('/api/site/preview?url=' + self.base + '/&section=1').get_json()
+        self.assertEqual(home['mode'], 'site')
+        self.assertTrue(any('главная' in w for w in home['warnings']), home['warnings'])
+
+        # сайт уже проиндексирован целиком → предупреждаем о пересечении
+        self.client.post('/api/site/crawl', json={'url': self.base + '/index.html', 'pages': 5})
+        self._wait_done()
+        after = self.client.get('/api/site/preview?url=' + self.base + '/catalog/&section=1').get_json()
+        self.assertTrue(any('site_127.0.0.1.txt' in w for w in after['warnings']), after['warnings'])
+        site_preview = self.client.get('/api/site/preview?url=' + self.base + '/index.html').get_json()
+        self.assertEqual(site_preview['warnings'], [])
+
+    def test_preview_route_validation_and_auth(self):
+        self.assertEqual(self.client.get('/api/site/preview?url=').status_code, 400)
+        os.environ.pop('SITE_CRAWLER_ALLOW_LOCAL', None)
+        try:
+            blocked = self.client.get('/api/site/preview?url=http://10.0.0.7/catalog/')
+            self.assertEqual(blocked.status_code, 400)
+            self.assertTrue(blocked.get_json()['error'])
+        finally:
+            os.environ['SITE_CRAWLER_ALLOW_LOCAL'] = '1'
+        anon = self.web_app.app.test_client()
+        self.assertEqual(anon.get('/api/site/preview?url=https://example.com/').status_code, 401)
+
+    def test_pages_limit_setting_is_respected_and_capped(self):
+        """Лимит страниц: из app_settings, но не выше потолка краулера."""
+        real_settings = self.web_app.get_all_settings
+        try:
+            self.web_app.get_all_settings = lambda: {}
+            self.assertEqual(self.web_app._site_pages_limit(), self.sc.DEFAULT_PAGE_LIMIT)
+            self.assertEqual(self.sc.DEFAULT_PAGE_LIMIT, 300)
+
+            self.web_app.get_all_settings = lambda: {'site_pages_limit': 777}
+            self.assertEqual(self.web_app._site_pages_limit(), 777)
+
+            self.web_app.get_all_settings = lambda: {'site_pages_limit': 99999}
+            self.assertEqual(self.web_app._site_pages_limit(), self.sc.MAX_PAGE_LIMIT)
+            self.assertEqual(self.sc.MAX_PAGE_LIMIT, 1000)
+
+            self.web_app.get_all_settings = lambda: {'site_pages_limit': 'мусор'}
+            self.assertEqual(self.web_app._site_pages_limit(), self.sc.DEFAULT_PAGE_LIMIT)
+        finally:
+            self.web_app.get_all_settings = real_settings
 
     def test_status_hides_other_users_job(self):
         sc = self.sc

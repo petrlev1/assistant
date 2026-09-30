@@ -860,14 +860,19 @@ def upload_document():
 
 
 def _site_pages_limit():
-    """Лимит страниц обхода: app_settings.site_pages_limit, иначе значение по умолчанию."""
+    """Лимит страниц обхода: app_settings.site_pages_limit, иначе значение по умолчанию.
+
+    Настройка нужна для больших разделов (каталог товаров не влезает в 50 страниц):
+    значение берётся из app_settings, но не выше site_crawler.MAX_PAGE_LIMIT.
+    """
+    value = 0
     try:
         value = int((get_all_settings() or {}).get('site_pages_limit', 0) or 0)
-        if value > 0:
-            return value
     except Exception as e:
         logger.warning(f"Не удалось прочитать лимит страниц сайта: {e}")
-    return site_crawler.DEFAULT_PAGE_LIMIT
+    if value <= 0:
+        return site_crawler.DEFAULT_PAGE_LIMIT
+    return min(value, site_crawler.MAX_PAGE_LIMIT)
 
 
 def _site_crawl_finished(user_id, result):
@@ -884,13 +889,17 @@ def _site_crawl_finished(user_id, result):
         delete_document(old['id'], user_id)
         logger.info(f"♻️ Сайт: документ {filename} обновляется (заменяет id {old['id']})")
 
-    success, doc_id = add_document(user_id, filename, filename,
-                                   doc_group=f"🌐 {result['domain']}")
+    # Группа в «Документах»: у файла сайта — домен, у файла раздела — домен и раздел.
+    group = f"🌐 {result['domain']}"
+    if result.get('section'):
+        group = f"🌐 {result['domain']} · {result['section']}"
+    success, doc_id = add_document(user_id, filename, filename, doc_group=group)
     if not success:
         raise RuntimeError('не удалось добавить документ в базу знаний')
 
     stats = result.get('stats') or {}
-    logger.info(f"🌐 Сайт {result['domain']}: строк {result['lines']}, страниц {stats.get('pages', 0)} "
+    logger.info(f"🌐 {result['domain']}{result.get('section') or ''}: строк {result['lines']}, "
+                f"страниц {stats.get('pages', 0)} "
                 f"(новых {stats.get('new', 0)}, изменённых {stats.get('changed', 0)}, "
                 f"неизменных {stats.get('unchanged', 0)}, ушло {stats.get('gone', 0)}) "
                 f"→ {filename} (doc {doc_id})")
@@ -915,15 +924,79 @@ def site_crawl_start():
     except (TypeError, ValueError):
         pages = _site_pages_limit()
     respect_robots = bool(data.get('respect_robots', True))
+    section = bool(data.get('section', False))          # «Только этот раздел» — свой файл БЗ
 
     try:
         job = site_crawler.start_job(session['user_id'], url, pages, respect_robots,
-                                     on_finish=_site_crawl_finished)
+                                     section=section, on_finish=_site_crawl_finished)
     except site_crawler.CrawlError as e:
         return jsonify({'error': str(e)}), 400
 
-    logger.info(f"🌐 Пользователь {session.get('username')} запустил обход сайта: {url} (лимит {pages})")
+    mode = f"только раздел {site_crawler.section_prefix(site_crawler.normalize_url(url))}" \
+        if section else "весь сайт"
+    logger.info(f"🌐 Пользователь {session.get('username')} запустил обход сайта: {url} "
+                f"({mode}, лимит {pages})")
     return jsonify({'success': True, 'job': site_crawler.public_job(job)})
+
+
+@app.route('/api/site/preview')
+def site_preview():
+    """Что получится из введённого адреса — до запуска обхода.
+
+    Возвращает имя файла БЗ, режим (весь сайт или раздел) и предупреждения о
+    пересечении с уже проиндексированным: если раздел входит в файл всего сайта
+    (или родительский раздел), одни и те же страницы окажутся в двух документах,
+    и в ответах возможны повторы. Сетевых запросов здесь нет — только расчёт.
+    """
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    url = (request.args.get('url') or '').strip()
+    if not url:
+        return jsonify({'ok': False, 'error': 'Укажите адрес сайта'}), 400
+    if '://' not in url:
+        url = 'https://' + url
+    section = str(request.args.get('section', '')).lower() in ('1', 'true', 'on', 'yes')
+
+    normalized = site_crawler.normalize_url(url)
+    if not normalized:
+        return jsonify({'ok': False, 'error': 'Некорректный адрес сайта'}), 400
+    try:
+        site_crawler.assert_public_url(normalized)
+    except site_crawler.CrawlError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+
+    domain = site_crawler.domain_of(normalized)
+    prefix = site_crawler.section_prefix(normalized) if section else ''
+    filename = site_crawler.site_filename(domain, prefix)
+    existing = site_crawler.list_manifests(session['user_id'], domain)
+
+    warnings = []
+    if section and not prefix:
+        warnings.append('Это главная страница сайта: раздел не определяется, обойдётся весь сайт.')
+    if prefix:
+        for manifest in existing:
+            other = manifest.get('prefix') or ''
+            if other == prefix:
+                warnings.append(f"Раздел уже обходили ({manifest['filename']}): обновление "
+                                f"перезапишет этот же файл.")
+            elif not other:
+                warnings.append(f"Весь сайт уже проиндексирован в {manifest['filename']}: "
+                                f"те же страницы попадут и туда, и в файл раздела — в ответах "
+                                f"возможны повторы.")
+            elif other.startswith(prefix + '/') or prefix.startswith(other + '/'):
+                warnings.append(f"Пересекается с уже проиндексированным разделом {other} "
+                                f"({manifest['filename']}).")
+    else:
+        for manifest in existing:
+            if manifest.get('prefix'):
+                warnings.append(f"Раздел {manifest['prefix']} проиндексирован отдельно "
+                                f"({manifest['filename']}): его страницы попадут и в общий файл сайта.")
+
+    return jsonify({'ok': True, 'url': normalized, 'domain': domain, 'section': prefix,
+                    'filename': filename, 'mode': 'section' if prefix else 'site',
+                    'page_limit': _site_pages_limit(), 'warnings': warnings,
+                    'existing': existing})
 
 
 @app.route('/api/site/status')

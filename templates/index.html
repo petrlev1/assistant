@@ -962,6 +962,26 @@
             line-height: 1.45;
             margin-top: 12px;
         }
+        .site-check-wide {
+            margin-top: 12px;
+            white-space: normal;
+            align-items: flex-start;
+            line-height: 1.35;
+        }
+        .site-check-wide input { margin-top: 2px; }
+        .site-preview {
+            display: none;
+            font-size: 12px;
+            line-height: 1.5;
+            margin-top: 10px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            background: #f4f6fb;
+            color: #555;
+        }
+        .site-preview.warn { background: #fff6e6; color: #8a5a00; }
+        .site-preview code { background: none; padding: 0; font-weight: 600; color: #3b4a6b; }
+        .site-preview.warn code { color: #8a5a00; }
         #siteModalBox input[type="text"],
         #siteModalBox input[type="number"] {
             width: 100%;
@@ -1296,14 +1316,20 @@
             <div class="site-row">
                 <div>
                     <label>Страниц (максимум)</label>
-                    <input type="number" id="sitePages" min="1" max="300" value="50">
+                    <input type="number" id="sitePages" min="1" max="1000" value="300">
                 </div>
                 <label class="site-check"><input type="checkbox" id="siteRobots" checked> Уважать robots.txt</label>
             </div>
+            <label class="site-check site-check-wide"><input type="checkbox" id="siteSection">
+                📂 Только этот раздел — постраничная индексация</label>
+            <div class="site-preview" id="sitePreview"></div>
             <div class="site-hint" id="siteModalHint">
                 Система обойдёт страницы сайта, соберёт текст в один TXT-файл и добавит его в базу
                 знаний чат-бота. Повторный запуск по тому же адресу обновит файл: изменившиеся
                 страницы переиндексируются, а уже собранные не потеряются.
+                С галочкой «Только этот раздел» обходятся лишь страницы под введённым адресом
+                (например https://example.com/catalog/) — они попадают в отдельный файл базы знаний,
+                и его можно обновлять отдельно от всего сайта.
             </div>
             <div class="qa-modal-actions">
                 <button id="siteModalCancel" onClick="closeSiteModal()">Отмена</button>
@@ -1899,15 +1925,22 @@
         }
 
         // === Индексация сайта по ссылке: диалог, прогресс, отмена, повторный обход ===
-        const SITE_MAX_PAGES = 300;
+        const SITE_MAX_PAGES = 1000;        // потолок на сервере (site_crawler.MAX_PAGE_LIMIT)
+        const SITE_DEFAULT_PAGES = 300;     // значение по умолчанию (app_settings.site_pages_limit)
         let sitePollTimer = null;
 
         function openSiteModal() {
             const modal = document.getElementById('siteModal');
             if (!modal) return;
-            document.getElementById('siteUrl').value = '';
-            document.getElementById('sitePages').value = 50;
+            const urlInput = document.getElementById('siteUrl');
+            urlInput.value = '';
+            urlInput.oninput = scheduleSitePreview;          // имя файла и предупреждения — на лету
+            document.getElementById('sitePages').value = SITE_DEFAULT_PAGES;
             document.getElementById('siteRobots').checked = true;
+            const sectionBox = document.getElementById('siteSection');
+            sectionBox.checked = false;
+            sectionBox.onchange = scheduleSitePreview;
+            showSitePreview(null);
             const startBtn = document.getElementById('siteModalStart');
             startBtn.disabled = false;
             startBtn.textContent = 'Индексировать';
@@ -1920,16 +1953,56 @@
             if (modal) modal.style.display = 'none';
         }
 
+        // Предпросмотр адреса: какой файл получится и не пересекается ли он с уже проиндексированным
+        let sitePreviewTimer = null;
+
+        function scheduleSitePreview() {
+            if (sitePreviewTimer) clearTimeout(sitePreviewTimer);
+            sitePreviewTimer = setTimeout(loadSitePreview, 350);
+        }
+
+        function loadSitePreview() {
+            const url = (document.getElementById('siteUrl').value || '').trim();
+            if (!url) { showSitePreview(null); return; }
+            const section = document.getElementById('siteSection').checked ? '1' : '0';
+            fetch('/api/site/preview?url=' + encodeURIComponent(url) + '&section=' + section)
+                .then(r => r.json())
+                .then(data => showSitePreview(data))
+                .catch(() => showSitePreview(null));
+        }
+
+        function showSitePreview(data) {
+            const box = document.getElementById('sitePreview');
+            if (!box) return;
+            if (!data || !data.ok) {
+                const message = (data && data.error) || '';
+                box.textContent = message;
+                box.classList.toggle('warn', !!message);
+                box.style.display = message ? 'block' : 'none';
+                return;
+            }
+            const mode = data.mode === 'section'
+                ? 'только раздел ' + escapeHtml(data.section)
+                : 'весь сайт';
+            const lines = ['Файл базы знаний: <code>' + escapeHtml(data.filename) + '</code> · ' + mode];
+            const warnings = data.warnings || [];
+            warnings.forEach(text => lines.push('⚠️ ' + escapeHtml(text)));
+            box.innerHTML = lines.join('<br>');
+            box.classList.toggle('warn', warnings.length > 0);
+            box.style.display = 'block';
+        }
+
         function startSiteCrawl() {
             const url = (document.getElementById('siteUrl').value || '').trim();
             if (!url) { alert('Укажите адрес сайта'); return; }
             let pages = parseInt(document.getElementById('sitePages').value, 10);
-            if (!pages || pages < 1) pages = 50;
+            if (!pages || pages < 1) pages = SITE_DEFAULT_PAGES;
             if (pages > SITE_MAX_PAGES) pages = SITE_MAX_PAGES;
             launchSiteCrawl({
                 url: url,
                 pages: pages,
-                respect_robots: document.getElementById('siteRobots').checked
+                respect_robots: document.getElementById('siteRobots').checked,
+                section: document.getElementById('siteSection').checked
             }, () => {
                 const startBtn = document.getElementById('siteModalStart');
                 startBtn.disabled = false;
@@ -2006,7 +2079,8 @@
                 bar.classList.add('active');
                 icon.textContent = '🔍';
                 cancelBtn.style.display = '';
-                text.textContent = 'Обход сайта: страниц ' + (job.pages || 0) +
+                text.textContent = 'Обход ' + (job.section ? 'раздела ' + job.section : 'сайта') +
+                    ': страниц ' + (job.pages || 0) +
                     (job.pages_total ? ' из ' + job.pages_total : '') +
                     ' · строк ' + (job.lines || 0) + (current ? ' · ' + current : '');
                 fill.style.width = (job.pages_total
@@ -2032,11 +2106,13 @@
                 text.textContent = job.message || 'Обход сайта не удался';
             } else if (phase === 'cancelled') {
                 icon.textContent = '⏹';
-                text.textContent = 'Обход остановлен: в базу знаний попали строки ' + (job.lines || 0) +
+                text.textContent = (job.section ? 'Обход раздела ' + job.section : 'Обход сайта') +
+                    ' остановлен: в базу знаний попали строки ' + (job.lines || 0) +
                     ' — то, что успели собрать' + tail;
             } else {
                 icon.textContent = '✅';
-                text.textContent = 'Сайт добавлен в базу знаний: строк ' + (job.lines || 0) + tail;
+                text.textContent = (job.section ? 'Раздел ' + job.section + ' добавлен'
+                    : 'Сайт добавлен') + ' в базу знаний: строк ' + (job.lines || 0) + tail;
             }
             setTimeout(() => {
                 if (!sitePollTimer) bar.classList.remove('active');
@@ -2067,8 +2143,9 @@
                     }
                     launchSiteCrawl({
                         url: info.url,
-                        pages: info.page_limit || 50,
-                        respect_robots: info.respect_robots !== false
+                        pages: info.page_limit || SITE_DEFAULT_PAGES,
+                        respect_robots: info.respect_robots !== false,
+                        section: !!info.section      // раздел обновляем как раздел, а не как весь сайт
                     }, null);
                 })
                 .catch(() => alert('Ошибка соединения с сервером'));
