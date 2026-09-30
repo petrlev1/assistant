@@ -1118,6 +1118,7 @@ def init_widgets():
                 active BOOLEAN DEFAULT TRUE,
                 bot_paused BOOLEAN DEFAULT FALSE,
                 bot_idle_minutes INTEGER DEFAULT 0,
+                greeting TEXT DEFAULT '',
                 total_requests INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_used_at TIMESTAMP
@@ -1126,6 +1127,8 @@ def init_widgets():
         # Виджеты, созданные до появления паузы бота, догоняем отдельной колонкой
         cur.execute("ALTER TABLE widgets ADD COLUMN IF NOT EXISTS bot_paused BOOLEAN DEFAULT FALSE")
         cur.execute("ALTER TABLE widgets ADD COLUMN IF NOT EXISTS bot_idle_minutes INTEGER DEFAULT 0")
+        # Приветствие виджета: свой текст вместо авто-приветствия из роли в промте
+        cur.execute("ALTER TABLE widgets ADD COLUMN IF NOT EXISTS greeting TEXT DEFAULT ''")
         # Счётчик обращений по дням: дневной лимит снимается атомарно (widget_consume)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS widget_hits (
@@ -1375,7 +1378,7 @@ def list_user_widgets(user_id):
 
 
 _WIDGET_COLS = {'name', 'allowed_domains', 'daily_limit', 'theme_color', 'active',
-                'bot_paused', 'bot_idle_minutes'}
+                'bot_paused', 'bot_idle_minutes', 'greeting'}
 
 
 def update_widget(user_id, widget_id, fields):
@@ -1533,12 +1536,15 @@ def init_max_channels():
                 hook_secret VARCHAR(64) NOT NULL,
                 mode VARCHAR(16) DEFAULT 'webhook',
                 daily_limit INTEGER DEFAULT 200,
+                greeting TEXT DEFAULT '',
                 active BOOLEAN DEFAULT TRUE,
                 total_requests INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_used_at TIMESTAMP
             )
         """)
+        # Приветствие бота: свой текст вместо авто-приветствия из роли в промте
+        cur.execute("ALTER TABLE max_channels ADD COLUMN IF NOT EXISTS greeting TEXT DEFAULT ''")
         # Счётчик ответов по дням: дневной лимит снимается атомарно (max_consume)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS max_hits (
@@ -1898,7 +1904,8 @@ def save_max_channel(user_id, token, bot_user_id, bot_name, bot_username,
         return False, None
 
 
-_MAX_COLS = {'daily_limit', 'active', 'mode', 'bot_name', 'bot_username', 'token'}
+_MAX_COLS = {'daily_limit', 'active', 'mode', 'bot_name', 'bot_username', 'token',
+             'greeting'}
 
 
 def update_max_channel(user_id, fields):

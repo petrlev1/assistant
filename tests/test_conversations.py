@@ -741,6 +741,89 @@ def test_max_panel(uid):
         _adb.delete_max_channel(uid)
 
 
+def test_greeting(uid, wid, key):
+    """Приветствие канала: свой текст из настроек вместо авто из роли в промте."""
+    print('\n15) Приветствие: виджет, тестовый чат кабинета, MAX')
+    import web_app, auth_db
+    client = web_app.app.test_client()
+    own = 'Здравствуйте! Я — ассистент RAGSTONE.\nСпросите про цены и сроки.'
+
+    check('без логина приветствие не сохранить',
+          client.post(f'/api/widgets/{wid}', json={'greeting': 'привет'}).status_code == 401)
+
+    html = client.get(f'/widget/{key}').get_data(as_text=True)
+    check('пустое поле — авто-приветствие из промта',
+          'Задай мне вопрос по базе знаний' in html, None)
+
+    with client.session_transaction() as sess:
+        sess['user_id'] = uid
+        sess['username'] = 'testconv'
+
+    r = client.post(f'/api/widgets/{wid}', json={'greeting': own})
+    saved = _q('SELECT greeting FROM widgets WHERE id = %s', (wid,))[0][0]
+    check('своё приветствие сохраняется у виджета', r.status_code == 200 and saved == own,
+          (r.status_code, saved))
+
+    html = client.get(f'/widget/{key}').get_data(as_text=True)
+    check('кадр виджета отдаёт своё приветствие вместо авто',
+          'Здравствуйте! Я — ассистент RAGSTONE.' in html
+          and 'Задай мне вопрос по базе знаний' not in html, None)
+    check('текст приветствия доступен скрипту кадра (для «Нового диалога» и «Очистить»)',
+          'var GREET' in html, None)
+
+    r = client.post(f'/api/widgets/{wid}', json={'greeting': 'я' * 1001})
+    after = _q('SELECT greeting FROM widgets WHERE id = %s', (wid,))[0][0]
+    check('приветствие длиннее 1000 символов — 400 и без изменений',
+          r.status_code == 400 and after == own, (r.status_code, after == own))
+
+    chat = client.get('/chat').get_data(as_text=True)
+    check('в тестовом чате кабинета — то же приветствие, что у гостя',
+          'Здравствуйте! Я — ассистент RAGSTONE.' in chat, None)
+
+    client.post(f'/api/widgets/{wid}', json={'greeting': '   '})
+    html = client.get(f'/widget/{key}').get_data(as_text=True)
+    check('пустое поле возвращает авто-приветствие',
+          'Задай мне вопрос по базе знаний' in html, None)
+
+    # --- MAX: то же приветствие у бота ---
+    ok, ch = auth_db.save_max_channel(uid, 'greet-token', 999, 'Тест-бот', 'test_bot',
+                                      'hookkey_greeting_01', 'secret_greeting_01')
+    check('MAX-канал подключён для теста приветствия', bool(ok and ch), None)
+    own_max = 'Привет! Это бот компании — задайте вопрос.'
+    r = client.post('/api/max/update', json={'greeting': own_max})
+    check('приветствие MAX сохраняется',
+          r.status_code == 200
+          and _q('SELECT greeting FROM max_channels WHERE user_id = %s', (uid,))[0][0] == own_max,
+          (r.status_code,))
+
+    status = client.get('/api/max').get_json() or {}
+    check('кабинет видит приветствие MAX', status.get('greeting') == own_max, status.get('greeting'))
+    info = (client.get('/api/max/inbox').get_json() or {}).get('channel') or {}
+    check('карточка канала отдаёт приветствие и по-прежнему не отдаёт секреты',
+          info.get('greeting') == own_max and 'token' not in info and 'hook_secret' not in info,
+          sorted(info))
+
+    real_send = web_app._max_send
+    sent = []
+    web_app._max_send = lambda channel, text, peer: (sent.append((peer, text)), True)[1]
+    try:
+        web_app._max_handle_update(auth_db.get_max_channel(uid), {
+            'update_type': 'bot_started', 'message': {'sender': {'user_id': '777888999'}, 'body': {}}})
+        check('на старте бота в MAX уходит своё приветствие',
+              sent == [('777888999', own_max)], sent)
+
+        auth_db.update_max_channel(uid, {'greeting': ''})
+        sent[:] = []
+        web_app._max_handle_update(auth_db.get_max_channel(uid), {
+            'update_type': 'bot_started', 'message': {'sender': {'user_id': '777888999'}, 'body': {}}})
+        check('без своего приветствия MAX отдаёт авто из промта',
+              len(sent) == 1 and 'Задай мне вопрос по базе знаний' in sent[0][1], sent)
+    finally:
+        web_app._max_send = real_send
+        auth_db.delete_max_channel(uid)
+    print('   (приветствие каналов проверено)')
+
+
 def main():
     auth_db.init_db()
     auth_db.init_chat_history()
@@ -818,8 +901,9 @@ def main():
         test_bot_pause(uid, wid, w['key'], 'cafebabe12345678')
         test_auto_return(uid, wid, w['key'], 'abcdef0199aabbcc')
         test_max_panel(uid)
+        test_greeting(uid, wid, w['key'])
 
-        print('15) Каскад при удалении владельца')
+        print('16) Каскад при удалении владельца')
         auth_db.delete_user(uid)
         check('диалоги удалены вместе с пользователем',
               not _q('SELECT 1 FROM conversations WHERE conv_key LIKE %s', (f'wid:{wid}:%', )))

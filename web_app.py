@@ -383,9 +383,10 @@ def chat():
     # Модель эмбеддингов уже прогрета в фоне; первая загрузка строит эмбеддинги/BM25.
     if rag_ready:
         get_user_rag(session['user_id'])
-    # Приветствие формируется из персонального промта: бот представляется своей ролью
-    user_prompt = get_user_prompt(session['user_id'])
-    greeting = build_greeting(user_prompt, session.get('username', 'Пользователь'))
+    # Приветствие: свой текст из настроек виджета/бота, иначе — из персонального
+    # промта (бот представляется своей ролью). В кабинете показываем то же, что
+    # увидит собеседник: так приветствие удобно проверить до публикации.
+    greeting = _preview_greeting(session['user_id'], session.get('username', 'Пользователь'))
     did = _device_id()
     resp = make_response(render_template('index.html', greeting=greeting,
                                          inbox_unread=count_unread_conversations(session['user_id'])))
@@ -2131,7 +2132,8 @@ def widget_page(key):
         return make_response(
             render_template('widget_frame.html', error='Этот ассистент не настроен для данного сайта.'),
             403)
-    greeting = build_greeting(get_user_prompt(w['user_id']), 'гость')
+    # Своё приветствие виджета, если задано; иначе авто из роли в промте
+    greeting = _greeting_or_default(w.get('greeting'), get_user_prompt(w['user_id']), 'гость')
     resp = make_response(render_template('widget_frame.html', w=w, key=w['key'], site=site, greeting=greeting))
     resp.headers['Cache-Control'] = 'no-store'
     return resp
@@ -2295,6 +2297,13 @@ def _widget_sanitize_fields(body):
         except (TypeError, ValueError):
             return None, 'Авто-возврат бота — целое число минут'
         out['bot_idle_minutes'] = max(0, min(idle, 1440))   # 0 = диалог остаётся у человека
+    if 'greeting' in body:
+        # Приветствие: показывается посетителю при старте бота. Пустая строка —
+        # вернуться к авто-приветствию из роли в промте.
+        greeting = str(body.get('greeting') or '').strip()
+        if len(greeting) > 1000:
+            return None, 'Приветствие — не длиннее 1000 символов'
+        out['greeting'] = greeting
     return out, None
 
 
@@ -2448,6 +2457,7 @@ def _max_channel_info(ch):
     return {'id': ch.get('id'), 'bot_name': ch.get('bot_name') or '',
             'bot_username': ch.get('bot_username') or '',
             'active': bool(ch.get('active')), 'mode': ch.get('mode') or 'webhook',
+            'greeting': ch.get('greeting') or '',
             'today_hits': int(ch.get('today_hits') or 0),
             'daily_limit': int(ch.get('daily_limit') or 0)}
 
@@ -2622,6 +2632,29 @@ def _norm_command(text):
     return ' '.join((text or '').strip().lower().rstrip('!.,').split())
 
 
+def _greeting_or_default(custom, prompt, who):
+    """Приветствие канала: свой текст из настроек, иначе собранный из роли в промте."""
+    text = (custom or '').strip()
+    return text if text else build_greeting(prompt, who)
+
+
+def _preview_greeting(user_id, username):
+    """Приветствие тестового чата кабинета — то же, что увидит собеседник.
+
+    У кабинета нет своего канала, поэтому берём приветствие первого (старшего по id)
+    виджета владельца, у которого оно задано; если ни у одного не задано — берём
+    приветствие MAX-бота; если и его нет — собираем из роли в промте (как раньше).
+    """
+    widgets = sorted(list_user_widgets(user_id) or [], key=lambda w: w.get('id') or 0)
+    for w in widgets:
+        if (w.get('greeting') or '').strip():
+            return w['greeting'].strip()
+    channel = get_max_channel(user_id)
+    if channel and (channel.get('greeting') or '').strip():
+        return channel['greeting'].strip()
+    return build_greeting(get_user_prompt(user_id), username)
+
+
 def _max_scope(channel_id, max_user_id):
     """Область истории собеседника в MAX: у каждого пользователя своя лента."""
     return ('max:%s:%s' % (channel_id, max_user_id))[:64]
@@ -2656,7 +2689,9 @@ def _max_handle_update(channel, update):
     if not sender:
         return
     if utype == 'bot_started':
-        _max_send(channel, build_greeting(get_user_prompt(channel['user_id']), 'гость'), sender)
+        # Своё приветствие канала, если задано; иначе авто из роли в промте
+        _max_send(channel, _greeting_or_default(channel.get('greeting'),
+                                                get_user_prompt(channel['user_id']), 'гость'), sender)
         return
     if utype != 'message_created' or not text:
         return
@@ -2741,6 +2776,7 @@ def _max_status(channel):
         'mode': channel.get('mode') or 'webhook',
         'active': bool(channel.get('active')),
         'daily_limit': channel.get('daily_limit') or 0,
+        'greeting': channel.get('greeting') or '',
         'today_hits': channel.get('today_hits') or 0,
         'total_requests': channel.get('total_requests') or 0,
         'last_used_at': str(channel.get('last_used_at') or ''),
@@ -2820,6 +2856,12 @@ def _max_sanitize_fields(body):
             return None, 'Дневной лимит — целое число'
     if 'active' in body:
         out['active'] = bool(body.get('active'))
+    if 'greeting' in body:
+        # Приветствие бота: уходит собеседнику при старте бота в MAX
+        greeting = str(body.get('greeting') or '').strip()
+        if len(greeting) > 1000:
+            return None, 'Приветствие — не длиннее 1000 символов'
+        out['greeting'] = greeting
     return out, None
 
 

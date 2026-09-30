@@ -88,6 +88,8 @@
 (function () {
     var KEY = {{ key|tojson }};
     var SITE = {{ site|tojson }};
+    // Приветствие: тем же текстом начинается и «Новый диалог»
+    var GREET = {{ greeting|tojson }};
     var LS = 'ragstone_widget_v1';
 
     function visitorId() {
@@ -156,6 +158,8 @@
                 if (!done && startTs && Number(m.ts) >= startTs && idx > 0) {
                     done = true;
                     add('— новый диалог —', null, 'sys');
+                    // Новый диалог начинается так же, как первый: с приветствия
+                    if (GREET) add(GREET, 'bot');
                 }
                 renderMsg(m);
             });
