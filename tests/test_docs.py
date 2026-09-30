@@ -77,6 +77,15 @@ class DocsCase(unittest.TestCase):
                          'Авто-возврат', 'Менеджер', 'MAX', 'Аналитик'):
             self.assertIn(expected, text, f'в docs/dialogs.md нет упоминания: {expected}')
 
+    def test_greeting_documented(self):
+        """Приветствие описано на обеих страницах каналов: свой текст, общий и из промта."""
+        widget_doc = (DOCS_DIR / 'widget.md').read_text(encoding='utf-8')
+        max_doc = (DOCS_DIR / 'max.md').read_text(encoding='utf-8')
+        for text, need in ((widget_doc, ('Приветствие гостю', 'Общее приветствие', 'Новый диалог')),
+                           (max_doc, ('Приветствие собеседнику', 'Мой промт'))):
+            for phrase in need:
+                self.assertIn(phrase, text, 'на странице нет «%s»' % phrase)
+
     def test_site_page_lists_limits_and_update(self):
         """Страница про сайт обязана объяснять лимит страниц, обновление и ограничения."""
         text = (DOCS_DIR / 'site.md').read_text(encoding='utf-8')
