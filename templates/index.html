@@ -1237,6 +1237,10 @@
                 Этот промт будет использоваться как системная инструкция для ИИ вместо стандартной.
                 Кнопка «Сбросить» вернёт стандартный промт системы.
             </div>
+            <label class="max-label">Общее приветствие — одно для всех виджетов и ботов
+                (пусто — приветствие из роли в промте)</label>
+            <textarea id="commonGreeting" class="max-greeting" rows="2" maxlength="1000"
+                      placeholder="Например: Здравствуйте! Я — ассистент компании. Задайте вопрос — отвечу по документам."></textarea>
             <div class="prompt-actions">
                 <button class="btn-send" onClick="savePrompt()">💾 Сохранить</button>
                 <button class="btn-reset" onClick="resetPrompt()">↩️ Сбросить к стандартному</button>
@@ -1547,6 +1551,7 @@
                     promptDefaultText = data.default_prompt || '';
                     const textarea = document.getElementById('promptTextarea');
                     textarea.value = data.has_custom ? data.prompt : promptDefaultText;
+                    document.getElementById('commonGreeting').value = data.greeting || '';
                     status.textContent = data.has_custom ? '✅ Персональный промт активен' : '✅ Используется стандартный промт';
                     status.style.color = '#4caf50';
                 })
@@ -1565,7 +1570,8 @@
             fetch('/api/prompt', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt: isDefault ? '' : text })
+                body: JSON.stringify({ prompt: isDefault ? '' : text,
+                                       greeting: document.getElementById('commonGreeting').value })
             })
                 .then(r => r.json())
                 .then(data => {

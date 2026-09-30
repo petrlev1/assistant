@@ -821,7 +821,57 @@ def test_greeting(uid, wid, key):
     finally:
         web_app._max_send = real_send
         auth_db.delete_max_channel(uid)
-    print('   (приветствие каналов проверено)')
+
+    # --- Общее приветствие: одно на все виджеты и ботов ---
+    common = 'Здравствуйте! Это общее приветствие для всех каналов.'
+    r = client.post('/api/prompt', json={'prompt': '', 'greeting': common})
+    check('общее приветствие сохраняется',
+          r.status_code == 200 and auth_db.get_user_greeting(uid) == common, r.status_code)
+    check('кабинет отдаёт общее приветствие в /api/prompt',
+          (client.get('/api/prompt').get_json() or {}).get('greeting') == common, None)
+
+    html = client.get(f'/widget/{key}').get_data(as_text=True)
+    check('виджет без своего текста берёт общее приветствие',
+          common in html and 'Задай мне вопрос по базе знаний' not in html, None)
+    chat = client.get('/chat').get_data(as_text=True)
+    check('тестовый чат кабинета тоже показывает общее приветствие', common in chat, None)
+
+    own_w = 'Своё приветствие виджета важнее общего.'
+    client.post(f'/api/widgets/{wid}', json={'greeting': own_w})
+    html = client.get(f'/widget/{key}').get_data(as_text=True)
+    check('своё приветствие виджета перекрывает общее',
+          own_w in html and common not in html, None)
+    client.post(f'/api/widgets/{wid}', json={'greeting': ''})
+
+    auth_db.save_max_channel(uid, 'greet-token-2', 999, 'Тест-бот', 'test_bot',
+                             'hookkey_greeting_02', 'secret_greeting_02')
+    real_send2 = web_app._max_send
+    sent2 = []
+    web_app._max_send = lambda channel, text, peer: (sent2.append((peer, text)), True)[1]
+    try:
+        web_app._max_handle_update(auth_db.get_max_channel(uid), {
+            'update_type': 'bot_started', 'message': {'sender': {'user_id': '555666777'}, 'body': {}}})
+        check('MAX без своего текста берёт общее приветствие',
+              sent2 == [('555666777', common)], sent2)
+        auth_db.update_max_channel(uid, {'greeting': 'Своё приветствие бота.'})
+        sent2[:] = []
+        web_app._max_handle_update(auth_db.get_max_channel(uid), {
+            'update_type': 'bot_started', 'message': {'sender': {'user_id': '555666777'}, 'body': {}}})
+        check('своё приветствие бота перекрывает общее',
+              sent2 == [('555666777', 'Своё приветствие бота.')], sent2)
+    finally:
+        web_app._max_send = real_send2
+        auth_db.delete_max_channel(uid)
+
+    check('общее приветствие длиннее 1000 символов — 400',
+          client.post('/api/prompt', json={'greeting': 'я' * 1001}).status_code == 400
+          and auth_db.get_user_greeting(uid) == common)
+
+    auth_db.set_user_greeting(uid, '')
+    html = client.get(f'/widget/{key}').get_data(as_text=True)
+    check('без общего и своего текста — снова авто из промта',
+          'Задай мне вопрос по базе знаний' in html, None)
+    print('   (приветствие каналов и общее приветствие проверены)')
 
 
 def main():

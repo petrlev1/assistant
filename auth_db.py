@@ -152,6 +152,8 @@ def init_db():
         """)
         # Миграция: колонка персонального промта пользователя (пусто = системный промт по умолчанию)
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_prompt TEXT")
+        # Общее приветствие: одно на все виджеты и ботов пользователя (пусто = из роли в промте)
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS greeting TEXT")
         conn.commit()
         cur.close()
         conn.close()
@@ -360,6 +362,42 @@ def set_user_prompt(user_id, prompt):
         return True
     except Exception as e:
         logger.error(f"Ошибка сохранения промта пользователя: {e}")
+        return False
+
+
+def get_user_greeting(user_id):
+    """Общее приветствие пользователя — одно на все его виджеты и ботов.
+
+    Пусто/None = своего текста нет, приветствие собирается из роли в промте.
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT greeting FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return None
+        return (row["greeting"] or '').strip() or None
+    except Exception as e:
+        logger.error(f"Ошибка получения общего приветствия: {e}")
+        return None
+
+
+def set_user_greeting(user_id, text):
+    """Сохранение общего приветствия (пустая строка = вернуть авто из промта)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET greeting = %s WHERE id = %s",
+                    ((text or '').strip(), user_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения общего приветствия: {e}")
         return False
 
 

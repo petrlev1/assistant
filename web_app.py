@@ -16,7 +16,7 @@ import csv
 from datetime import datetime
 from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_user_greeting, set_user_greeting, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      get_widget, sync_conversations, list_widget_conversations,
                      list_max_conversations, get_max_dialog,
@@ -635,6 +635,8 @@ def get_prompt():
         'prompt': prompt or '',
         'has_custom': bool(prompt),
         'default_prompt': DEFAULT_BASE_PROMPT,
+        # Общее приветствие — одно на все виджеты и ботов владельца
+        'greeting': get_user_greeting(session['user_id']) or '',
     })
 
 
@@ -646,6 +648,13 @@ def save_prompt():
 
     data = request.get_json(silent=True) or {}
     prompt = (data.get('prompt') or '').strip()
+
+    # Приветствие сохраняем, только если его прислали: сброс промта не трогает текст
+    if 'greeting' in data:
+        greeting = str(data.get('greeting') or '').strip()
+        if len(greeting) > 1000:
+            return jsonify({'error': 'Приветствие — не длиннее 1000 символов'}), 400
+        set_user_greeting(session['user_id'], greeting)
 
     if set_user_prompt(session['user_id'], prompt):
         logger.info(f"📝 Пользователь {session.get('username')} сохранил персональный промт ({len(prompt)} симв.)")
@@ -2132,8 +2141,8 @@ def widget_page(key):
         return make_response(
             render_template('widget_frame.html', error='Этот ассистент не настроен для данного сайта.'),
             403)
-    # Своё приветствие виджета, если задано; иначе авто из роли в промте
-    greeting = _greeting_or_default(w.get('greeting'), get_user_prompt(w['user_id']), 'гость')
+    # Своё приветствие виджета → общее приветствие владельца → авто из промта
+    greeting = _greeting_for(w['user_id'], w.get('greeting'), 'гость')
     resp = make_response(render_template('widget_frame.html', w=w, key=w['key'], site=site, greeting=greeting))
     resp.headers['Cache-Control'] = 'no-store'
     return resp
@@ -2632,10 +2641,16 @@ def _norm_command(text):
     return ' '.join((text or '').strip().lower().rstrip('!.,').split())
 
 
-def _greeting_or_default(custom, prompt, who):
-    """Приветствие канала: свой текст из настроек, иначе собранный из роли в промте."""
+def _greeting_for(user_id, custom, who):
+    """Приветствие канала, три уровня: свой текст канала → общее приветствие
+    пользователя (одно на все виджеты и ботов) → сборка из роли в промте."""
     text = (custom or '').strip()
-    return text if text else build_greeting(prompt, who)
+    if text:
+        return text
+    common = (get_user_greeting(user_id) or '').strip()
+    if common:
+        return common
+    return build_greeting(get_user_prompt(user_id), who)
 
 
 def _preview_greeting(user_id, username):
@@ -2652,7 +2667,8 @@ def _preview_greeting(user_id, username):
     channel = get_max_channel(user_id)
     if channel and (channel.get('greeting') or '').strip():
         return channel['greeting'].strip()
-    return build_greeting(get_user_prompt(user_id), username)
+    # Ни своего у каналов, ни общего — авто из роли в промте
+    return _greeting_for(user_id, '', username)
 
 
 def _max_scope(channel_id, max_user_id):
@@ -2689,9 +2705,8 @@ def _max_handle_update(channel, update):
     if not sender:
         return
     if utype == 'bot_started':
-        # Своё приветствие канала, если задано; иначе авто из роли в промте
-        _max_send(channel, _greeting_or_default(channel.get('greeting'),
-                                                get_user_prompt(channel['user_id']), 'гость'), sender)
+        # Своё приветствие канала → общее приветствие владельца → авто из промта
+        _max_send(channel, _greeting_for(channel['user_id'], channel.get('greeting'), 'гость'), sender)
         return
     if utype != 'message_created' or not text:
         return
