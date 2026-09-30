@@ -543,6 +543,13 @@
             box-sizing: border-box;
         }
         .max-check { font-size: 13px; color: #333; display: flex; align-items: center; gap: 6px; padding-bottom: 9px; }
+        /* Приветствие в MAX: тот же текст уходит собеседнику при старте бота */
+        .max-greeting {
+            width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 10px 12px;
+            font: inherit; font-size: 13px; line-height: 1.45; box-sizing: border-box;
+            resize: vertical; min-height: 62px;
+        }
+        .max-greeting:focus { outline: none; border-color: #2196f3; }
         .btn-reset {
             background: rgba(244,67,54,0.1);
             color: #d32f2f;
@@ -1259,6 +1266,11 @@
                 </div>
                 <label class="max-check"><input type="checkbox" id="maxActive" checked> Бот отвечает собеседникам</label>
             </div>
+            <div>
+                <label class="max-label">Приветствие собеседнику (пусто — авто из роли в промте; уходит при старте бота)</label>
+                <textarea id="maxGreeting" class="max-greeting" rows="2" maxlength="1000"
+                          placeholder="Например: Здравствуйте! Я — бот компании «Ромашка». Задайте вопрос."></textarea>
+            </div>
             <div class="prompt-actions">
                 <button class="btn-send" onClick="saveMax()">💾 Сохранить и подключить</button>
                 <button class="btn-reset" onClick="disconnectMax()">Отключить</button>
@@ -1641,6 +1653,7 @@
                     status.textContent = maxStatusText(d);
                     status.style.color = '#4caf50';
                     document.getElementById('maxLimit').value = d.daily_limit;
+                    document.getElementById('maxGreeting').value = d.greeting || '';
                     document.getElementById('maxActive').checked = d.active;
                     hint.innerHTML = 'Ваш бот: <a href="' + d.bot_url + '" target="_blank" rel="noopener">' +
                         escapeHtml(d.bot_url) + '</a> — ссылку можно дать клиентам или поставить кнопкой на сайт.<br>' +
@@ -1690,7 +1703,8 @@
                     return fetch('/api/max/update', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ daily_limit: payload.daily_limit, active: payload.active })
+                        body: JSON.stringify({ daily_limit: payload.daily_limit, active: payload.active,
+                                               greeting: document.getElementById('maxGreeting').value })
                     }).then(() => {
                         status.textContent = d.warning ? ('⚠️ ' + d.warning) : ('✅ ' + (d.message || 'Подключено'));
                         status.style.color = d.warning ? '#f57c00' : '#4caf50';
