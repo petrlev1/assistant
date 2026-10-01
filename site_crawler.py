@@ -763,8 +763,15 @@ def url_key(url: str) -> str:
     return f"{parts.scheme.lower()}://{parts.netloc.lower()}{path}"
 
 
-def _load_all_manifests(user_id: int, domain: str) -> list:
-    """Все манифесты домена: [(раздел, имя файла, данные)] — по одному на файл БЗ."""
+def _load_all_manifests(user_id: int, domain: str, existing_only: bool = True) -> list:
+    """Все манифесты домена: [(раздел, имя файла, данные)] — по одному на файл БЗ.
+
+    existing_only — пропускать манифесты, у которых нет самого файла базы знаний.
+    Так остаются «осиротевшие» манифесты удалённых документов: например прежний целый
+    каталог после дробления на подразделы. Обновление такого файла воссоздало бы
+    удалённый документ (на старом лимите и с обрезкой), поэтому в проверке и в плане
+    обновления он не участвует.
+    """
     folder = _site_dir(user_id, domain)
     out = []
     if not os.path.isdir(folder):
@@ -777,7 +784,12 @@ def _load_all_manifests(user_id: int, domain: str) -> list:
                 data = json.load(f)
         except (OSError, ValueError):
             continue
-        out.append((data.get("section") or "", data.get("filename") or "", data))
+        filename = data.get("filename") or ""
+        if existing_only and filename and not os.path.exists(
+                os.path.join(DATABASE_ROOT, f"user_{user_id}", filename)):
+            logger.info(f"🌐 Осиротевший манифест {name}: файла {filename} нет в базе знаний — пропускаю")
+            continue
+        out.append((data.get("section") or "", filename, data))
     return out
 
 

@@ -120,6 +120,15 @@ class SiteCase(unittest.TestCase):
         os.chdir(cls.cwd)
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def write_document(self, section, body="# Раздел\nстрока факта для базы знаний\n"):
+        """Создать файл базы знаний на диске: без него манифест считается осиротевшим."""
+        folder = os.path.join("Database", f"user_{TEST_USER}")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, sc.site_filename(DOMAIN, section))
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        return path
+
     def setUp(self):
         folder = sc._site_dir(TEST_USER, DOMAIN)
         shutil.rmtree(folder, ignore_errors=True)
@@ -149,6 +158,9 @@ class SiteCase(unittest.TestCase):
                 self.base + "/catalog/b/2.html": {"title": "B2", "lines": [], "fetched_at": FETCHED,
                                                   "source": "sitemap"},
             }}, "/catalog/b")
+        # манифест описывает уже созданный файл БЗ — иначе он осиротевший
+        self.write_document("/catalog/a")
+        self.write_document("/catalog/b")
 
 class CheckCase(SiteCase):
     """Отчёт проверки изменений по карте сайта."""
@@ -282,6 +294,7 @@ class UpdateCase(SiteCase):
 
     def save_manifest(self, section, limit):
         """Манифест файла с нужным лимитом страниц (как после настоящего обхода)."""
+        self.write_document(section)
         url = f"{self.base}{section}/"
         sc._save_manifest(TEST_USER, DOMAIN, {
             "start_url": url, "domain": DOMAIN,
@@ -303,6 +316,34 @@ class UpdateCase(SiteCase):
         self.assertEqual(plans[0]["filename"], sc.site_filename(DOMAIN, "/catalog/a"))
         self.assertTrue(plans[0]["section_mode"])
         self.assertEqual(plans[0]["page_limit"], 2)
+
+    def test_orphan_manifest_is_skipped(self):
+        """Манифест удалённого файла не попадает ни в отчёт, ни в план обновления."""
+        # так остаётся прежний целый каталог после дробления: манифест есть, документа нет
+        sc._save_manifest(TEST_USER, DOMAIN, {
+            "start_url": self.base + "/catalog/", "domain": DOMAIN,
+            "filename": sc.site_filename(DOMAIN, "/catalog"), "section": "/catalog",
+            "page_limit": 1000, "lines": 9722,
+            "pages": {self.base + "/catalog/a/1.html": {"title": "A1", "lines": [],
+                                                       "fetched_at": OLD, "source": "sitemap"}}},
+            "/catalog")
+        report = sc.check_site_changes(TEST_USER, self.base + "/catalog/", respect_robots=False)
+        names = [f["filename"] for f in report["files"]]
+        self.assertNotIn(sc.site_filename(DOMAIN, "/catalog"), names,
+                         "осиротевший манифест не должен попадать в отчёт")
+        self.assertEqual(sc.plans_for_files(TEST_USER, DOMAIN,
+                                            [sc.site_filename(DOMAIN, "/catalog")]), [],
+                         "удалённый документ нельзя воссоздавать обновлением")
+
+    def test_existing_manifest_with_pages_still_reported(self):
+        """Файл с документом на диске, наоборот, участвует в отчёте."""
+        os.makedirs(os.path.join("Database", f"user_{TEST_USER}"), exist_ok=True)
+        with open(os.path.join("Database", f"user_{TEST_USER}",
+                               sc.site_filename(DOMAIN, "/catalog/a")), "w", encoding="utf-8") as fh:
+            fh.write("# заголовок\nстрока факта\n")
+        report = sc.check_site_changes(TEST_USER, self.base + "/catalog/", respect_robots=False)
+        names = [f["filename"] for f in report["files"]]
+        self.assertIn(sc.site_filename(DOMAIN, "/catalog/a"), names)
 
     def test_unknown_file_makes_no_plan(self):
         """Файла нет на диске — плана для него не будет (обход не выдумывается)."""
