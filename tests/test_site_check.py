@@ -96,6 +96,7 @@ class CheckCase(unittest.TestCase):
                       f'<url><loc>{cls.base}/catalog/a/2.html</loc><lastmod>{OLD}</lastmod></url>'
                       f'<url><loc>{cls.base}/catalog/b/1.html</loc><lastmod>{OLD}</lastmod></url>'
                       f'<url><loc>{cls.base}/catalog/b/2.html</loc><lastmod>{OLD}</lastmod></url>'
+                      f'<url><loc>{cls.base}/catalog/a/</loc><lastmod>{OLD}</lastmod></url>'
                       '</urlset>')
         Site.routes = {
             "/robots.txt": ("text/plain", cls.robots),
@@ -104,6 +105,8 @@ class CheckCase(unittest.TestCase):
             "/catalog/a/": ("text/html", page_html("Раздел A", ["/catalog/a/1.html"])),
             "/catalog/a/1.html": ("text/html", page_html("Страница A1", ["/catalog/a/linked.html"])),
             "/catalog/a/2.html": ("text/html", page_html("Страница A2")),
+            # карта отдаёт раздел a с хвостовым слэшем, в манифесте он без слэша
+            "/catalog/a": ("text/html", page_html("Раздел A без слэша")),
             "/catalog/a/linked.html": ("text/html", page_html("Ссылочная страница")),
             "/catalog/b/1.html": ("text/html", page_html("Страница B1")),
         }
@@ -133,6 +136,9 @@ class CheckCase(unittest.TestCase):
                                                   "source": "sitemap"},
                 self.base + "/catalog/a/linked.html": {"title": "L", "lines": [], "fetched_at": FETCHED,
                                                        "source": "link"},
+                # тот же адрес, что в карте отдан с хвостовым слэшем (см. build_routes)
+                self.base + "/catalog/a": {"title": "Раздел A", "lines": [], "fetched_at": FETCHED,
+                                           "source": "sitemap"},
             }}, "/catalog/a")
         sc._save_manifest(TEST_USER, DOMAIN, {
             "start_url": self.base + "/catalog/b/", "domain": DOMAIN,
@@ -147,8 +153,8 @@ class CheckCase(unittest.TestCase):
         report = sc.check_site_changes(TEST_USER, self.base + "/catalog/", respect_robots=True)
         self.assertTrue(report["ok"])
         self.assertTrue(report["supported"])
-        self.assertEqual(report["sitemap_urls"], 4)
-        self.assertEqual(report["known_urls"], 5)
+        self.assertEqual(report["sitemap_urls"], 5)
+        self.assertEqual(report["known_urls"], 6)
         self.assertEqual(report["unknown"], 0)
         self.assertEqual(report["new"], 1)          # /catalog/b/1.html
         self.assertEqual(report["changed"], 1)      # /catalog/a/1.html (lastmod новее выборки)
@@ -187,6 +193,14 @@ class CheckCase(unittest.TestCase):
         self.assertEqual(read, 2)
         self.assertEqual(entries[self.base + "/catalog/a/1.html"], NEW)
         self.assertEqual(entries[self.base + "/catalog/a/2.html"], OLD)
+
+    def test_trailing_slash_is_not_a_new_page(self):
+        """Адрес в карте с хвостовым слэшем не делает страницу новой (и наоборот)."""
+        report = sc.check_site_changes(TEST_USER, self.base + "/catalog/", respect_robots=False)
+        by_section = {f["section"]: f for f in report["files"]}
+        self.assertEqual(by_section["/catalog/a"]["new"], 0, "раздел a посчитан новым из-за слэша")
+        self.assertEqual(sc.url_key(self.base + "/catalog/a/"), sc.url_key(self.base + "/catalog/a"))
+        self.assertEqual(sc.url_key("HTTPS://Aquasegment.RU/Catalog/"), "https://aquasegment.ru/Catalog")
 
     def test_sitemap_without_lastmod_is_not_a_clean_bill(self):
         """Карта без lastmod: отчёт обязан сказать, что сравнивать нечем."""

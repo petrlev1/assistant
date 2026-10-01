@@ -744,6 +744,20 @@ def _sitemap_urls(session: requests.Session, base_url: str, sitemaps: list) -> l
     return list(_sitemap_entries(session, base_url, sitemaps)[0])
 
 
+def url_key(url: str) -> str:
+    """Ключ страницы для сверки: без хвостового слэша, хост и схема в нижнем регистре.
+
+    Карта сайта отдаёт адреса с хвостовым слэшем («/catalog/a/»), а в манифесте
+    страница записана так, как её вернул сервер после редиректов («/catalog/a»).
+    Сравнение «как есть» объявляло бы такие страницы новыми на каждой проверке.
+    """
+    parts = urlparse((url or "").strip())
+    path = parts.path or "/"
+    if len(path) > 1 and path.endswith("/"):
+        path = path.rstrip("/")
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}{path}"
+
+
 def _load_all_manifests(user_id: int, domain: str) -> list:
     """Все манифесты домена: [(раздел, имя файла, данные)] — по одному на файл БЗ."""
     folder = _site_dir(user_id, domain)
@@ -809,26 +823,31 @@ def check_site_changes(user_id: int, start_url: str, respect_robots: bool = True
         _disallow, _allow, sitemaps = _robots_rules(session, start_url)
     entries, sitemaps_read = _sitemap_entries(session, start_url, sitemaps)
     has_lastmod = any((stamp or "").strip() for stamp in entries.values())
+    entries_by_key = {url_key(url) for url in entries}
 
     manifests = _load_all_manifests(user_id, domain)
-    known = set()
+    known = set()                      # ключи страниц, которые у нас уже есть
     for _section, _filename, data in manifests:
-        known.update((data.get("pages") or {}).keys())
+        known.update(url_key(url) for url in (data.get("pages") or {}))
 
     files, total_new, total_changed, total_gone, total_unknown = [], 0, 0, 0, 0
     for section, filename, data in manifests:
         pages = data.get("pages") or {}
         if not pages:
             continue
+        by_key = {url_key(url): url for url in pages}
         scope = [url for url in entries if in_section(url, start_url, section)]
-        fresh = [url for url in scope if url not in known]
-        changed = [url for url in scope if url in pages
-                   and _page_is_newer(entries.get(url, ""), (pages.get(url) or {}).get("fetched_at", ""))]
+        fresh = [url for url in scope if url_key(url) not in known]
+        changed = [url for url in scope
+                   if url_key(url) in by_key
+                   and _page_is_newer(entries.get(url, ""),
+                                      (pages.get(by_key[url_key(url)]) or {}).get("fetched_at", ""))]
         gone = [url for url in pages
-                if (pages.get(url) or {}).get("source") == "sitemap" and url not in entries]
+                if (pages.get(url) or {}).get("source") == "sitemap" and url_key(url) not in entries_by_key]
         # Карта знает страницу, но lastmod не отдаёт — изменение такой страницы по карте
         # не увидеть; считаем отдельно, чтобы отчёт не выдавал это за «всё в порядке».
-        unknown = [url for url in scope if url in pages and not (entries.get(url) or "").strip()]
+        unknown = [url for url in scope
+                   if url_key(url) in by_key and not (entries.get(url) or "").strip()]
         total_new += len(fresh)
         total_changed += len(changed)
         total_gone += len(gone)
