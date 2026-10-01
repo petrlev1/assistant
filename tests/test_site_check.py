@@ -225,7 +225,7 @@ class CheckCase(SiteCase):
         by_section = {f["section"]: f for f in report["files"]}
         self.assertEqual(by_section["/catalog/a"]["new"], 0, "раздел a посчитан новым из-за слэша")
         self.assertEqual(sc.url_key(self.base + "/catalog/a/"), sc.url_key(self.base + "/catalog/a"))
-        self.assertEqual(sc.url_key("HTTPS://Aquasegment.RU/Catalog/"), "https://aquasegment.ru/Catalog")
+        self.assertEqual(sc.url_key("HTTPS://Example.COM/Catalog/"), "https://example.com/Catalog")
 
     def test_sitemap_without_lastmod_is_not_a_clean_bill(self):
         """Карта без lastmod: отчёт обязан сказать, что сравнивать нечем."""
