@@ -139,7 +139,9 @@ class PlanSplitCase(unittest.TestCase):
         self._write_sitemap([f"/catalog/s{i % 2}/{i}.html" for i in range(200)])
         plan = sc.plan_split(TEST_USER, f"https://{self.DOMAIN}/catalog/",
                              page_budget=1000, use_cache_only=True)
-        self.assertEqual(plan["page_budget"], sc.MAX_LINES // sc.DEFAULT_LINES_PER_PAGE)
+        self.assertEqual(plan["page_budget"], sc.part_page_budget(TEST_USER, self.DOMAIN))
+        self.assertLess(plan["page_budget"], 200,
+                        "лимит страниц поднял бюджет файла выше потолка строк")
         self.assertTrue(plan["needed"], "лимит страниц поднял бюджет файла выше потолка строк")
 
     def test_section_without_subsections_reports_unsplittable(self):

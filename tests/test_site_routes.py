@@ -267,6 +267,23 @@ class SiteRouteCase(unittest.TestCase):
         self.assertEqual(info['url'], self.base + '/catalog')
         self.assertEqual(info['page_limit'], 5)
 
+    def test_long_section_label_fits_group_column(self):
+        """Группа документа влезает в VARCHAR(100): иначе add_document падает.
+
+        У глубокого раздела путь длиннее колонки, вставка падала с «value too long»,
+        и файл обхода не попадал в базу знаний.
+        """
+        section = ('/catalog/komplektuyushchie_dlya_sistem_vodoochistki/'
+                   'setchatye_diskovye_meshochnye_filtry_2')
+        label = self.web_app._site_group_label('127.0.0.1', section)
+        self.assertLessEqual(len(label), self.web_app.SITE_GROUP_MAX_LEN)
+        self.assertTrue(label.startswith('🌐 127.0.0.1 · …'), label)
+        self.assertTrue(label.endswith(section[-10:]), label)
+        # короткий раздел не трогаем
+        self.assertEqual(self.web_app._site_group_label('127.0.0.1', '/catalog'),
+                         '🌐 127.0.0.1 · /catalog')
+        self.assertEqual(self.web_app._site_group_label('127.0.0.1', ''), '🌐 127.0.0.1')
+
     def test_cancelled_crawl_still_indexes_written_file(self):
         """Обход отменили, но файл записан — он обязан попасть в базу знаний.
 

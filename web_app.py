@@ -887,6 +887,29 @@ def _site_pages_limit():
     return min(value, site_crawler.MAX_PAGE_LIMIT)
 
 
+SITE_GROUP_MAX_LEN = 100  # doc_group в user_documents объявлен как VARCHAR(100)
+
+
+def _site_group_label(domain, section=''):
+    """Название группы в «Документах»: домен и раздел, но не длиннее колонки БД.
+
+    У глубоких разделов путь не влезает в VARCHAR(100), и добавление документа
+    падало с «value too long for type character varying(100)» — обход завершался,
+    не зарегистрировав часть файлов. Хвост пути информативнее начала, поэтому
+    обрезаем слева и помечаем многоточием.
+    """
+    label = f"🌐 {domain}"
+    if section:
+        label = f"🌐 {domain} · {section}"
+    if len(label) <= SITE_GROUP_MAX_LEN:
+        return label
+    head = f"🌐 {domain} · …"
+    keep = SITE_GROUP_MAX_LEN - len(head)
+    if keep <= 0:
+        return label[:SITE_GROUP_MAX_LEN]
+    return head + section[-keep:]
+
+
 def _site_save_document(user_id, result):
     """Один файл обхода → документ БЗ. Прежний документ с тем же именем заменяется."""
     filename = result['filename']
@@ -898,9 +921,7 @@ def _site_save_document(user_id, result):
         logger.info(f"♻️ Сайт: документ {filename} обновляется (заменяет id {old['id']})")
 
     # Группа в «Документах»: у файла сайта — домен, у файла раздела — домен и раздел.
-    group = f"🌐 {result['domain']}"
-    if result.get('section'):
-        group = f"🌐 {result['domain']} · {result['section']}"
+    group = _site_group_label(result['domain'], result.get('section') or '')
     success, doc_id = add_document(user_id, filename, filename, doc_group=group)
     if not success:
         raise RuntimeError(f'не удалось добавить документ {filename} в базу знаний')

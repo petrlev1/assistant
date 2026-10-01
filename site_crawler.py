@@ -59,6 +59,9 @@ DEFAULT_PAGE_LIMIT = 300        # страниц за один обход (ра�
 MAX_PAGE_LIMIT = 1000           # потолок для настройки app_settings.site_pages_limit
 SECTION_SLUG_MAX_CHARS = 60     # длина слага раздела в имени файла БЗ
 MAX_LINES = 10000               # больше строк с одного сайта не берём
+# Какую долю потолка строк отдаём под страницы одного файла: остаток — запас на то,
+# что страницы внутри раздела плотнее среднего по домену (иначе файл молча обрежется).
+SITE_FILE_SAFETY_PERCENT = 90
 MAX_LINE_CHARS = 250            # длиннее — режем по предложениям
 MIN_LINE_CHARS = 40             # короче — только с контекстом раздела, иначе мусор-навигация
 MIN_SECTION_CHARS = 15          # осмысленный заголовок раздела
@@ -979,6 +982,9 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
         "respect_robots": respect_robots,
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
         "lines": sum(1 for line in lines_out if not line.startswith("#")),
+        # Обрыв потолком строк: по такому обходу плотность строк занижена (часть
+        # страниц в файл не попала), и в оценке бюджета он годится только как запасной.
+        "truncated": bool(stats.get("truncated")),
         "pages": {url: pages_out[url] for url in order},
     }
     _save_manifest(user_id, domain, manifest, prefix)
@@ -1014,6 +1020,7 @@ def lines_per_page_estimate(user_id: int, domain: str) -> int:
     """
     folder = _site_dir(user_id, domain)
     total_lines = total_pages = 0
+    cut_lines = cut_pages = 0
     if os.path.isdir(folder):
         for name in sorted(os.listdir(folder)):
             if not (name.startswith("manifest") and name.endswith(".json")):
@@ -1025,17 +1032,33 @@ def lines_per_page_estimate(user_id: int, domain: str) -> int:
                 continue
             pages = data.get("pages") or {}
             lines = int(data.get("lines") or 0)
-            if pages and lines:
-                total_lines += lines
-                total_pages += len(pages)
+            if not (pages and lines):
+                continue
+            if data.get("truncated"):
+                # Обход оборван потолком строк: «строк на страницу» здесь — оценка
+                # снизу (часть страниц в файл не попала). В расчёт такой манифест
+                # идёт только если других данных по домену нет.
+                cut_lines += lines
+                cut_pages += len(pages)
+                continue
+            total_lines += lines
+            total_pages += len(pages)
+    if not (total_pages and total_lines) and cut_pages and cut_lines:
+        total_lines, total_pages = cut_lines, cut_pages
     if total_pages and total_lines:
-        return max(1, total_lines // total_pages)
+        # +1 — строка-заголовок '#' с адресом страницы: она тоже занимает место в файле.
+        return max(1, total_lines // total_pages + 1)
     return DEFAULT_LINES_PER_PAGE
 
 
 def part_page_budget(user_id: int, domain: str) -> int:
-    """Сколько страниц класть в один файл, чтобы он не упёрся в потолок строк."""
-    return max(1, MAX_LINES // lines_per_page_estimate(user_id, domain))
+    """Сколько страниц класть в один файл, чтобы он не упёрся в потолок строк.
+
+    Берём не весь потолок, а SITE_FILE_SAFETY_PERCENT от него: страницы внутри
+    раздела бывают плотнее среднего по домену, и без запаса файл молча обрезался бы.
+    """
+    return max(1, (MAX_LINES * SITE_FILE_SAFETY_PERCENT // 100)
+               // lines_per_page_estimate(user_id, domain))
 
 
 def _sitemap_cache_path(user_id: int, domain: str) -> str:
