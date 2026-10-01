@@ -288,7 +288,7 @@ class SiteRouteCase(unittest.TestCase):
         def fake_plans(user_id, domain, filenames):
             seen['plans'] = list(filenames)
             return [{'url': 'https://127.0.0.1/catalog/', 'filename': affected['filename'],
-                     'section': '/catalog', 'section_mode': True, 'page_limit': 300, 'pages': 5}]
+                     'section': '/catalog', 'section_mode': True, 'page_limit': 3, 'pages': 5}]
 
         def fake_start(user_id, url, *args, **kwargs):
             seen['parts'] = kwargs.get('fixed_parts')
@@ -305,6 +305,18 @@ class SiteRouteCase(unittest.TestCase):
             self.assertEqual(seen['plans'], [affected['filename']], "обновляем только затронутый файл")
             self.assertEqual(len(seen['parts']), 1)
             self.assertEqual(data['changed'], 2)
+            # 5 страниц в файле + 1 новая + 2 изменившихся = 8, а лимит был 3: молча терять нельзя
+            self.assertEqual(seen['parts'][0]['page_limit'], 8)
+            self.assertEqual(data['limits_raised'][0]['from'], 3)
+            self.assertFalse(data['limits_raised'][0]['capped'])
+
+            # Больше потолка страниц — поднимаем до потолка и честно помечаем
+            affected['new'] = 2000
+            data = self.client.post('/api/site/update-changed',
+                                    json={'url': self.base + '/catalog/'}).get_json()
+            self.assertEqual(seen['parts'][0]['page_limit'], self.sc.MAX_PAGE_LIMIT)
+            self.assertTrue(data['limits_raised'][0]['capped'])
+            affected['new'] = 1
 
             # Клиент может ограничить список — лишние файлы не обновляются
             self.client.post('/api/site/update-changed',

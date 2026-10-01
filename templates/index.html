@@ -2136,6 +2136,13 @@
                             || 'Не удалось запустить обновление', !!data.error);
                         return;
                     }
+                    (data.limits_raised || []).forEach(item => {
+                        // Молча обойти меньше, чем показала проверка, нельзя
+                        const capped = item.capped ? ' — часть изменений всё равно не влезет' : '';
+                        alert('У файла ' + item.filename + ' лимит страниц ' + item.from
+                            + ', а охватить нужно ' + item.needed + '. Лимит поднят до '
+                            + item.to + capped + '.');
+                    });
                     closeSiteModal();
                     renderSiteBar(data.job || {}, true);
                     pollSiteCrawl();

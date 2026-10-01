@@ -1077,6 +1077,20 @@ def site_update_changed():
     if not plans:
         return jsonify({'error': 'Манифесты затронутых файлов не найдены — нужен обычный обход'}), 404
 
+    # Лимит страниц у файла мог остаться от прежнего обхода и быть меньше, чем нужно
+    # сейчас: обход должен охватить и уже собранные страницы, и изменения, иначе часть
+    # страниц потеряется молча. Поднимаем лимит под объём и говорим об этом.
+    by_file = {f.get('filename'): f for f in affected}
+    raised = []
+    for plan in plans:
+        entry = by_file.get(plan['filename']) or {}
+        needed = plan['pages'] + entry.get('new', 0) + entry.get('changed', 0) + entry.get('gone', 0)
+        if needed > plan['page_limit']:
+            new_limit = min(needed, site_crawler.MAX_PAGE_LIMIT)
+            raised.append({'filename': plan['filename'], 'from': plan['page_limit'], 'to': new_limit,
+                           'needed': needed, 'capped': new_limit < needed})
+            plan['page_limit'] = new_limit
+
     try:
         job = site_crawler.start_job(session['user_id'], url, respect_robots=respect_robots,
                                      fixed_parts=plans, on_finish=_site_crawl_finished,
@@ -1084,10 +1098,14 @@ def site_update_changed():
     except site_crawler.CrawlError as e:
         return jsonify({'error': str(e)}), 409
 
+    for item in raised:
+        logger.info(f"⬆️ {item['filename']}: лимит страниц поднят с {item['from']} до {item['to']} "
+                    f"(нужно {item['needed']}{', обрезан потолком' if item['capped'] else ''})")
     logger.info(f"⬆️ Пользователь {session.get('username')} обновляет затронутые файлы "
                 f"{report.get('domain')}: {len(plans)} — новых {report.get('new')}, "
                 f"изменённых {report.get('changed')}, пропавших {report.get('gone')}")
     return jsonify({'success': True, 'started': True, 'files': [p["filename"] for p in plans],
+                    'limits_raised': raised,
                     'new': report.get('new'), 'changed': report.get('changed'),
                     'gone': report.get('gone'), 'job': site_crawler.public_job(job)})
 
