@@ -712,8 +712,12 @@ def _sitemap_entries(session: requests.Session, base_url: str, sitemaps: list) -
     не отдаёт.
     """
     parsed = urlparse(base_url)
-    candidates = [s for s in sitemaps if s] or [f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"]
+    # robots.txt часто перечисляет одну и ту же карту в разных формах (http/https, с www):
+    # без дедупликации счётчик прочитанных карт врёт вдвое
+    candidates = list(dict.fromkeys(s for s in sitemaps if s)) or [
+        f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"]
     entries, fetched = {}, 0
+    seen = set(candidates)
     queue = deque(candidates[:MAX_SITEMAPS])
     while queue and fetched < MAX_SITEMAPS:
         candidate = queue.popleft()
@@ -733,8 +737,9 @@ def _sitemap_entries(session: requests.Session, base_url: str, sitemaps: list) -
             entries.setdefault(match.group(1), match.group(2) or "")
         # Вложенные карты из <sitemapindex> — идём на уровень глубже
         for loc in re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", body, re.I):
-            if loc.lower().endswith(".xml"):
+            if loc.lower().endswith(".xml") and loc not in seen:
                 if fetched + len(queue) < MAX_SITEMAPS:
+                    seen.add(loc)
                     queue.append(loc)
     return entries, fetched
 

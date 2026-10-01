@@ -186,6 +186,14 @@ class CheckCase(unittest.TestCase):
         self.assertEqual(report["reason"], "no_sitemap")
         self.assertEqual(report["new"], 0)
 
+    def test_duplicate_sitemaps_counted_once(self):
+        """Одна и та же карта, названная в robots.txt дважды, читается один раз."""
+        import requests
+        entries, read = sc._sitemap_entries(requests.Session(), self.base + "/catalog/",
+                                            [self.base + SITEMAP_PATH, self.base + SITEMAP_PATH])
+        self.assertEqual(read, 2)               # индекс + вложенная карта, а не 3
+        self.assertEqual(len(entries), 5)
+
     def test_sitemap_entries_parses_lastmod(self):
         """Разбор карты: адреса и lastmod, включая вложенную карту из индекса."""
         import requests
