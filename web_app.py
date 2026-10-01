@@ -961,6 +961,40 @@ def _site_parts_finished(user_id, results):
         _reindex_user_async(user_id)
 
 
+@app.route('/api/site/check', methods=['POST'])
+def site_check_changes():
+    """Проверка изменений по карте сайта: без обхода страниц, только отчёт.
+
+    Отвечает синхронно: чтение карты — это десяток запросов вместо тысячи страниц,
+    поэтому отдельный джоб с прогрессом здесь не нужен.
+    """
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    data = request.get_json(silent=True) or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'Укажите адрес сайта'}), 400
+    if '://' not in url:
+        url = 'https://' + url
+    respect_robots = bool(data.get('respect_robots', True))
+
+    try:
+        report = site_crawler.check_site_changes(session['user_id'], url,
+                                                 respect_robots=respect_robots)
+    except site_crawler.CrawlError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:            # сеть/разбор карты: панель не должна падать
+        logger.error(f"🌐 Проверка изменений не удалась для {url}: {e}")
+        return jsonify({'error': f'Проверка не удалась: {e}'}), 502
+
+    logger.info(f"🌐 Проверка изменений {report.get('domain')}: адресов в карте "
+                f"{report.get('sitemap_urls')}, новых {report.get('new')}, изменённых "
+                f"{report.get('changed')}, пропавших {report.get('gone')}, затронуто файлов "
+                f"{report.get('files_affected')} из {report.get('files_total')}")
+    return jsonify(report)
+
+
 @app.route('/api/site/crawl', methods=['POST'])
 def site_crawl_start():
     """Запуск обхода сайта: ответ сразу, прогресс — GET /api/site/status."""

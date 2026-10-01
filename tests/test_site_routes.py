@@ -267,6 +267,37 @@ class SiteRouteCase(unittest.TestCase):
         self.assertEqual(info['url'], self.base + '/catalog')
         self.assertEqual(info['page_limit'], 5)
 
+    def test_check_route_returns_report(self):
+        """/api/site/check отдаёт отчёт проверки и не пускает без входа."""
+        report = {'ok': True, 'domain': '127.0.0.1', 'supported': True, 'reason': '',
+                  'sitemap_urls': 3, 'known_urls': 2, 'files_total': 1, 'files_affected': 1,
+                  'new': 1, 'changed': 0, 'gone': 0, 'unknown': 0, 'checked_at': '2026-10-01T10:00:00',
+                  'files': [{'section': '/catalog', 'filename': 'site_127.0.0.1_catalog.txt',
+                             'new': 1, 'changed': 0, 'gone': 0, 'pages': 2}]}
+        calls = []
+        real = self.sc.check_site_changes
+
+        def fake_check(user_id, url, respect_robots=True):
+            calls.append((user_id, url, respect_robots))
+            return dict(report)
+
+        self.sc.check_site_changes = fake_check
+        try:
+            response = self.client.post('/api/site/check',
+                                        json={'url': self.base + '/catalog/', 'respect_robots': False})
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertTrue(data['ok'])
+            self.assertEqual(data['new'], 1)
+            self.assertEqual(calls, [(990003, self.base + '/catalog/', False)])
+            # адрес без схемы дополняется https
+            self.client.post('/api/site/check', json={'url': 'example.com'})
+            self.assertEqual(calls[-1][1], 'https://example.com')
+        finally:
+            self.sc.check_site_changes = real
+
+        self.assertEqual(self.client.post('/api/site/check', json={}).status_code, 400)
+
     def test_long_section_label_fits_group_column(self):
         """Группа документа влезает в VARCHAR(100): иначе add_document падает.
 

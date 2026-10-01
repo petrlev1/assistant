@@ -962,6 +962,26 @@
             line-height: 1.45;
             margin-top: 12px;
         }
+        .site-changes {
+            margin-top: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.035);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            font-size: 12px;
+            line-height: 1.5;
+            color: #444;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+        .site-changes.warn {
+            background: rgba(214, 132, 12, 0.09);
+            border-color: rgba(214, 132, 12, 0.35);
+            color: #8a5a06;
+        }
+        .site-changes code {
+            font-size: 11px;
+        }
         .site-check-wide {
             margin-top: 12px;
             white-space: normal;
@@ -1323,6 +1343,7 @@
             <label class="site-check site-check-wide"><input type="checkbox" id="siteSection">
                 📂 Только этот раздел — постраничная индексация</label>
             <div class="site-preview" id="sitePreview"></div>
+            <div class="site-changes" id="siteChanges" style="display:none;"></div>
             <div class="site-hint" id="siteModalHint">
                 Система обойдёт страницы сайта, соберёт текст в один TXT-файл и добавит его в базу
                 знаний чат-бота. Повторный запуск по тому же адресу обновит файл: изменившиеся
@@ -1332,6 +1353,8 @@
                 и его можно обновлять отдельно от всего сайта.
             </div>
             <div class="qa-modal-actions">
+                <button id="siteModalCheck" onClick="checkSiteChanges()"
+                        title="Сравнить карту сайта с базой знаний: что изменилось, что появилось, что пропало">🔍 Проверить изменения</button>
                 <button id="siteModalCancel" onClick="closeSiteModal()">Отмена</button>
                 <button id="siteModalStart" onClick="startSiteCrawl()">Индексировать</button>
             </div>
@@ -1943,6 +1966,8 @@
             // символ, а при переключении галочки раздела
             sectionBox.onchange = () => loadSitePreview(true);
             showSitePreview(null);
+            const changes = document.getElementById('siteChanges');
+            if (changes) { changes.style.display = 'none'; changes.innerHTML = ''; }
             const startBtn = document.getElementById('siteModalStart');
             startBtn.disabled = false;
             startBtn.textContent = 'Индексировать';
@@ -1993,6 +2018,77 @@
             box.innerHTML = lines.join('<br>');
             box.classList.toggle('warn', warnings.length > 0);
             box.style.display = 'block';
+        }
+
+        // Проверка изменений по карте сайта: страницы не обходим, только отчёт
+        function checkSiteChanges() {
+            const url = (document.getElementById('siteUrl').value || '').trim();
+            if (!url) { alert('Укажите адрес сайта'); return; }
+            const box = document.getElementById('siteChanges');
+            const btn = document.getElementById('siteModalCheck');
+            const wasText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '🔍 Читаю карту сайта…';
+            box.style.display = 'block';
+            box.classList.remove('warn');
+            box.textContent = 'Сравниваю карту сайта с тем, что уже в базе знаний…';
+            fetch('/api/site/check', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: url,
+                    respect_robots: document.getElementById('siteRobots').checked
+                })
+            })
+                .then(r => r.json())
+                .then(data => showSiteChanges(data))
+                .catch(() => showSiteChanges({ error: 'Проверка не удалась: сервер не ответил' }))
+                .finally(() => { btn.disabled = false; btn.textContent = wasText; });
+        }
+
+        function showSiteChanges(data) {
+            const box = document.getElementById('siteChanges');
+            if (!box) return;
+            box.style.display = 'block';
+            if (!data || data.error) {
+                box.classList.add('warn');
+                box.textContent = (data && data.error) || 'Проверка не удалась';
+                return;
+            }
+            if (!data.supported) {
+                box.classList.add('warn');
+                box.textContent = data.reason === 'no_lastmod'
+                    ? 'Карта сайта есть, но без дат обновления (lastmod) — сравнить нечем. '
+                      + 'Обновляйте файл обычной индексацией (⟳ у документа).'
+                    : 'В карте сайта нет адресов — проверить изменения без обхода страниц '
+                      + 'нельзя. Обновите файл обычной индексацией (⟳ у документа).';
+                return;
+            }
+            const lines = ['Проверено по карте сайта: ' + escapeHtml(data.domain)
+                + ' · адресов ' + data.sitemap_urls + ', у нас ' + data.known_urls
+                + ' · файлов ' + data.files_total
+                + ' · ' + escapeHtml((data.checked_at || '').replace('T', ' '))];
+            if (!data.new && !data.changed && !data.gone) {
+                lines.push('✅ Изменений нет — обновлять нечего.');
+            } else {
+                lines.push('Затронуто файлов: <b>' + data.files_affected + '</b> из ' + data.files_total
+                    + ' · новых страниц ' + data.new + ' · изменившихся ' + data.changed
+                    + ' · пропавших ' + data.gone
+                    + (data.unknown ? ' · без lastmod ' + data.unknown : ''));
+                (data.files || []).forEach(file => {
+                    const parts = [];
+                    if (file.new) parts.push('новых ' + file.new);
+                    if (file.changed) parts.push('изменилось ' + file.changed);
+                    if (file.gone) parts.push('пропало ' + file.gone);
+                    if (!parts.length) return;
+                    const sample = (file.sample_changed || file.sample_new || []).slice(0, 3);
+                    lines.push('• ' + escapeHtml(file.section || '(весь сайт)') + ' — ' + parts.join(', ')
+                        + (sample.length ? ' · ' + escapeHtml(sample.join(', ')) : ''));
+                });
+                lines.push('Обновите затронутые файлы кнопкой ⟳ в списке документов — остальные не трогайте.');
+            }
+            box.classList.toggle('warn', !!data.gone);
+            box.innerHTML = lines.join('<br>');
         }
 
         function startSiteCrawl() {

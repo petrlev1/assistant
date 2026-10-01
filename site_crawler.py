@@ -704,11 +704,16 @@ def _robots_allowed(url: str, disallow: list, allow: list) -> bool:
     return best_disallow <= best_allow
 
 
-def _sitemap_urls(session: requests.Session, base_url: str, sitemaps: list) -> list:
-    """Ссылки из sitemap.xml (включая sitemapindex) — по одному уровню вложенности."""
+def _sitemap_entries(session: requests.Session, base_url: str, sitemaps: list) -> tuple:
+    """Карта сайта (включая sitemapindex) → ({адрес: lastmod}, сколько карт прочитано).
+
+    lastmod нужен для проверки изменений без обхода страниц: у Bitrix он стоит у
+    каждой ссылки и обновляется при правке страницы. Пустая строка — карта lastmod
+    не отдаёт.
+    """
     parsed = urlparse(base_url)
     candidates = [s for s in sitemaps if s] or [f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"]
-    urls, fetched = [], 0
+    entries, fetched = {}, 0
     queue = deque(candidates[:MAX_SITEMAPS])
     while queue and fetched < MAX_SITEMAPS:
         candidate = queue.popleft()
@@ -721,14 +726,148 @@ def _sitemap_urls(session: requests.Session, base_url: str, sitemaps: list) -> l
         body = result.get("html") or ""
         if result.get("status") != 200 or not body:
             continue
-        locs = re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", body, re.I)
-        for loc in locs:
+        # Записи страниц: <url><loc>…</loc><lastmod>…</lastmod></url>
+        for match in re.finditer(
+                r"<url>\s*<loc>\s*([^<\s]+)\s*</loc>\s*(?:<lastmod>\s*([^<\s]+)\s*</lastmod>)?",
+                body, re.I):
+            entries.setdefault(match.group(1), match.group(2) or "")
+        # Вложенные карты из <sitemapindex> — идём на уровень глубже
+        for loc in re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", body, re.I):
             if loc.lower().endswith(".xml"):
                 if fetched + len(queue) < MAX_SITEMAPS:
                     queue.append(loc)
-            else:
-                urls.append(loc)
-    return urls
+    return entries, fetched
+
+
+def _sitemap_urls(session: requests.Session, base_url: str, sitemaps: list) -> list:
+    """Только адреса из карты сайта (обёртка над _sitemap_entries)."""
+    return list(_sitemap_entries(session, base_url, sitemaps)[0])
+
+
+def _load_all_manifests(user_id: int, domain: str) -> list:
+    """Все манифесты домена: [(раздел, имя файла, данные)] — по одному на файл БЗ."""
+    folder = _site_dir(user_id, domain)
+    out = []
+    if not os.path.isdir(folder):
+        return out
+    for name in sorted(os.listdir(folder)):
+        if not (name.startswith("manifest") and name.endswith(".json")):
+            continue
+        try:
+            with open(os.path.join(folder, name), encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        out.append((data.get("section") or "", data.get("filename") or "", data))
+    return out
+
+
+def _parse_moment(value: str):
+    """Время из карты сайта или манифеста; время без зоны считаем местным (как и обход)."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return moment
+
+
+def _page_is_newer(lastmod: str, fetched_at: str) -> bool:
+    """Страница менялась после нашей выборки? Непонятное время считаем изменением."""
+    stamp = _parse_moment(lastmod)
+    if stamp is None:
+        return bool((lastmod or "").strip())      # lastmod есть, но не разобран — перепроверим
+    was = _parse_moment(fetched_at)
+    if was is None:
+        return True
+    return stamp > was
+
+
+def check_site_changes(user_id: int, start_url: str, respect_robots: bool = True) -> dict:
+    """Что изменилось на сайте — по карте сайта, без обхода страниц.
+
+    Карта читается заново (не из кэша) и сравнивается с манифестами файлов домена:
+    страница, которой у нас нет, — новая; страница, у которой lastmod новее момента
+    нашей выборки, — изменившаяся; страница, которую мы брали из карты и которой там
+    больше нет, — пропавшая. Ничего не меняет: только отчёт, обновление запускает юзер.
+    """
+    start_url = normalize_url(start_url)
+    if not start_url:
+        raise CrawlError("Некорректный адрес сайта")
+    assert_public_url(start_url)
+    domain = domain_of(start_url)
+
+    session = requests.Session()
+    sitemaps = []
+    if respect_robots:
+        _disallow, _allow, sitemaps = _robots_rules(session, start_url)
+    entries, sitemaps_read = _sitemap_entries(session, start_url, sitemaps)
+    has_lastmod = any((stamp or "").strip() for stamp in entries.values())
+
+    manifests = _load_all_manifests(user_id, domain)
+    known = set()
+    for _section, _filename, data in manifests:
+        known.update((data.get("pages") or {}).keys())
+
+    files, total_new, total_changed, total_gone, total_unknown = [], 0, 0, 0, 0
+    for section, filename, data in manifests:
+        pages = data.get("pages") or {}
+        if not pages:
+            continue
+        scope = [url for url in entries if in_section(url, start_url, section)]
+        fresh = [url for url in scope if url not in known]
+        changed = [url for url in scope if url in pages
+                   and _page_is_newer(entries.get(url, ""), (pages.get(url) or {}).get("fetched_at", ""))]
+        gone = [url for url in pages
+                if (pages.get(url) or {}).get("source") == "sitemap" and url not in entries]
+        # Карта знает страницу, но lastmod не отдаёт — изменение такой страницы по карте
+        # не увидеть; считаем отдельно, чтобы отчёт не выдавал это за «всё в порядке».
+        unknown = [url for url in scope if url in pages and not (entries.get(url) or "").strip()]
+        total_new += len(fresh)
+        total_changed += len(changed)
+        total_gone += len(gone)
+        total_unknown += len(unknown)
+        files.append({
+            "filename": filename, "section": section, "pages": len(pages),
+            "new": len(fresh), "changed": len(changed), "gone": len(gone),
+            "unknown": len(unknown),
+            "sample_new": [urlparse(u).path for u in fresh[:5]],
+            "sample_changed": [urlparse(u).path for u in changed[:5]],
+            "sample_gone": [urlparse(u).path for u in gone[:5]],
+        })
+
+    affected = [f for f in files if f["new"] or f["changed"] or f["gone"]]
+    # Карта без lastmod (или её отсутствие) — сравнивать нечем: честно говорим об этом,
+    # иначе «изменений нет» означало бы «мы их не видим».
+    if not entries:
+        reason, supported = "no_sitemap", False
+    elif not has_lastmod:
+        reason, supported = "no_lastmod", False
+    else:
+        reason, supported = "", True
+    return {
+        "ok": True,
+        "domain": domain,
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+        "supported": supported,
+        "reason": reason,
+        "unknown": total_unknown,
+        "sitemaps": sitemaps_read,
+        "sitemap_urls": len(entries),
+        "known_urls": len(known),
+        "files_total": len(files),
+        "files_affected": len(affected),
+        "new": total_new,
+        "changed": total_changed,
+        "gone": total_gone,
+        "files": affected if affected else files,
+    }
 
 
 # === Обход сайта ===
@@ -791,14 +930,17 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
     pages_out = {}       # url -> {"title", "lines", "fetched_at"}
     order = []           # порядок страниц в файле (как обошли)
     seen_keys = set()    # дедупликация строк по всему сайту
+    page_sources = {}    # url -> "sitemap" | "link" (откуда узнали о странице)
     queue = deque()
 
     visited = set()
     hard_gone = set()    # страницы, которых больше нет (404/410) или доступ закрыт роботсом
 
-    def _push(url: str):
+    def _push(url: str, source: str = ""):
         if len(queue) + len(order) >= page_limit * 4:
             return
+        if source:
+            page_sources.setdefault(url, source)
         queue.append(url)
 
     def _enqueue_links(links, base_url: str):
@@ -808,7 +950,7 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
             except ValueError:
                 continue
             if absolute and _in_scope(absolute) and absolute not in visited:
-                _push(absolute)
+                _push(absolute, "link")
 
     seeds = [normalize_url(u) for u in (extra_seeds or [])]
     seeds = [u for u in seeds if u]
@@ -818,7 +960,7 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
             _push(seed)
     for loc in _sitemap_urls(session, start_url, sitemaps):
         if _in_scope(loc):
-            _push(loc)
+            _push(loc, "sitemap")
     # Страницы прошлого обхода обязательно проверяем снова: перелинковка на сайте
     # могла измениться, и страница не должна выпасть из файла только потому, что
     # её перестали линковать (иначе второй обход выкинул бы половину базы).
@@ -866,7 +1008,8 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
                 pages_out[url] = {"title": cached.get("title", ""), "lines": lines,
                                   "fetched_at": cached.get("fetched_at", ""),
                                   "etag": cached.get("etag", ""),
-                                  "last_modified": cached.get("last_modified", "")}
+                                  "last_modified": cached.get("last_modified", ""),
+                                  "source": (old_pages.get(url) or {}).get("source") or page_sources.get(url, "")}
                 order.append(url)
                 stats["unchanged"] += 1
                 stats["lines"] += len(lines) - 1 if lines else 0
@@ -908,7 +1051,8 @@ def crawl(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
             f.write("\n".join([separator] + page_lines) + "\n")
         pages_out[url] = {"title": title, "lines": [separator] + page_lines,
                           "fetched_at": datetime.now().isoformat(timespec="seconds"),
-                          "etag": result.get("etag", ""), "last_modified": result.get("last_modified", "")}
+                          "etag": result.get("etag", ""), "last_modified": result.get("last_modified", ""),
+                          "source": page_sources.get(url, "")}
         order.append(url)
         stats["new" if url not in old_pages else "changed"] += 1
         stats["lines"] += len(page_lines)
