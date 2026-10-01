@@ -907,7 +907,11 @@ def _site_group_label(domain, section=''):
     keep = SITE_GROUP_MAX_LEN - len(head)
     if keep <= 0:
         return label[:SITE_GROUP_MAX_LEN]
-    return head + section[-keep:]
+    tail = section[-keep:]
+    # Не режем имя раздела посреди слова: если рядом граница пути, берём её.
+    if "/" in tail[1:]:
+        tail = tail[tail.index("/"):]
+    return head + tail
 
 
 def _site_save_document(user_id, result):

@@ -279,6 +279,7 @@ class SiteRouteCase(unittest.TestCase):
         self.assertLessEqual(len(label), self.web_app.SITE_GROUP_MAX_LEN)
         self.assertTrue(label.startswith('🌐 127.0.0.1 · …'), label)
         self.assertTrue(label.endswith(section[-10:]), label)
+        self.assertIn('/', label, 'обрезали посреди имени раздела')
         # короткий раздел не трогаем
         self.assertEqual(self.web_app._site_group_label('127.0.0.1', '/catalog'),
                          '🌐 127.0.0.1 · /catalog')
