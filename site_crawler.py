@@ -781,6 +781,33 @@ def _load_all_manifests(user_id: int, domain: str) -> list:
     return out
 
 
+def plans_for_files(user_id: int, domain: str, filenames: list) -> list:
+    """Обходы по именам файлов БЗ: адрес, режим и лимит берём из манифеста каждого файла.
+
+    Нужно для обновления только затронутых файлов: переобходить при этом весь сайт
+    нельзя, а настройки прошлого обхода (адрес раздела, лимит страниц) уже записаны
+    в манифесте — второй раз их угадывать не нужно.
+    """
+    wanted = set(filenames or [])
+    plans = []
+    for section, filename, data in _load_all_manifests(user_id, domain):
+        if filename not in wanted:
+            continue
+        start_url = (data.get("start_url") or "").strip()
+        if not start_url:
+            continue
+        plans.append({
+            "url": start_url,
+            "filename": filename,
+            "section": section,
+            "section_mode": bool(section),
+            "page_limit": int(data.get("page_limit") or DEFAULT_PAGE_LIMIT),
+            "pages": len(data.get("pages") or {}),
+            "extra_seeds": [],
+        })
+    return plans
+
+
 def _parse_moment(value: str):
     """Время из карты сайта или манифеста; время без зоны считаем местным (как и обход)."""
     value = (value or "").strip()
@@ -1399,11 +1426,13 @@ def cancel() -> bool:
 
 def start_job(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT,
               respect_robots: bool = True, section: bool = False, on_finish=None,
-              split: bool = False, on_finish_parts=None) -> dict:
+              split: bool = False, on_finish_parts=None, fixed_parts: list = None) -> dict:
     """Запускает обход в фоне. Бросает CrawlError, если обход идёт или адрес небезопасен.
 
     split=True — если раздел не влезает в потолок строк на файл, он автоматически
     режется по подразделам: по txt на подраздел, и все они сразу попадают в БЗ.
+    fixed_parts — готовый список файлов (обновление только затронутых): план не считается,
+    каждый элемент — план из plans_for_files, итог уходит on_finish_parts.
     on_finish(user_id, result) — одиночный файл, on_finish_parts(user_id, results) — части.
     """
     start_url = normalize_url(start_url)
@@ -1438,7 +1467,18 @@ def start_job(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT
         results = []
         try:
             parts = None
-            if split and prefix:
+            if fixed_parts:
+                # Файлы заданы списком: настройки каждого (адрес, режим раздела, лимит
+                # страниц) взяты из его манифеста — обновляем ровно их.
+                parts = list(fixed_parts)
+                with _JOB_LOCK:
+                    job["split"] = True
+                    job["parts_total"] = len(parts)
+                    job["pages_total"] = max(1, sum(int(p.get("pages") or 0) for p in parts))
+                    job["message"] = f"Обновление затронутых файлов: {len(parts)}"
+                logger.info(f"⬆️ {domain}: обновляем затронутые файлы ({len(parts)}): "
+                            + ", ".join(p.get("filename", "") for p in parts))
+            elif split and prefix:
                 plan = plan_split(user_id, start_url, respect_robots, page_budget=page_limit)
                 if plan.get("needed"):
                     parts = plan["parts"]
@@ -1473,9 +1513,11 @@ def start_job(user_id: int, start_url: str, page_limit: int = DEFAULT_PAGE_LIMIT
                             job["part_name"] = state.get("current") or part["url"]
                             job["filename"] = part["filename"]
 
-                    result = crawl(user_id, part["url"], page_limit, respect_robots,
+                    result = crawl(user_id, part["url"],
+                                   int(part.get("page_limit") or page_limit), respect_robots,
                                    on_progress=on_progress, cancel_event=cancel_event,
-                                   section=True, extra_seeds=part.get("extra_seeds"))
+                                   section=part.get("section_mode", True),
+                                   extra_seeds=part.get("extra_seeds"))
                     results.append(result)
                     base_pages += result["stats"].get("pages", 0)
                     base_lines += result["stats"].get("lines", 0)

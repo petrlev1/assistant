@@ -18,6 +18,7 @@ import socketserver
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -68,8 +69,8 @@ class Site(http.server.BaseHTTPRequestHandler):
         pass
 
 
-class CheckCase(unittest.TestCase):
-    """check_site_changes на карте сайта с lastmod."""
+class SiteCase(unittest.TestCase):
+    """Общий стенд: локальный сайт с картой сайта, robots и страницами."""
 
     @classmethod
     def setUpClass(cls):
@@ -108,6 +109,7 @@ class CheckCase(unittest.TestCase):
             # карта отдаёт раздел a с хвостовым слэшем, в манифесте он без слэша
             "/catalog/a": ("text/html", page_html("Раздел A без слэша")),
             "/catalog/a/linked.html": ("text/html", page_html("Ссылочная страница")),
+            "/catalog/b/": ("text/html", page_html("Раздел B", ["/catalog/b/1.html"])),
             "/catalog/b/1.html": ("text/html", page_html("Страница B1")),
         }
 
@@ -147,6 +149,9 @@ class CheckCase(unittest.TestCase):
                 self.base + "/catalog/b/2.html": {"title": "B2", "lines": [], "fetched_at": FETCHED,
                                                   "source": "sitemap"},
             }}, "/catalog/b")
+
+class CheckCase(SiteCase):
+    """Отчёт проверки изменений по карте сайта."""
 
     def test_report_counts_new_changed_gone(self):
         """Отчёт: изменённая, новая и пропавшая страницы — по своим файлам."""
@@ -268,6 +273,99 @@ class MomentCase(unittest.TestCase):
     def test_in_section_scope(self):
         self.assertTrue(sc.in_section("https://s.ru/catalog/a/1.html", "https://s.ru/catalog/", "/catalog/a"))
         self.assertFalse(sc.in_section("https://s.ru/catalog/b/1.html", "https://s.ru/catalog/", "/catalog/a"))
+
+
+
+
+class UpdateCase(SiteCase):
+    """Обновление только затронутых файлов: план по манифесту + обход подряд."""
+
+    def save_manifest(self, section, limit):
+        """Манифест файла с нужным лимитом страниц (как после настоящего обхода)."""
+        url = f"{self.base}{section}/"
+        sc._save_manifest(TEST_USER, DOMAIN, {
+            "start_url": url, "domain": DOMAIN,
+            "filename": sc.site_filename(DOMAIN, section), "section": section,
+            "page_limit": limit, "lines": 1,
+            "pages": {url: {"title": "Раздел", "lines": [], "fetched_at": FETCHED, "source": "sitemap"}},
+        }, section)
+
+    def plans(self, sections):
+        names = [sc.site_filename(DOMAIN, section) for section in sections]
+        return sc.plans_for_files(TEST_USER, DOMAIN, names)
+
+    def test_plan_takes_settings_from_manifest(self):
+        """Адрес, режим раздела и лимит страниц берутся из манифеста файла."""
+        self.save_manifest("/catalog/a", 2)
+        plans = self.plans(["/catalog/a"])
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0]["url"], self.base + "/catalog/a/")
+        self.assertEqual(plans[0]["filename"], sc.site_filename(DOMAIN, "/catalog/a"))
+        self.assertTrue(plans[0]["section_mode"])
+        self.assertEqual(plans[0]["page_limit"], 2)
+
+    def test_unknown_file_makes_no_plan(self):
+        """Файла нет на диске — плана для него не будет (обход не выдумывается)."""
+        self.assertEqual(sc.plans_for_files(TEST_USER, DOMAIN, ["site_127.0.0.1_net.txt"]), [])
+
+    def test_update_job_crawls_only_planned_files(self):
+        """Джоб обходит файлы из плана, держит лимит каждого и не трогает остальные."""
+        self.save_manifest("/catalog/a", 2)
+        self.save_manifest("/catalog/b", sc.DEFAULT_PAGE_LIMIT)
+        plans = self.plans(["/catalog/a", "/catalog/b"])
+        self.assertEqual([p["filename"] for p in plans],
+                         [sc.site_filename(DOMAIN, "/catalog/a"), sc.site_filename(DOMAIN, "/catalog/b")])
+
+        done = []
+        job = sc.start_job(TEST_USER, self.base + "/catalog/", respect_robots=False,
+                           fixed_parts=plans,
+                           on_finish_parts=lambda user_id, results: done.append(results))
+        self.assertTrue(job["split"], "обновление затронутых идёт как джоб с частями")
+
+        deadline = time.time() + 30
+        while time.time() < deadline and sc.get_status()["active"]:
+            time.sleep(0.2)
+        self.assertFalse(sc.get_status()["active"], "обход не завершился за 30 с")
+
+        self.assertEqual(len(done), 1, "итог должен уйти один раз, списком файлов")
+        results = done[0]
+        self.assertEqual([r["filename"] for r in results],
+                         [sc.site_filename(DOMAIN, "/catalog/a"), sc.site_filename(DOMAIN, "/catalog/b")])
+        # лимит страниц части берётся из её манифеста, а не из аргумента джоба
+        self.assertEqual(results[0]["stats"]["pages"], 2)
+
+        folder = os.path.join("Database", f"user_{TEST_USER}")
+        for name in [r["filename"] for r in results]:
+            self.assertTrue(os.path.exists(os.path.join(folder, name)), name)
+        self.assertFalse(os.path.exists(os.path.join(folder, sc.site_filename(DOMAIN, "/catalog/c"))),
+                         "файл, которого нет в плане, обходить нельзя")
+
+    def test_cancelled_update_still_hands_files_to_index(self):
+        """Отменённый обновляющий обход обязан отдать файлы в индекс, иначе БЗ отстаёт."""
+        self.save_manifest("/catalog/a", sc.DEFAULT_PAGE_LIMIT)
+        plans = self.plans(["/catalog/a"])
+        real_crawl = sc.crawl
+        calls = []
+
+        def fake_crawl(user_id, url, page_limit=None, respect_robots=True, **kwargs):
+            calls.append(url)
+            return {"filename": sc.site_filename(DOMAIN, "/catalog/a"), "section": "/catalog/a",
+                    "lines": 3, "path": "", "stats": {"pages": 1, "lines": 3, "cancelled": True}}
+
+        sc.crawl = fake_crawl
+        done = []
+        try:
+            sc.start_job(TEST_USER, self.base + "/catalog/", respect_robots=False, fixed_parts=plans,
+                         on_finish_parts=lambda user_id, results: done.append(results))
+            deadline = time.time() + 15
+            while time.time() < deadline and sc.get_status()["active"]:
+                time.sleep(0.05)
+        finally:
+            sc.crawl = real_crawl
+
+        self.assertEqual(calls, [self.base + "/catalog/a/"])
+        self.assertEqual(len(done), 1, "итог отменённого обхода обязан уйти в индекс")
+        self.assertTrue(done[0][0]["stats"]["cancelled"])
 
 
 if __name__ == "__main__":

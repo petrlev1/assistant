@@ -954,7 +954,7 @@ def _site_parts_finished(user_id, results):
     """
     for result in results:
         _site_save_document(user_id, result)
-    logger.info(f"✂️ Раздел разбит: файлов {len(results)}, строк "
+    logger.info(f"📄 Файлы сайта: {len(results)}, строк "
                 f"{sum(r.get('lines', 0) for r in results)} — переиндексация БЗ "
                 f"пользователя {user_id}")
     if rag_ready:
@@ -1028,6 +1028,68 @@ def site_crawl_start():
     logger.info(f"🌐 Пользователь {session.get('username')} запустил обход сайта: {url} "
                 f"({mode}, лимит {pages}{', дробление по подразделам' if split else ''})")
     return jsonify({'success': True, 'job': site_crawler.public_job(job)})
+
+
+@app.route('/api/site/update-changed', methods=['POST'])
+def site_update_changed():
+    """Обход только тех файлов, которые затронуты по карте сайта.
+
+    Проверка пересчитывается заново (это секунды): список файлов из браузера не
+    принимается на веру — отчёт мог устареть, а обход запускается настоящий.
+    Дальше это обычный джоб: прогресс в GET /api/site/status, отмена — как у обхода.
+    """
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    data = request.get_json(silent=True) or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'Укажите адрес сайта'}), 400
+    if '://' not in url:
+        url = 'https://' + url
+    respect_robots = bool(data.get('respect_robots', True))
+    only = [str(name) for name in (data.get('filenames') or []) if name]
+
+    try:
+        report = site_crawler.check_site_changes(session['user_id'], url,
+                                                 respect_robots=respect_robots)
+    except site_crawler.CrawlError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"🌐 Проверка перед обновлением не удалась для {url}: {e}")
+        return jsonify({'error': f'Проверка не удалась: {e}'}), 502
+
+    if not report.get('supported'):
+        note = ('Карта сайта без дат обновления (lastmod) — обновить затронутые файлы '
+                'нельзя, нужен обычный обход' if report.get('reason') == 'no_lastmod' else
+                'В карте сайта нет адресов — обновить затронутые файлы нельзя, нужен обычный обход')
+        return jsonify({'error': note}), 409
+
+    affected = [f for f in report.get('files', []) if f.get('new') or f.get('changed') or f.get('gone')]
+    if only:
+        affected = [f for f in affected if f.get('filename') in set(only)]
+    if not affected:
+        return jsonify({'success': True, 'started': False,
+                        'message': 'Изменений нет — обновлять нечего'})
+
+    plans = site_crawler.plans_for_files(session['user_id'], report['domain'],
+                                         [f.get('filename') for f in affected])
+    if not plans:
+        return jsonify({'error': 'Манифесты затронутых файлов не найдены — нужен обычный обход'}), 404
+
+    try:
+        job = site_crawler.start_job(session['user_id'], url, respect_robots=respect_robots,
+                                     fixed_parts=plans, on_finish=_site_crawl_finished,
+                                     on_finish_parts=_site_parts_finished)
+    except site_crawler.CrawlError as e:
+        return jsonify({'error': str(e)}), 409
+
+    logger.info(f"⬆️ Пользователь {session.get('username')} обновляет затронутые файлы "
+                f"{report.get('domain')}: {len(plans)} — новых {report.get('new')}, "
+                f"изменённых {report.get('changed')}, пропавших {report.get('gone')}")
+    return jsonify({'success': True, 'started': True, 'files': [p["filename"] for p in plans],
+                    'new': report.get('new'), 'changed': report.get('changed'),
+                    'gone': report.get('gone'), 'job': site_crawler.public_job(job)})
 
 
 @app.route('/api/site/preview')

@@ -267,6 +267,66 @@ class SiteRouteCase(unittest.TestCase):
         self.assertEqual(info['url'], self.base + '/catalog')
         self.assertEqual(info['page_limit'], 5)
 
+    def test_update_changed_route_uses_only_affected_files(self):
+        """Обновление затронутых: маршрут заново проверяет и обходит файлы из отчёта."""
+        affected = {'section': '/catalog', 'filename': 'site_127.0.0.1_catalog.txt', 'pages': 5,
+                    'new': 1, 'changed': 2, 'gone': 0, 'unknown': 0,
+                    'sample_new': [], 'sample_changed': [], 'sample_gone': []}
+        untouched = {'section': '/news', 'filename': 'site_127.0.0.1_news.txt', 'pages': 3,
+                     'new': 0, 'changed': 0, 'gone': 0, 'unknown': 0,
+                     'sample_new': [], 'sample_changed': [], 'sample_gone': []}
+        report = {'ok': True, 'domain': '127.0.0.1', 'supported': True, 'reason': '',
+                  'sitemap_urls': 8, 'known_urls': 8, 'files_total': 2, 'files_affected': 1,
+                  'new': 1, 'changed': 2, 'gone': 0, 'unknown': 0, 'checked_at': '2026-10-01T12:00:00',
+                  'files': [affected, untouched]}
+        seen = {}
+        real = (self.sc.check_site_changes, self.sc.plans_for_files, self.sc.start_job)
+
+        def fake_check(user_id, url, respect_robots=True):
+            return dict(report)
+
+        def fake_plans(user_id, domain, filenames):
+            seen['plans'] = list(filenames)
+            return [{'url': 'https://127.0.0.1/catalog/', 'filename': affected['filename'],
+                     'section': '/catalog', 'section_mode': True, 'page_limit': 300, 'pages': 5}]
+
+        def fake_start(user_id, url, *args, **kwargs):
+            seen['parts'] = kwargs.get('fixed_parts')
+            return {'phase': 'crawl', 'url': url, 'message': 'Обновление затронутых файлов: 1'}
+
+        self.sc.check_site_changes, self.sc.plans_for_files, self.sc.start_job =             fake_check, fake_plans, fake_start
+        try:
+            response = self.client.post('/api/site/update-changed',
+                                        json={'url': self.base + '/catalog/', 'respect_robots': False})
+            data = response.get_json()
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(data['success'])
+            self.assertTrue(data['started'])
+            self.assertEqual(seen['plans'], [affected['filename']], "обновляем только затронутый файл")
+            self.assertEqual(len(seen['parts']), 1)
+            self.assertEqual(data['changed'], 2)
+
+            # Клиент может ограничить список — лишние файлы не обновляются
+            self.client.post('/api/site/update-changed',
+                             json={'url': self.base + '/catalog/', 'filenames': ['чужой.txt']})
+            self.assertEqual(seen['plans'], [affected['filename']])
+
+            # Изменений нет — обход не запускаем
+            report['files_affected'] = 0
+            report['files'] = [untouched]
+            response = self.client.post('/api/site/update-changed', json={'url': self.base + '/catalog/'})
+            data = response.get_json()
+            self.assertTrue(data['success'])
+            self.assertFalse(data['started'])
+
+            # Карта без lastmod — обновлять «затронутые» нечем
+            report['supported'] = False
+            report['reason'] = 'no_lastmod'
+            self.assertEqual(self.client.post('/api/site/update-changed',
+                                              json={'url': self.base + '/catalog/'}).status_code, 409)
+        finally:
+            self.sc.check_site_changes, self.sc.plans_for_files, self.sc.start_job = real
+
     def test_check_route_returns_report(self):
         """/api/site/check отдаёт отчёт проверки и не пускает без входа."""
         report = {'ok': True, 'domain': '127.0.0.1', 'supported': True, 'reason': '',

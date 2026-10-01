@@ -1351,10 +1351,14 @@
                 С галочкой «Только этот раздел» обходятся лишь страницы под введённым адресом
                 (например https://example.com/catalog/) — они попадают в отдельный файл базы знаний,
                 и его можно обновлять отдельно от всего сайта.
+                Кнопка «🔍 Проверить изменения» сверяет карту сайта с базой знаний за секунды, а
+                «⬆ Обновить затронутые» обходит заново только те файлы, которые она назвала.
             </div>
             <div class="qa-modal-actions">
                 <button id="siteModalCheck" onClick="checkSiteChanges()"
                         title="Сравнить карту сайта с базой знаний: что изменилось, что появилось, что пропало">🔍 Проверить изменения</button>
+                <button id="siteModalUpdate" onClick="updateChangedFiles()" disabled
+                        title="Обойти заново только те файлы, которые затронуты по карте сайта">⬆ Обновить затронутые</button>
                 <button id="siteModalCancel" onClick="closeSiteModal()">Отмена</button>
                 <button id="siteModalStart" onClick="startSiteCrawl()">Индексировать</button>
             </div>
@@ -1968,6 +1972,8 @@
             showSitePreview(null);
             const changes = document.getElementById('siteChanges');
             if (changes) { changes.style.display = 'none'; changes.innerHTML = ''; }
+            lastSiteReport = null;
+            setSiteUpdateButton(false);
             const startBtn = document.getElementById('siteModalStart');
             startBtn.disabled = false;
             startBtn.textContent = 'Индексировать';
@@ -2055,7 +2061,9 @@
                 box.textContent = (data && data.error) || 'Проверка не удалась';
                 return;
             }
+            lastSiteReport = data;
             if (!data.supported) {
+                setSiteUpdateButton(false);
                 box.classList.add('warn');
                 box.textContent = data.reason === 'no_lastmod'
                     ? 'Карта сайта есть, но без дат обновления (lastmod) — сравнить нечем. '
@@ -2068,6 +2076,7 @@
                 + ' · адресов ' + data.sitemap_urls + ', у нас ' + data.known_urls
                 + ' · файлов ' + data.files_total
                 + ' · ' + escapeHtml((data.checked_at || '').replace('T', ' '))];
+            setSiteUpdateButton(!!data.files_affected, data.files_affected);
             if (!data.new && !data.changed && !data.gone) {
                 lines.push('✅ Изменений нет — обновлять нечего.');
             } else {
@@ -2085,10 +2094,64 @@
                     lines.push('• ' + escapeHtml(file.section || '(весь сайт)') + ' — ' + parts.join(', ')
                         + (sample.length ? ' · ' + escapeHtml(sample.join(', ')) : ''));
                 });
-                lines.push('Обновите затронутые файлы кнопкой ⟳ в списке документов — остальные не трогайте.');
+                lines.push('Кнопка «⬆ Обновить затронутые» обойдёт заново только эти файлы — '
+                    + 'остальные не трогаются.');
             }
             box.classList.toggle('warn', !!data.gone);
             box.innerHTML = lines.join('<br>');
+        }
+
+        const SITE_UPDATE_LABEL = '⬆ Обновить затронутые';
+        let lastSiteReport = null;
+
+        function setSiteUpdateButton(enabled, count) {
+            const btn = document.getElementById('siteModalUpdate');
+            if (!btn) return;
+            btn.disabled = !enabled;
+            btn.textContent = count ? SITE_UPDATE_LABEL + ' (' + count + ')' : SITE_UPDATE_LABEL;
+        }
+
+        // Обновление только затронутых файлов: проверка повторяется на сервере, обход идёт
+        // по файлам из отчёта — весь сайт заново не обходится
+        function updateChangedFiles() {
+            const url = (document.getElementById('siteUrl').value || '').trim();
+            if (!url) { alert('Укажите адрес сайта'); return; }
+            const btn = document.getElementById('siteModalUpdate');
+            btn.disabled = true;
+            btn.textContent = '⬆ Запускаю…';
+            fetch('/api/site/update-changed', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: url,
+                    respect_robots: document.getElementById('siteRobots').checked
+                })
+            })
+                .then(r => r.json().then(data => ({ data: data })))
+                .then(res => {
+                    const data = res.data || {};
+                    if (!data.success || !data.started) {
+                        setSiteUpdateButton(false, lastSiteReport && lastSiteReport.files_affected);
+                        showSiteUpdateNote(data.error || data.message
+                            || 'Не удалось запустить обновление', !!data.error);
+                        return;
+                    }
+                    closeSiteModal();
+                    renderSiteBar(data.job || {}, true);
+                    pollSiteCrawl();
+                })
+                .catch(() => {
+                    setSiteUpdateButton(false, lastSiteReport && lastSiteReport.files_affected);
+                    showSiteUpdateNote('Ошибка соединения с сервером', true);
+                });
+        }
+
+        function showSiteUpdateNote(text, warn) {
+            const box = document.getElementById('siteChanges');
+            if (!box) return;
+            box.style.display = 'block';
+            box.classList.toggle('warn', !!warn);
+            box.innerHTML += (box.innerHTML ? '<br>' : '') + escapeHtml(text);
         }
 
         function startSiteCrawl() {
