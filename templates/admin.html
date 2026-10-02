@@ -200,6 +200,25 @@
             <p class="hint">Кэш распознанного текста разбит по модели: после смены модели страницы
                 распознаются заново (расходует квоту DashScope).</p>
 
+            <h3>Изображения — текст и описание картинки</h3>
+            <label class="chk"><input type="checkbox" id="image_enabled">
+                Распознавать загруженные картинки (jpg/png/webp/…): рядом с картинкой
+                создаётся одноимённый .txt с текстом и описанием</label>
+            <div class="row">
+                <label class="fld">Модель распознавания
+                    <select id="image_model"></select>
+                </label>
+                <label class="fld hidden" id="image_model_own_fld">Своя модель
+                    <input type="text" id="image_model_own" autocomplete="off" placeholder="qwen-vl-plus">
+                </label>
+                <label class="fld narrow">Сторона картинки, px
+                    <input type="number" id="image_max_side" min="200" max="4000" step="100">
+                </label>
+            </div>
+            <p class="hint">Перед отправкой картинка ужимается до указанной стороны (фото с телефона —
+                иначе уходит целиком). Ключ — тот же DashScope, что у OCR; промпт распознавания
+                (что спрашивать у модели) — в коде: rag_core.DEFAULT_IMAGE_PROMPT.</p>
+
             <h3>API-ключи</h3>
             <p class="hint">Пустое поле = ключ не меняется. Значения на страницу не отдаются — только признак «задан».</p>
             <div class="row">
@@ -389,6 +408,7 @@ function modelValue(selId, ownId) {
 function syncOwnFields() {
     el('llm_model_own_fld').classList.toggle('hidden', el('llm_model').value !== OWN);
     el('ocr_model_own_fld').classList.toggle('hidden', el('ocr_model').value !== OWN);
+    el('image_model_own_fld').classList.toggle('hidden', el('image_model').value !== OWN);
 }
 
 function setKeyStates() {
@@ -411,6 +431,8 @@ function initModels() {
     el('llm_provider').value = v.llm_provider || MODELS.providers[0];
     fillModelSelect(el('llm_model'), (MODELS.catalog[v.llm_provider] || {}).models, v.llm_model);
     fillModelSelect(el('ocr_model'), MODELS.ocr_models, v.ocr_model);
+    fillModelSelect(el('image_model'), MODELS.image_models, v.image_model);
+    el('image_max_side').value = v.image_max_side || 1600;
     el('llm_base_url').value = v.llm_base_url || (MODELS.base_urls || {})[v.llm_provider]
         || (MODELS.catalog[v.llm_provider] || {}).base_url || '';
     el('ocr_base_url').value = v.ocr_base_url || (MODELS.catalog.DashScope || {}).base_url || '';
@@ -418,6 +440,7 @@ function initModels() {
     el('search_top_k').value = v.search_top_k || 30;
     el('disable_llm_models').checked = !!MODELS.flags.disable_llm_models;
     el('ocr_enabled').checked = !!MODELS.flags.ocr_enabled;
+    el('image_enabled').checked = MODELS.flags.image_enabled !== false;
     el('embedding_model').textContent = MODELS.embedding_model;
     el('key-hint').textContent = (MODELS.catalog[el('llm_provider').value] || {}).key_hint || '';
     setKeyStates();
@@ -435,6 +458,7 @@ function initModels() {
     });
     el('llm_model').addEventListener('change', syncOwnFields);
     el('ocr_model').addEventListener('change', syncOwnFields);
+    el('image_model').addEventListener('change', syncOwnFields);
     el('save-models').addEventListener('click', saveModels);
 }
 
@@ -449,6 +473,9 @@ async function saveModels() {
         ocr_model: modelValue('ocr_model', 'ocr_model_own'),
         ocr_base_url: el('ocr_base_url').value.trim(),
         ocr_dpi: Number(el('ocr_dpi').value),
+        image_enabled: el('image_enabled').checked,
+        image_model: modelValue('image_model', 'image_model_own'),
+        image_max_side: Number(el('image_max_side').value),
         search_top_k: Number(el('search_top_k').value),
         llm_api_key: el('llm_api_key').value.trim(),
         llm_provider_api_key: el('llm_provider_api_key').value.trim(),
@@ -456,6 +483,7 @@ async function saveModels() {
     };
     if (!body.llm_model) { showMsg('Модель LLM не может быть пустой', true); return; }
     if (!body.ocr_model) { showMsg('OCR-модель не может быть пустой', true); return; }
+    if (!body.image_model) { showMsg('Модель распознавания изображений не может быть пустой', true); return; }
     btn.disabled = true;
     out.textContent = 'Сохранение…';
     try {

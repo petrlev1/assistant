@@ -706,6 +706,7 @@
             line-height: 1.4;
         }
         .docs-dropzone .dz-text b { color: #4a7dff; }
+        .docs-dropzone .dz-hint { font-size: 12px; color: #8a93a5; }
         .docs-list {
             flex: 1;
             overflow-y: auto;
@@ -1214,8 +1215,8 @@
                 <div class="docs-upload">
                     <div class="docs-dropzone" id="dropZone" title="Нажмите или перетащите файлы сюда">
                         <div class="dz-icon">📤</div>
-                        <div class="dz-text">Перетащите файлы сюда<br>или <b>нажмите</b> для выбора</div>
-                        <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.xlsx" multiple style="display:none;">
+                        <div class="dz-text">Перетащите файлы сюда<br>или <b>нажмите</b> для выбора<br><span class="dz-hint">документы и картинки: текст и описание с картинки распознаются автоматически</span></div>
+                        <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.csv,.xlsx,.jpg,.jpeg,.png,.webp,.bmp,.gif" multiple style="display:none;">
                     </div>
                     <label class="docs-price-flag" title="Пометить файлы как прайс-лист">
                         <input type="checkbox" id="priceListCheck">
@@ -1878,11 +1879,13 @@
             // Файл, собранный обходом сайта (site_<домен>.txt): у него есть кнопка
             // «Обновить с сайта» — повторный обход того же адреса вместо новой загрузки
             const isSiteDoc = /^site_.+\.txt$/i.test(doc.original_name || '');
+            // Картинки в списке помечаем иконкой 🖼: у них рядом лежит описание (RAG-файл)
+            const icon = /\.(jpe?g|png|webp|bmp|gif)$/i.test(doc.original_name || '') ? '🖼' : '📄';
             return `
                             <div class="docs-item${ragClass}">
                                 <input type="checkbox" class="doc-check" data-id="${doc.id}" onchange="updateBulkBar()" title="Выбрать">
                                 <div class="doc-info">
-                                    <div class="doc-name" title="${escapeHtml(doc.original_name)}">📄 ${escapeHtml(doc.original_name)}${doc.is_price_list ? ` <span class="price-badge" title="Прайс-лист: ${doc.price_count} позиций">📋 ${doc.price_count}</span>` : ''}${ragTag}</div>
+                                    <div class="doc-name" title="${escapeHtml(doc.original_name)}">${icon} ${escapeHtml(doc.original_name)}${doc.is_price_list ? ` <span class="price-badge" title="Прайс-лист: ${doc.price_count} позиций">📋 ${doc.price_count}</span>` : ''}${ragTag}</div>
                                     <div class="doc-date">${new Date(doc.created_at).toLocaleString('ru-RU')}</div>
                                 </div>
                                 <div style="display:flex;gap:4px;">
@@ -2337,7 +2340,8 @@
                 return;
             }
 
-            const allowedExt = ['.txt', '.pdf', '.docx', '.csv', '.xlsx'];
+            const allowedExt = ['.txt', '.pdf', '.docx', '.csv', '.xlsx',
+                                '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'];
             const valid = [];
             const rejected = [];
             files.forEach(file => {
