@@ -184,10 +184,19 @@ def main():
           r.status_code == 200 and (r.get_json() or {}).get('spam') and before == after,
           f'{r.status_code} {r.get_json()} {before}->{after}')
 
-    # --- лимит 5 заявок в час с одного IP ---
-    codes = [post(client, dict(base, phone='+79990000000'), ip='10.9.9.77').status_code for _ in range(6)]
-    check('лимит: 6-я заявка с одного IP → 429',
-          codes[:5] == [200] * 5 and codes[5] == 429, str(codes))
+    # --- лимиты: квота заявок на IP + отдельный (более свободный) лимит попыток ---
+    cap = web_app._LEAD_SAVED_LIMIT[0]
+    codes = [post(client, dict(base, phone='+79990000000'), ip='10.9.9.77').status_code
+             for _ in range(cap + 1)]
+    check(f'лимит заявок: {cap + 1}-я заявка с одного IP → 429',
+          codes[:cap] == [200] * cap and codes[cap] == 429, str(codes))
+
+    ip_err = '10.9.9.78'
+    fails = [post(client, {'name': MARK, 'message': 'без контактов'}, ip=ip_err).status_code
+             for _ in range(6)]
+    r = post(client, dict(base, phone='+79990002222'), ip=ip_err)
+    check('отказы валидации не съедают квоту: после 6 ошибок заявка проходит',
+          fails == [400] * 6 and r.status_code == 200, f'{fails} -> {r.status_code}')
 
     # --- письмо через фейковый SMTP ---
     server, port = start_fake_smtp()

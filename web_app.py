@@ -413,6 +413,14 @@ def prices():
 _LEAD_THANKS = "Заявка отправлена. Спасибо! Ответим в рабочее время."
 _LEAD_NAME_MAX = 120
 _LEAD_MESSAGE_MAX = 4000
+# Два независимых лимита на IP: (сколько, окно в секундах).
+# «Попытки» стоят выше «заявок» специально: опечатка в поле или проверка формы не должна
+# съедать квоту заявителя и запирать его на час (реальный случай: 5 отказов валидации
+# забирали весь часовой лимит, и человек видел «Слишком много заявок»).
+_LEAD_SAVED_LIMIT = (10, 3600)
+_LEAD_ATTEMPT_LIMIT = (40, 600)
+_LEAD_LIMIT_TEXT = ("Слишком много заявок с этого адреса. Подождите немного или напишите "
+                    "нам письмом: mail@ragstone.ru")
 _LEAD_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$')
 
 
@@ -481,13 +489,23 @@ def lead_submit():
         logger.warning("🍯 Заявка отклонена: заполнено honeypot-поле")
         return jsonify({'success': True, 'message': _LEAD_THANKS, 'spam': True})
 
-    if _rate_limited('lead:%s' % (_client_ip() or 'x'), limit=5, window=3600):
-        return jsonify({'error': 'Слишком много заявок с этого адреса. Напишите нам письмом: '
-                                 'mail@ragstone.ru'}), 429
+    ip = _client_ip() or 'x'
+    if _rate_limited('lead_attempt:%s' % ip, limit=_LEAD_ATTEMPT_LIMIT[0],
+                     window=_LEAD_ATTEMPT_LIMIT[1]):
+        logger.warning(f"🚧 Заявки: IP {ip} превысил лимит попыток "
+                       f"({_LEAD_ATTEMPT_LIMIT[0]} за {_LEAD_ATTEMPT_LIMIT[1]} с)")
+        return jsonify({'error': _LEAD_LIMIT_TEXT}), 429
 
     fields, errors = _lead_validate(data)
     if errors:
+        # Отказ валидации квоту заявок НЕ расходует — только лимит попыток
         return jsonify({'error': '; '.join(errors)}), 400
+
+    if _rate_limited('lead_saved:%s' % ip, limit=_LEAD_SAVED_LIMIT[0],
+                     window=_LEAD_SAVED_LIMIT[1]):
+        logger.warning(f"🚧 Заявки: IP {ip} превысил лимит заявок "
+                       f"({_LEAD_SAVED_LIMIT[0]} за {_LEAD_SAVED_LIMIT[1]} с)")
+        return jsonify({'error': _LEAD_LIMIT_TEXT}), 429
 
     source = str(data.get('source', '') or '').strip()[:120]
     page = str(data.get('page', '') or '').strip()[:200]
