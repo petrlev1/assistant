@@ -122,6 +122,21 @@ def csrf_protect():
             logger.warning(f"🚫 CSRF отклонён: Origin={request.headers.get('Origin')} Host={request.host}")
             return jsonify({'error': 'Неверный источник запроса'}), 403
 
+
+@app.after_request
+def static_cache_headers(response):
+    """Кэш статики: картинки — неделя, CSS/JS — час.
+
+    Flask по умолчанию отдаёт статику с `Cache-Control: no-cache` — браузер
+    перепроверяет каждый файл при каждом заходе. Файлы меняются редко, поэтому
+    разрешаем кэш; присваивание в headers заменяет исходное значение, а не
+    добавляет второе (иначе `no-cache` в ответе побеждает и кэш не работает).
+    """
+    if request.path.startswith('/static/'):
+        max_age = 604800 if request.path.startswith('/static/img/') else 3600
+        response.headers['Cache-Control'] = f'public, max-age={max_age}'
+    return response
+
 # RAG-система: модель эмбеддингов прогревается в фоне, а база знаний каждого
 # пользователя хранится в ОТДЕЛЬНОМ экземпляре RAGCore (изоляция, без гонок
 # данных — см. rag_core.get_user_rag). rag_ready = модель загружена, можно отвечать.
