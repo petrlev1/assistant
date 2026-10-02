@@ -168,6 +168,9 @@ def init_db():
         # Инициализация таблицы настроек (app_settings) + одноразовый перенос из rag_settings.json
         init_app_settings()
 
+        # Инициализация таблицы заявок с сайта (форма на /prices и лендинге)
+        init_leads()
+
         return True
     except Exception as e:
         logger.error(f"Ошибка инициализации БД: {e}")
@@ -2008,4 +2011,124 @@ def max_consume(channel_id):
         return consumed
     except Exception as e:
         logger.error(f"Ошибка учёта обращений MAX: {e}")
+        return False
+
+# === Заявки с сайта (форма обратной связи на страницах тарифов и лендинге) ===
+# Публичная форма не требует логина: заявка сохраняется здесь ДО попытки отправить
+# письмо, поэтому сбой SMTP не теряет обращение. Отправка — mailer.send_lead_mail(),
+# результат (mail_sent/mail_error) виден админу в /admin → «Заявки».
+
+def init_leads():
+    """Таблица заявок с сайта (создаётся из init_db)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS leads (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(120) NOT NULL,
+                phone VARCHAR(40) DEFAULT '',
+                email VARCHAR(120) DEFAULT '',
+                messenger VARCHAR(120) DEFAULT '',
+                message TEXT NOT NULL,
+                source VARCHAR(120) DEFAULT '',
+                page VARCHAR(200) DEFAULT '',
+                ip VARCHAR(64) DEFAULT '',
+                user_agent VARCHAR(300) DEFAULT '',
+                mail_sent BOOLEAN DEFAULT FALSE,
+                mail_error TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS leads_created_idx ON leads (created_at DESC)")
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info("Таблица заявок с сайта инициализирована")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка инициализации таблицы заявок: {e}")
+        return False
+
+
+def save_lead(name, message, phone='', email='', messenger='', source='', page='', ip='', user_agent=''):
+    """Сохранить заявку с сайта. Возвращает (успех, id заявки или None)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            INSERT INTO leads (name, phone, email, messenger, message, source, page, ip, user_agent)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (name, phone, email, messenger, message, source, page, ip, user_agent))
+        lead_id = cur.fetchone()['id']
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"📨 Заявка с сайта #{lead_id} сохранена ({name}, источник: {source or '—'})")
+        return True, lead_id
+    except Exception as e:
+        logger.error(f"Ошибка сохранения заявки: {e}")
+        return False, None
+
+
+def set_lead_mail_result(lead_id, sent, error=''):
+    """Отметить результат отправки письма по заявке (для админки и повторной отправки)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE leads SET mail_sent = %s, mail_error = %s WHERE id = %s",
+                    (bool(sent), str(error or '')[:500], int(lead_id)))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка отметки отправки заявки: {e}")
+        return False
+
+
+def list_leads(limit=200):
+    """Заявки с сайта: свежие сверху (для админки)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM leads ORDER BY created_at DESC, id DESC LIMIT %s", (int(limit),))
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.error(f"Ошибка чтения заявок: {e}")
+        return []
+
+
+def count_leads():
+    """Сколько заявок с сайта всего (счётчик на вкладке админки)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM leads")
+        total = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        return int(total)
+    except Exception as e:
+        logger.error(f"Ошибка подсчёта заявок: {e}")
+        return 0
+
+
+def delete_lead(lead_id):
+    """Удалить заявку (админка)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM leads WHERE id = %s", (int(lead_id),))
+        removed = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        conn.close()
+        return removed
+    except Exception as e:
+        logger.error(f"Ошибка удаления заявки: {e}")
         return False

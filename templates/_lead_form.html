@@ -1,0 +1,55 @@
+{# Модальная форма заявки. Подключается на публичных страницах (/prices, лендинг):
+   {% include '_lead_form.html' %} + static/lead_form.css + static/lead_form.js.
+   Любая кнопка с data-lead-open открывает окно; data-lead-source попадает в письмо. #}
+<div class="lead-backdrop" id="leadBackdrop" hidden>
+  <div class="lead-modal" role="dialog" aria-modal="true" aria-labelledby="leadTitle">
+    <button type="button" class="lead-close" id="leadClose" aria-label="Закрыть окно">&times;</button>
+
+    <form class="lead-form" id="leadForm" novalidate>
+      <h3 id="leadTitle">Обсудить задачу</h3>
+      <p class="lead-sub">Оставьте контакты — свяжемся, посчитаем стоимость и ответим на вопросы.</p>
+
+      <label class="lead-fld">Имя <span class="lead-req">*</span>
+        <input type="text" id="leadName" name="name" maxlength="120" autocomplete="name" required>
+      </label>
+
+      <div class="lead-row">
+        <label class="lead-fld">Телефон
+          <input type="tel" id="leadPhone" name="phone" maxlength="40" autocomplete="tel" placeholder="+7 999 123-45-67">
+        </label>
+        <label class="lead-fld">E-mail
+          <input type="email" id="leadEmail" name="email" maxlength="120" autocomplete="email" placeholder="you@company.ru">
+        </label>
+      </div>
+
+      <label class="lead-fld">Мессенджер
+        <input type="text" id="leadMessenger" name="messenger" maxlength="120"
+               placeholder="Telegram, WhatsApp, MAX — ник или номер">
+      </label>
+
+      <label class="lead-fld">Сообщение <span class="lead-req">*</span>
+        <textarea id="leadMessage" name="message" rows="4" maxlength="4000" required
+                  placeholder="Что нужно: сколько пользователей, какие документы, свой сервер или облако"></textarea>
+      </label>
+
+      {# Honeypot: скрытое поле ловит ботов — сервер молча «принимает» такую заявку #}
+      <div class="lead-hp" aria-hidden="true">
+        <label>Компания<input type="text" id="leadCompany" name="company" tabindex="-1" autocomplete="off"></label>
+      </div>
+
+      <p class="lead-note">Обязательно одно из трёх: телефон, e-mail или мессенджер.</p>
+      <div class="lead-actions">
+        <button type="submit" class="lead-send" id="leadSend">Отправить заявку</button>
+        <span class="lead-status" id="leadStatus" role="status"></span>
+      </div>
+      <p class="lead-src" id="leadSrc"></p>
+    </form>
+
+    <div class="lead-done" id="leadDone" hidden>
+      <div class="lead-done-ico">✓</div>
+      <h3>Заявка отправлена</h3>
+      <p>Спасибо! Свяжемся с вами в рабочее время.</p>
+      <button type="button" class="lead-send" id="leadDoneClose">Закрыть</button>
+    </div>
+  </div>
+</div>

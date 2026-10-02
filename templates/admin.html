@@ -108,6 +108,15 @@
     .tab.active { background: #2a3242; color: #fff; border-color: #3a4557; }
     .tabpane { display: none; }
     .tabpane.active { display: block; }
+    /* Заявки с сайта */
+    .tab .badge {
+        display: inline-block; margin-left: 7px; padding: 1px 8px; border-radius: 999px;
+        background: #2a3242; color: #cfe3ff; font-size: 11.5px; font-weight: 600;
+    }
+    .tab.active .badge { background: #3a4557; }
+    .lead-msg { max-width: 380px; white-space: pre-wrap; word-break: break-word; }
+    .contacts { white-space: nowrap; }
+    .lead-err { color: #e5484d; font-size: 11.5px; }
 </style>
 </head>
 <body>
@@ -139,8 +148,10 @@
         {% endwith %}
         <div id="msg" class="flash hidden"></div>
         <script id="models-data" type="application/json">{{ models | tojson }}</script>
+        <script id="mail-data" type="application/json">{{ mail | tojson }}</script>
         <div class="tabs" role="tablist">
             <button class="tab active" type="button" data-tab="users" role="tab">Пользователи</button>
+            <button class="tab" type="button" data-tab="leads" role="tab">Заявки<span class="badge">{{ leads_total }}</span></button>
             <button class="tab" type="button" data-tab="settings" role="tab">Настройки</button>
         </div>
         <div class="tabpane" id="pane-settings">
@@ -221,6 +232,53 @@
                 <span class="saved" id="models-saved"></span>
             </div>
         </div>
+        <div class="card sect">
+            <div class="sect-head">
+                <h2>Почта — заявки с сайта</h2>
+                <span class="hint">Сюда уходят письма с формы заявок (/prices, лендинг). Пароль хранится в БД и на страницу не отдаётся.</span>
+            </div>
+            <label class="chk"><input type="checkbox" id="mail_enabled">
+                Отправлять письмо о каждой заявке (заявка в любом случае сохраняется в «Заявках»)</label>
+            <div class="row">
+                <label class="fld">SMTP-сервер
+                    <input type="text" id="mail_smtp_host" autocomplete="off" placeholder="smtp.spaceweb.ru">
+                </label>
+                <label class="fld narrow">Порт
+                    <input type="number" id="mail_smtp_port" min="1" max="65535" step="1">
+                </label>
+                <label class="fld narrow">Шифрование
+                    <select id="mail_smtp_mode">
+                        <option value="ssl">SSL (465)</option>
+                        <option value="starttls">STARTTLS (587)</option>
+                        <option value="plain">Без шифрования</option>
+                    </select>
+                </label>
+            </div>
+            <div class="row">
+                <label class="fld">Логин ящика
+                    <input type="text" id="mail_smtp_user" autocomplete="off" placeholder="mail@ragstone.ru">
+                </label>
+                <label class="fld">Пароль ящика <span class="state" id="state_mail_password"></span>
+                    <input type="password" id="mail_smtp_password" autocomplete="new-password" placeholder="не менять">
+                </label>
+            </div>
+            <div class="row">
+                <label class="fld">Отправитель
+                    <input type="text" id="mail_from" autocomplete="off" placeholder="mail@ragstone.ru">
+                </label>
+                <label class="fld">Получатель заявок
+                    <input type="text" id="mail_to" autocomplete="off" placeholder="mail@ragstone.ru">
+                </label>
+            </div>
+            <p class="hint">Почта домена обслуживается на SpaceWeb (MX <code>mx1.spaceweb.ru</code>): сервер
+                <code>smtp.spaceweb.ru</code>, порт <code>465</code>, шифрование SSL, логин — полный адрес ящика.
+                Отправка выключена, пока не задан пароль.</p>
+            <div class="save-row">
+                <button class="btn small" type="button" id="save-mail">Сохранить почту</button>
+                <button class="btn small ghost" type="button" id="test-mail">Сохранить и проверить письмом</button>
+                <span class="saved" id="mail-saved"></span>
+            </div>
+        </div>
         </div>{# /pane-settings #}
         <div class="tabpane active" id="pane-users">
         <div class="card">
@@ -257,6 +315,48 @@
         </div>
         <p class="foot">Удаление пользователя стирает все его данные: документы, прайс-листы, историю чата, аналитику запросов, файлы и кэш эмбеддингов. Действие необратимо.</p>
         </div>{# /pane-users #}
+        <div class="tabpane" id="pane-leads">
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>№</th><th>Дата</th><th>Имя</th><th>Контакты</th><th>Сообщение</th>
+                        <th>Источник</th><th>Письмо</th><th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for l in leads %}
+                    <tr data-lead="{{ l.id }}">
+                        <td>{{ l.id }}</td>
+                        <td>{{ l.created_at.strftime('%d.%m.%Y %H:%M') if l.created_at else '—' }}</td>
+                        <td class="uname">{{ l.name }}</td>
+                        <td class="contacts">
+                            {% if l.phone %}📞 {{ l.phone }}<br>{% endif %}
+                            {% if l.email %}✉️ {{ l.email }}<br>{% endif %}
+                            {% if l.messenger %}💬 {{ l.messenger }}{% endif %}
+                            {% if not (l.phone or l.email or l.messenger) %}—{% endif %}
+                        </td>
+                        <td class="lead-msg">{{ l.message }}</td>
+                        <td class="folder">{{ l.source or '—' }}{% if l.page %}<br>{{ l.page }}{% endif %}</td>
+                        <td>
+                            {% if l.mail_sent %}<span class="state on">отправлено</span>
+                            {% else %}<span class="state">не отправлено</span>
+                                {% if l.mail_error %}<br><span class="lead-err" title="{{ l.mail_error }}">{{ l.mail_error[:70] }}</span>{% endif %}
+                            {% endif %}
+                        </td>
+                        <td class="actions">
+                            <button class="btn small danger" type="button" onclick="armLead(this)">Удалить</button>
+                        </td>
+                    </tr>
+                {% endfor %}
+                {% if not leads %}
+                    <tr><td colspan="8" class="empty">Заявок пока нет</td></tr>
+                {% endif %}
+                </tbody>
+            </table>
+        </div>
+        <p class="foot">Заявки приходят с формы на страницах тарифов и лендинга. Письмо уходит на адрес из настроек почты; если отправка не удалась, заявка всё равно сохранена здесь.</p>
+        </div>{# /pane-leads #}
     </div>
 {% endif %}
 <script>
@@ -384,6 +484,103 @@ async function saveModels() {
 
 initModels();
 
+/* Почта для заявок с сайта: значения из app_settings, пароль — только «задан/не задан» */
+const MAIL = JSON.parse((document.getElementById('mail-data') || {}).textContent || '{}');
+
+function initMail() {
+    const v = MAIL.values || {};
+    el('mail_enabled').checked = !!v.mail_enabled;
+    el('mail_smtp_host').value = v.mail_smtp_host || '';
+    el('mail_smtp_port').value = v.mail_smtp_port || 465;
+    el('mail_smtp_mode').value = v.mail_smtp_mode || 'ssl';
+    el('mail_smtp_user').value = v.mail_smtp_user || '';
+    el('mail_from').value = v.mail_from || '';
+    el('mail_to').value = v.mail_to || '';
+    const badge = el('state_mail_password');
+    badge.textContent = MAIL.password_set ? 'задан' : 'не задан';
+    badge.classList.toggle('on', !!MAIL.password_set);
+    el('save-mail').addEventListener('click', () => saveMail(false));
+    el('test-mail').addEventListener('click', () => saveMail(true));
+}
+
+async function saveMail(sendTest) {
+    const out = el('mail-saved'), btn = el(sendTest ? 'test-mail' : 'save-mail');
+    const body = {
+        mail_enabled: el('mail_enabled').checked,
+        mail_smtp_host: el('mail_smtp_host').value.trim(),
+        mail_smtp_port: Number(el('mail_smtp_port').value),
+        mail_smtp_mode: el('mail_smtp_mode').value,
+        mail_smtp_user: el('mail_smtp_user').value.trim(),
+        mail_smtp_password: el('mail_smtp_password').value,
+        mail_from: el('mail_from').value.trim(),
+        mail_to: el('mail_to').value.trim(),
+        send_test: !!sendTest
+    };
+    btn.disabled = true;
+    out.textContent = sendTest ? 'Отправляю тестовое письмо…' : 'Сохранение…';
+    try {
+        const r = await fetch('/admin/api/mail-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        if (d.success) {
+            el('mail_smtp_password').value = '';
+            out.textContent = 'Сохранено';
+            showMsg(d.warning || d.message, !!d.warning);
+            setTimeout(() => location.reload(), d.warning ? 4000 : 900);
+        } else {
+            out.textContent = '';
+            showMsg(d.error || 'Ошибка сохранения', true);
+        }
+    } catch (e) {
+        out.textContent = '';
+        showMsg('Ошибка сети: ' + e, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+initMail();
+
+/* Удаление заявки: то же «двойное нажатие», что и для пользователей */
+async function fireLead(btn) {
+    const tr = btn.closest('tr');
+    const id = Number(tr.dataset.lead);
+    try {
+        const r = await fetch('/admin/api/lead-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lead_id: id })
+        });
+        const d = await r.json();
+        if (d.success) {
+            showMsg(d.message);
+            setTimeout(() => location.reload(), 700);
+        } else {
+            showMsg(d.error || 'Ошибка удаления', true);
+        }
+    } catch (e) {
+        showMsg('Ошибка сети: ' + e, true);
+    }
+}
+
+function armLead(btn) {
+    if (btn.dataset.armed === '1') { fireLead(btn); return; }
+    btn.dataset.armed = '1';
+    btn.classList.add('armed');
+    const old = btn.textContent;
+    btn.textContent = 'Точно удалить?';
+    setTimeout(() => {
+        if (btn.dataset.armed === '1') {
+            btn.dataset.armed = '0';
+            btn.classList.remove('armed');
+            btn.textContent = old;
+        }
+    }, ARM_MS);
+}
+
 /* Вкладки: по умолчанию «Пользователи». Выбор держим в location.hash — иначе
    сохранение моделей (с перезагрузкой страницы) выбрасывало бы обратно на «Пользователей». */
 function showTab(name) {
@@ -395,7 +592,7 @@ function showTab(name) {
 document.querySelectorAll('.tab').forEach(t => {
     t.addEventListener('click', () => showTab(t.dataset.tab));
 });
-showTab(location.hash === '#settings' ? 'settings' : 'users');
+showTab(['settings', 'leads'].includes(location.hash.replace('#', '')) ? location.hash.replace('#', '') : 'users');
 function arm(btn, kind) {
     if (btn.dataset.armed === '1') { fire(btn, kind); return; }
     btn.dataset.armed = '1';

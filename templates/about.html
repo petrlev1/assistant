@@ -233,6 +233,7 @@
     .sec-h2 { font-size: 26px; }
   }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='lead_form.css') }}">
 </head>
 <body>
 
@@ -447,7 +448,7 @@
       <div class="card">
         <div class="ico">🔗</div>
         <h3>Интеграции с CRM и маркетплейсами</h3>
-        <p>Возможность интеграции с CRM и маркетплейсами есть — она настраивается отдельно. По вопросам подключения напишите нам на <a href="mailto:mail@ragstone.ru">mail@ragstone.ru</a>.</p>
+        <p>Возможность интеграции с CRM и маркетплейсами есть — она настраивается отдельно. По вопросам подключения <button type="button" class="lead-link" data-lead-open data-lead-source="Лендинг → Интеграции">оставьте заявку</button> — обсудим детали и посчитаем стоимость.</p>
               </div>
       <div class="card">
         <div class="ico">📈</div>
@@ -599,9 +600,13 @@
   <div class="container">
     <span>RAGSTONE  — корпоративная RAG-платформа</span>
     <span><a href="/prices" style="color:#cbd5e1;">Тарифы</a> · <a href="/login" style="color:#cbd5e1;">Вход в систему</a></span>
-    <span><a href="mailto:mail@ragstone.ru" style="color:#cbd5e1;">Написать нам</a></span>
+    <span><button type="button" class="lead-link" style="color:#cbd5e1;" data-lead-open data-lead-source="Лендинг → футер">Написать нам</button></span>
   </div>
 </footer>
+
+{% include '_lead_form.html' %}
+
+<script src="{{ url_for('static', filename='lead_form.js') }}"></script>
 
 <script>
   (function () {

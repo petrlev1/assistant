@@ -31,7 +31,9 @@ from auth_db import (init_conversations, backfill_conversations,
                      init_max_channels, get_max_channel, get_max_channel_by_hook,
                      list_active_max_channels, save_max_channel, update_max_channel,
                      delete_max_channel, max_consume)
+from auth_db import init_leads, save_lead, set_lead_mail_result, list_leads, count_leads, delete_lead
 import docs_renderer
+import mailer
 import max_bot
 import site_crawler
 import model_catalog
@@ -405,6 +407,108 @@ def about():
 def prices():
     """Публичная страница с тарифами (для клиентов)"""
     return render_template('prices.html', logged_in='user_id' in session, username=session.get('username', ''))
+
+
+# === Заявки с сайта (форма обратной связи вместо mailto на /prices и лендинге) ===
+_LEAD_THANKS = "Заявка отправлена. Спасибо! Ответим в рабочее время."
+_LEAD_NAME_MAX = 120
+_LEAD_MESSAGE_MAX = 4000
+_LEAD_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$')
+
+
+def _client_ip():
+    """IP посетителя для лимита заявок: сначала X-Forwarded-For (наш Caddy), затем прямое соединение."""
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    if forwarded:
+        return forwarded.split(',')[0].strip()[:64]
+    return (request.remote_addr or '')[:64]
+
+
+def _lead_validate(data):
+    """Проверка полей заявки → (поля, ошибки).
+
+    Обязательны: имя, сообщение и ЛЮБОЙ ОДИН контакт (телефон / e-mail / мессенджер).
+    Остальные поля проверяются по формату, если заполнены — чтобы письмо не уходило мусором.
+    """
+    fields, errors = {}, []
+    name = str(data.get('name', '') or '').strip()[:200]
+    message = str(data.get('message', '') or '').strip()[:6000]
+    phone = str(data.get('phone', '') or '').strip()[:80]
+    email = str(data.get('email', '') or '').strip()[:200]
+    messenger = str(data.get('messenger', '') or '').strip()[:200]
+
+    if len(name) < 2:
+        errors.append("Укажите имя")
+    elif len(name) > _LEAD_NAME_MAX:
+        errors.append(f"Имя: не длиннее {_LEAD_NAME_MAX} символов")
+    else:
+        fields['name'] = name
+
+    if len(message) < 5:
+        errors.append("Напишите сообщение — хотя бы несколько слов")
+    elif len(message) > _LEAD_MESSAGE_MAX:
+        errors.append(f"Сообщение: не длиннее {_LEAD_MESSAGE_MAX} символов")
+    else:
+        fields['message'] = message
+
+    if not (phone or email or messenger):
+        errors.append("Оставьте хотя бы один контакт: телефон, e-mail или мессенджер")
+    if phone:
+        if len(phone) > 40 or sum(c.isdigit() for c in phone) < 5:
+            errors.append("Телефон: похоже на опечатку — нужно не меньше 5 цифр")
+        else:
+            fields['phone'] = phone
+    if email:
+        if not _LEAD_EMAIL_RE.match(email) or len(email) > _LEAD_NAME_MAX:
+            errors.append("E-mail: проверьте адрес")
+        else:
+            fields['email'] = email
+    if messenger:
+        fields['messenger'] = messenger
+    return fields, errors
+
+
+@app.route('/api/lead', methods=['POST'])
+def lead_submit():
+    """Заявка с публичной формы: сохраняем в БД, затем отправляем письмо.
+
+    Порядок именно такой: письмо может не уйти (нет SMTP, лимит хоста), но заявка
+    клиента уже не потеряна — её видно в /admin → «Заявки».
+    """
+    data = request.get_json(silent=True) or {}
+    # Honeypot: скрытое поле заполняют только боты — отвечаем «успех», ничего не сохраняем
+    if str(data.get('company', '') or '').strip():
+        logger.warning("🍯 Заявка отклонена: заполнено honeypot-поле")
+        return jsonify({'success': True, 'message': _LEAD_THANKS, 'spam': True})
+
+    if _rate_limited('lead:%s' % (_client_ip() or 'x'), limit=5, window=3600):
+        return jsonify({'error': 'Слишком много заявок с этого адреса. Напишите нам письмом: '
+                                 'mail@ragstone.ru'}), 429
+
+    fields, errors = _lead_validate(data)
+    if errors:
+        return jsonify({'error': '; '.join(errors)}), 400
+
+    source = str(data.get('source', '') or '').strip()[:120]
+    page = str(data.get('page', '') or '').strip()[:200]
+    ua = (request.headers.get('User-Agent') or '')[:300]
+    ok, lead_id = save_lead(fields['name'], fields['message'],
+                            phone=fields.get('phone', ''), email=fields.get('email', ''),
+                            messenger=fields.get('messenger', ''), source=source, page=page,
+                            ip=_client_ip(), user_agent=ua)
+    if not ok:
+        return jsonify({'error': 'Не удалось сохранить заявку. Попробуйте ещё раз или напишите '
+                                 'на mail@ragstone.ru'}), 500
+
+    lead = dict(fields)
+    lead.update({'id': lead_id, 'source': source, 'page': page,
+                 'created_at': datetime.now().strftime('%d.%m.%Y %H:%M')})
+    sent, mail_error = mailer.send_lead_mail(lead)
+    set_lead_mail_result(lead_id, sent, mail_error)
+    if not sent:
+        # Клиенту про письмо не сообщаем: заявка принята и видна админу
+        logger.warning(f"📨 Заявка #{lead_id} сохранена, письмо не ушло: {mail_error}")
+    return jsonify({'success': True, 'message': _LEAD_THANKS, 'lead_id': lead_id, 'mail_sent': bool(sent)})
 
 
 # === Пользовательская документация (/docs) ===
@@ -2009,6 +2113,62 @@ def _scrub_chat_logs(user_id):
 # Модель векторизации из админки НЕ переключается: она прошита в rag_core
 # (_get_embedding_model), её смена требует полной переиндексации всех баз знаний —
 # на странице она показывается справочно.
+# === Админка: почта для заявок с сайта (форма вместо mailto на /prices и лендинге) ===
+# Пароль ящика хранится в app_settings и в браузер не отдаётся: в форме — только
+# признак «задан / не задан», пустое поле = «не менять».
+_MAIL_SETTINGS_KEYS = ("mail_enabled", "mail_smtp_host", "mail_smtp_port",
+                       "mail_smtp_mode", "mail_smtp_user", "mail_from", "mail_to")
+_MAIL_PASSWORD_KEY = "mail_smtp_password"
+
+
+def _admin_mail_view(settings):
+    """Значения блока «Почта» для шаблона админки."""
+    cfg = mailer.mail_settings(settings)
+    return {
+        "values": {key: cfg[key] for key in _MAIL_SETTINGS_KEYS},
+        "password_set": bool(str(cfg[_MAIL_PASSWORD_KEY] or '').strip()),
+        "configured": mailer.is_configured(cfg),
+    }
+
+
+def _admin_mail_updates(data):
+    """Проверка JSON блока «Почта» → (updates, errors). Пустой пароль = не менять."""
+    updates, errors = {}, []
+    host = str(data.get('mail_smtp_host', '') or '').strip()
+    if not host or any(c.isspace() for c in host) or len(host) > 120:
+        errors.append("SMTP-сервер: укажите хост, например smtp.spaceweb.ru")
+    else:
+        updates['mail_smtp_host'] = host
+    try:
+        port = int(str(data.get('mail_smtp_port', '')).strip())
+    except (TypeError, ValueError):
+        port = None
+    if port is None or not 1 <= port <= 65535:
+        errors.append("Порт SMTP: целое число 1–65535")
+    else:
+        updates['mail_smtp_port'] = port
+    for key, label in (('mail_from', 'Отправитель'), ('mail_to', 'Получатель')):
+        value = str(data.get(key, '') or '').strip()
+        if not _LEAD_EMAIL_RE.match(value) or len(value) > 120:
+            errors.append(f"{label}: нужен адрес вида name@domain.ru")
+        else:
+            updates[key] = value
+    updates['mail_smtp_user'] = str(data.get('mail_smtp_user', '') or '').strip()[:120]
+    password = str(data.get('mail_smtp_password', '') or '')
+    if password:
+        if any(c.isspace() for c in password) or len(password) < 4:
+            errors.append("Пароль ящика: похоже на опечатку (пробел или короче 4 символов)")
+        else:
+            updates[_MAIL_PASSWORD_KEY] = password
+    mode = str(data.get('mail_smtp_mode', '') or '').strip().lower()
+    if mode not in ('ssl', 'starttls', 'plain'):
+        errors.append("Шифрование: выберите SSL, STARTTLS или «без шифрования»")
+    else:
+        updates['mail_smtp_mode'] = mode
+    updates['mail_enabled'] = bool(data.get('mail_enabled'))
+    return updates, errors
+
+
 _ADMIN_SECRET_KEYS = ("llm_api_key", "llm_provider_api_key", "llm_openrouter_api_key")
 _ADMIN_SECRET_LABELS = {
     "llm_api_key": "DashScope (он же для OCR)",
@@ -2170,8 +2330,11 @@ def admin():
         for u in users:
             u['kb_folder'] = os.path.join('Database', f"user_{u['id']}")
             u['kb_folder_exists'] = os.path.isdir(u['kb_folder'])
+        settings = get_all_settings()
         return render_template('admin.html', mode='dashboard', users=users,
-                               models=_admin_models_view(get_all_settings()))
+                               models=_admin_models_view(settings),
+                               mail=_admin_mail_view(settings),
+                               leads=list_leads(200), leads_total=count_leads())
     return render_template('admin.html', mode='login')
 
 
@@ -2212,6 +2375,44 @@ def admin_save_settings():
     if secrets:
         message += " (ключи обновлены, значения не показываются)"
     return jsonify({'success': True, 'message': message, 'changed': changed})
+
+
+@app.route('/admin/api/mail-settings', methods=['POST'])
+def admin_save_mail_settings():
+    """Сохранение настроек почты заявок (+ необязательное тестовое письмо)."""
+    if not session.get('admin'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+    data = request.get_json(silent=True) or {}
+    updates, errors = _admin_mail_updates(data)
+    if errors:
+        return jsonify({'error': '; '.join(errors)}), 400
+    if not set_settings(updates):
+        return jsonify({'error': 'Не удалось сохранить настройки в БД'}), 500
+    changed = [key for key in updates if key != _MAIL_PASSWORD_KEY]
+    logger.info("⚙️ Админ изменил настройки почты заявок: " + ", ".join(changed)
+                + (" (+пароль ящика)" if _MAIL_PASSWORD_KEY in updates else ""))
+    if data.get('send_test'):
+        ok, err = mailer.send_test_mail()
+        if ok:
+            return jsonify({'success': True, 'message': 'Настройки почты сохранены · тестовое письмо отправлено'})
+        logger.warning(f"📧 Тестовое письмо не ушло: {err}")
+        return jsonify({'success': True, 'warning': f'Настройки сохранены, но тестовое письмо не ушло: {err}'})
+    return jsonify({'success': True, 'message': 'Настройки почты сохранены'})
+
+
+@app.route('/admin/api/lead-delete', methods=['POST'])
+def admin_delete_lead():
+    """Удаление заявки с сайта (только админ)."""
+    if not session.get('admin'):
+        return jsonify({'error': 'Доступ запрещён'}), 403
+    data = request.get_json(silent=True) or {}
+    lead_id = data.get('lead_id')
+    if (not isinstance(lead_id, int) or isinstance(lead_id, bool) or lead_id <= 0):
+        return jsonify({'error': 'Некорректный запрос'}), 400
+    if not delete_lead(lead_id):
+        return jsonify({'error': 'Заявка не найдена'}), 404
+    logger.info(f"🗑️ Админ удалил заявку с сайта #{lead_id}")
+    return jsonify({'success': True, 'message': f"Заявка #{lead_id} удалена"})
 
 
 @app.route('/admin/api/delete-user', methods=['POST'])

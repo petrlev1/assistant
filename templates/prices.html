@@ -203,6 +203,7 @@
     .sec-h2 { font-size: 26px; }
   }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='lead_form.css') }}">
 </head>
 <body>
 
@@ -295,7 +296,7 @@
           <span class="price-per">разово · установка на вашем сервере</span>
           <span class="price-next">Все функции системы — без подписки за ответы</span>
         </div>
-        <a href="mailto:mail@ragstone.ru?subject=RAGSTONE%20—%20индивидуальная%20установка" class="btn btn-outline">Обсудить установку</a>
+        <button type="button" class="btn btn-outline" data-lead-open data-lead-source="Тарифы → Индивидуальная установка">Обсудить установку</button>
         <div class="list-cap">Всё, что в облаке, плюс:</div>
         <ul class="tight">
           <li>развёртывание на вашем сервере или в вашей сети</li>
@@ -448,7 +449,7 @@
     {% else %}
     <a href="/register" class="btn">🚀 Создать бесплатный аккаунт</a>
     {% endif %}
-    <p class="lead-note">Нужен свой сервер или нестандартная интеграция? Напишите: <a href="mailto:mail@ragstone.ru" style="color:#fff;text-decoration:underline;">mail@ragstone.ru</a></p>
+    <p class="lead-note">Нужен свой сервер или нестандартная интеграция? <button type="button" class="lead-link" style="color:#fff;" data-lead-open data-lead-source="Тарифы → нижний блок">Оставьте заявку</button> — свяжемся и посчитаем стоимость.</p>
   </div>
 </section>
 
@@ -457,7 +458,7 @@
   <div class="container">
     <span>RAGSTONE  — корпоративная RAG-платформа</span>
     <span><a href="/" style="color:#cbd5e1;">Главная</a> · <a href="/prices" style="color:#cbd5e1;">Тарифы</a> · <a href="/docs" style="color:#cbd5e1;">Документация</a></span>
-    <span><a href="mailto:mail@ragstone.ru" style="color:#cbd5e1;">Написать нам</a></span>
+    <span><button type="button" class="lead-link" style="color:#cbd5e1;" data-lead-open data-lead-source="Тарифы → футер">Написать нам</button></span>
   </div>
 </footer>
 
@@ -489,6 +490,10 @@
     });
   })();
 </script>
+
+{% include '_lead_form.html' %}
+
+<script src="{{ url_for('static', filename='lead_form.js') }}"></script>
 
 <script src="https://ragstone.ru/widget.js" data-key="L0D4TrbH4vihGD1fj4P0Qw" data-color="#475ec2" async></script>
 
