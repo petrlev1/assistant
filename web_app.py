@@ -14,7 +14,7 @@ import secrets
 import shutil
 import csv
 from datetime import datetime
-from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows
+from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows, IMAGE_EXTS
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_user_greeting, set_user_greeting, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
@@ -899,8 +899,9 @@ def upload_document():
     if not files:
         return jsonify({'error': 'Файл не выбран'}), 400
 
-    # Проверка расширений
-    allowed_ext = ('.txt', '.pdf', '.docx', '.csv', '.xlsx')
+    # Проверка расширений. Картинки принимаются как обычные файлы: из них при индексации
+    # делается <имя>.txt с распознанным текстом и описанием (rag_core._describe_image).
+    allowed_ext = ('.txt', '.pdf', '.docx', '.csv', '.xlsx') + IMAGE_EXTS
     bad_files = [f.filename for f in files if not f.filename.lower().endswith(allowed_ext)]
     if bad_files:
         return jsonify({'error': f'Неподдерживаемый формат: {", ".join(bad_files)}. Разрешены: {", ".join(allowed_ext)}'}), 400
@@ -2236,9 +2237,11 @@ def _admin_models_view(settings):
     return {
         "values": {k: settings.get(k, "") for k in
                    ("llm_provider", "llm_model", "llm_base_url",
-                    "ocr_model", "ocr_base_url", "ocr_dpi", "search_top_k")},
+                    "ocr_model", "ocr_base_url", "ocr_dpi",
+                    "image_model", "image_max_side", "search_top_k")},
         "flags": {"disable_llm_models": bool(settings.get("disable_llm_models", False)),
-                  "ocr_enabled": bool(settings.get("ocr_enabled", False))},
+                  "ocr_enabled": bool(settings.get("ocr_enabled", False)),
+                  "image_enabled": bool(settings.get("image_enabled", True))},
         "key_states": {k: ("задан" if str(settings.get(k, "") or "").strip() else "не задан")
                        for k in _ADMIN_SECRET_KEYS},
         "key_labels": _ADMIN_SECRET_LABELS,
@@ -2246,6 +2249,7 @@ def _admin_models_view(settings):
         "catalog": model_catalog.PROVIDERS,
         "base_urls": _admin_base_urls(settings),
         "ocr_models": model_catalog.OCR_MODELS,
+        "image_models": model_catalog.IMAGE_MODELS,
         "embedding_model": model_catalog.EMBEDDING_MODEL,
     }
 
@@ -2307,6 +2311,27 @@ def _admin_settings_updates(data, settings=None):
         else:
             updates["search_top_k"] = top_k
     updates["ocr_enabled"] = bool(data.get("ocr_enabled"))
+    # Распознавание изображений: у старых страниц админки этих полей нет — тогда значения
+    # НЕ трогаем (иначе сохранение из старого интерфейса тихо выключило бы распознавание).
+    if "image_model" in data:
+        value = str(data.get("image_model", "") or "").strip()
+        if not value:
+            errors.append("модель распознавания изображений не может быть пустой")
+        elif len(value) > 120 or any(c.isspace() for c in value):
+            errors.append("модель распознавания изображений: недопустимое значение")
+        else:
+            updates["image_model"] = value
+    if "image_enabled" in data:
+        updates["image_enabled"] = bool(data.get("image_enabled"))
+    if "image_max_side" in data:
+        try:
+            max_side = int(str(data.get("image_max_side", "")).strip())
+        except (TypeError, ValueError):
+            max_side = None
+        if max_side is None or not 200 <= max_side <= 4000:
+            errors.append("Сторона изображения: целое число 200–4000 пикселей")
+        else:
+            updates["image_max_side"] = max_side
     updates["disable_llm_models"] = bool(data.get("disable_llm_models"))
     for key in _ADMIN_SECRET_KEYS:
         value = str(data.get(key, "") or "").strip()
