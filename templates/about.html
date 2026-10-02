@@ -10,6 +10,37 @@
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <link rel="shortcut icon" href="/favicon.ico">
 <meta name="description" content="AI-Ассистент — умный чат-бот и база знаний для компании: поиск по документам, справочник цен, интеграции по API, воронки продаж.">
+<!-- canonical ведёт на / : та же страница доступна и по /about, дублировать её в индексе незачем -->
+<link rel="canonical" href="https://ragstone.ru/">
+<meta name="robots" content="index, follow">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RAGSTONE">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:url" content="https://ragstone.ru/">
+<meta property="og:title" content="RAGSTONE — корпоративная система знаний на базе ИИ">
+<meta property="og:description" content="AI-Ассистент — умный чат-бот и база знаний для компании: поиск по документам, справочник цен, интеграции по API, воронки продаж.">
+<meta property="og:image" content="https://ragstone.ru/static/img/hero.webp">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "name": "RAGSTONE",
+      "url": "https://ragstone.ru/",
+      "logo": "https://ragstone.ru/static/img/favicon-32x32.png",
+      "description": "Корпоративная RAG-платформа: умный чат-бот и база знаний по документам компании."
+    },
+    {
+      "@type": "WebSite",
+      "name": "RAGSTONE",
+      "url": "https://ragstone.ru/",
+      "inLanguage": "ru-RU"
+    }
+  ]
+}
+</script>
 <style>
   :root {
     --bg: #f8fafc;
@@ -290,7 +321,7 @@
         <p class="note">Без сложной настройки: загрузите документы — и система начнёт отвечать.</p>
       </div>
       <div class="hero-img">
-        <img src="{{ url_for('static', filename='img/hero.png') }}" alt="AI-Ассистент отвечает на вопросы на основе базы знаний компании">
+        <img src="{{ url_for('static', filename='img/hero.webp') }}" alt="AI-Ассистент отвечает на вопросы на основе базы знаний компании" width="1024" height="576" fetchpriority="high">
       </div>
     </div>
 
@@ -489,7 +520,7 @@
     <p class="sec-sub">Внедрение занимает часы, а не месяцы: система сама индексирует и «понимает» ваши документы.</p>
     <div class="how-inner">
       <div class="how-img">
-        <img src="{{ url_for('static', filename='img/how.png') }}" alt="Документы компании индексируются в базу знаний и превращаются в ответы с источниками" loading="lazy">
+        <img src="{{ url_for('static', filename='img/how.webp') }}" alt="Документы компании индексируются в базу знаний и превращаются в ответы с источниками" width="1024" height="576" loading="lazy" decoding="async">
       </div>
       <div class="steps">
       <div class="step">
@@ -585,6 +616,48 @@
     </div>
   </div>
 </section>
+
+<!-- ================= FAQ ================= -->
+{% set FAQS = [
+  {'q': 'Чем это отличается от обычного чат-бота и от ChatGPT?',
+   'a': 'Ассистент отвечает не «из головы», а по документам вашей компании: находит нужные фрагменты в базе знаний и показывает источник ответа. Поэтому он не выдумывает цены, условия и регламенты, а в вариантах «сервер компании» и «локально» документы вообще не уходят во внешние сервисы.'},
+  {'q': 'Какие документы можно загрузить?',
+   'a': 'PDF, Word, Excel, CSV и TXT — через веб-интерфейс; сканы и картинки распознаются автоматически. Вместо файлов можно указать ссылку на сайт: база знаний соберётся из его страниц или из отдельного раздела.'},
+  {'q': 'Где хранятся наши данные?',
+   'a': 'В облачном варианте — на нашем сервере в России, доступ только у вашей учётной записи. При установке на сервер компании или локально система работает внутри вашего контура: документы, запросы и история диалогов не покидают вашу сеть.'},
+  {'q': 'Нужен ли свой сервер или видеокарта?',
+   'a': 'Для облака — нет: регистрируетесь и загружаете документы. Для варианта «на своём сервере» достаточно обычного сервера или ПК, GPU лишь ускоряет индексацию больших баз.'},
+  {'q': 'Сколько это стоит и как начать?',
+   'a': 'Первый месяц бесплатно со всеми возможностями, карта при регистрации не нужна. Дальше облако — 4 900 ₽ в месяц, оплата помесячная, без годовых обязательств. Индивидуальная установка на вашем сервере — 90 000 ₽ разово, точная смета после короткого обсуждения.'},
+  {'q': 'Сколько времени занимает внедрение?',
+   'a': 'Часы, а не месяцы: загружаете документы или указываете ссылку на сайт — и ассистент отвечает в тот же день. Обновление базы знаний — повторной загрузкой файлов, без участия разработчика.'},
+  {'q': 'Можно ли встроить ассистента в свой сайт или мессенджер?',
+   'a': 'Да. Виджет на сайт ставится одной строкой кода, бот работает в мессенджере MAX, есть интеграция с внешними системами по API и обмен с CRM.'}
+] %}
+<section id="faq">
+  <div class="container">
+    <div class="sec-title">Вопросы</div>
+    <h2 class="sec-h2">Частые вопросы</h2>
+    <p class="sec-sub">Коротко о том, что спрашивают перед стартом. Не нашли ответ — напишите нам, ответим в тот же день.</p>
+    <div class="scenario">
+      {% for f in FAQS %}
+      <div class="card">
+        <h3>{{ f.q }}</h3>
+        <p>{{ f.a }}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {% for f in FAQS %}{"@type": "Question", "name": {{ f.q|tojson }}, "acceptedAnswer": {"@type": "Answer", "text": {{ f.a|tojson }}}}{{ "," if not loop.last }}{% endfor %}
+  ]
+}
+</script>
 
 <!-- ================= CTA ================= -->
 <section class="cta">
