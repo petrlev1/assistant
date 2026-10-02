@@ -9,7 +9,7 @@
 <link rel="icon" href="{{ url_for('static', filename='img/favicon-16x16.png') }}" sizes="16x16" type="image/png">
 <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
 <link rel="shortcut icon" href="/favicon.ico">
-<meta name="description" content="Тарифы RAGSTONE: бесплатный старт, тарифы для команды и бизнеса, лицензия на сервер компании и индивидуальная установка системы под ключ.">
+<meta name="description" content="Тарифы RAGSTONE: первый месяц бесплатно со всеми возможностями, далее 4 900 ₽ в месяц. Индивидуальная установка на вашем сервере — от 90 000 ₽.">
 <style>
   :root {
     --bg: #f8fafc;
@@ -102,18 +102,8 @@
   .sec-head { text-align: center; }
   .sec-head .sec-sub { margin-left: auto; margin-right: auto; }
 
-  /* ===== Billing toggle ===== */
-  .billing { display: flex; justify-content: center; gap: 6px; margin: 34px auto 0; padding: 6px; background: #fff; border: 1px solid var(--line); border-radius: 999px; width: fit-content; box-shadow: var(--shadow); }
-  .bill-btn {
-    background: transparent; border: none; cursor: pointer; font: inherit; font-size: 14.5px; font-weight: 600;
-    color: var(--muted); padding: 9px 20px; border-radius: 999px; transition: background .15s, color .15s;
-  }
-  .bill-btn:hover { color: var(--ink); }
-  .bill-btn.active { background: linear-gradient(135deg, var(--primary), var(--primary-2)); color: #fff; box-shadow: 0 6px 16px rgba(79,70,229,.3); }
-  .bill-btn .save { font-size: 12px; font-weight: 700; opacity: .85; }
-
   /* ===== Plans ===== */
-  .plans { display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; margin-top: 40px; align-items: start; }
+  .plans { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; margin: 42px auto 0; max-width: 940px; align-items: stretch; }
   .plan {
     display: flex; flex-direction: column; height: 100%;
     background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
@@ -126,13 +116,19 @@
     color: var(--primary); background: rgba(79,70,229,.09); border-radius: 999px; padding: 4px 10px; margin-bottom: 12px;
   }
   .plan.featured .tag { color: #fff; background: linear-gradient(135deg, var(--primary), var(--primary-2)); }
-  .plan h3 { font-size: 19px; font-weight: 800; }
+  .plan h3 { font-size: 21px; font-weight: 800; }
   .plan .who { font-size: 13.5px; color: var(--muted); margin-top: 6px; min-height: 40px; }
   .plan .price { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
-  .plan .price-v { display: block; font-size: 27px; font-weight: 800; letter-spacing: -.5px; }
-  .plan .price-per { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; min-height: 34px; }
+  .plan .price-v { display: block; font-size: 30px; font-weight: 800; letter-spacing: -.5px; }
+  .plan .price-per { display: block; font-size: 13px; color: var(--muted); margin-top: 4px; min-height: 34px; }
+  .plan .price-next {
+    display: block; margin-top: 10px; font-size: 13.5px; font-weight: 600; color: var(--ink);
+    background: rgba(79,70,229,.07); border-radius: 10px; padding: 8px 12px;
+  }
   .plan .btn { margin-top: 18px; text-align: center; }
-  .plan ul { list-style: none; margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .plan .list-cap { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; font-weight: 700; letter-spacing: .3px; color: var(--ink); }
+  .plan ul { list-style: none; margin-top: 10px; }
+  .plan ul.tight { margin-top: 0; }
   .plan li { font-size: 13.5px; color: var(--muted); padding: 4px 0 4px 20px; position: relative; }
   .plan li::before { content: "✓"; position: absolute; left: 0; color: var(--ok); font-weight: 700; }
   .plan li b { color: var(--ink); font-weight: 600; }
@@ -146,7 +142,7 @@
 
   /* ===== Comparison table ===== */
   .table-wrap { margin-top: 34px; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; box-shadow: var(--shadow); }
-  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  table { border-collapse: collapse; width: 100%; min-width: 720px; }
   caption { caption-side: top; text-align: left; padding: 0; }
   th, td { padding: 12px 16px; font-size: 13.5px; text-align: center; border-bottom: 1px solid var(--line); }
   thead th { position: sticky; top: 0; background: #fff; font-size: 13px; font-weight: 700; color: var(--ink); vertical-align: bottom; }
@@ -181,11 +177,8 @@
   footer { background: #0f172a; color: #a5b4fc; padding: 28px 0; font-size: 14px; }
   footer .container { display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 
-  @media (max-width: 1100px) {
-    .plans { grid-template-columns: repeat(3, 1fr); }
-  }
   @media (max-width: 900px) {
-    .plans { grid-template-columns: repeat(2, 1fr); }
+    .plans { grid-template-columns: 1fr; gap: 18px; }
     .plan .who, .plan .price-per { min-height: 0; }
   }
   @media (max-width: 820px) {
@@ -208,11 +201,6 @@
     .hero h1 { font-size: 31px; }
     section { padding: 52px 0; }
     .sec-h2 { font-size: 26px; }
-    .billing { width: 100%; flex-direction: column; border-radius: 16px; }
-    .bill-btn { width: 100%; }
-  }
-  @media (max-width: 640px) {
-    .plans { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -252,9 +240,9 @@
 <section class="hero" id="top">
   <div class="container">
     <div class="badge">💰 Прозрачные тарифы · без скрытых платежей</div>
-    <h1>Начните бесплатно — <span class="grad">растите до своей инфраструктуры</span></h1>
-    <p class="sub">Пять вариантов: облако для быстрого старта, тарифы для команды и отдела, лицензия на ваш сервер и индивидуальная установка системы под ключ.</p>
-    <p class="note">Цены в рублях. Оплата за год — дешевле: два месяца в подарок.</p>
+    <h1>Первый месяц — бесплатно, <span class="grad">со всеми возможностями системы</span></h1>
+    <p class="sub">Два варианта: облако за 4 900 ₽ в месяц после бесплатного месяца или индивидуальная установка на вашем сервере — от 90 000 ₽. В обоих случаях доступны все функции системы.</p>
+    <p class="note">Цены в рублях. Карта при регистрации не нужна — бесплатный месяц начинается сразу.</p>
   </div>
 </section>
 
@@ -264,123 +252,61 @@
     <div class="sec-head">
       <div class="sec-title">Тарифы</div>
       <h2 class="sec-h2">Выберите вариант внедрения</h2>
-      <p class="sec-sub">От бесплатного знакомства на одном пользователе до полностью локальной системы на вашем оборудовании с выделенным инженером.</p>
-    </div>
-
-    <div class="billing" role="group" aria-label="Период оплаты">
-      <button type="button" class="bill-btn active" data-period="m">Помесячно</button>
-      <button type="button" class="bill-btn" data-period="y">Оплата за год <span class="save">−17%</span></button>
+      <p class="sec-sub">Начать в облаке в тот же день или развернуть систему на своём оборудовании, чтобы данные не покидали вашу сеть. Функциональность одинаковая — отличается только размещение.</p>
     </div>
 
     <div class="plans">
-      <!-- Старт -->
-      <div class="plan">
-        <div class="tag">Старт</div>
-        <h3>Бесплатно</h3>
-        <p class="who">Познакомиться с системой и проверить её на своих документах — без срока и без карты.</p>
-        <div class="price">
-          <span class="price-v" data-m="0 ₽" data-y="0 ₽">0 ₽</span>
-          <span class="price-per" data-m="навсегда" data-y="навсегда">навсегда</span>
-        </div>
-        <a href="/register" class="btn btn-outline">🚀 Начать бесплатно</a>
-        <ul>
-          <li><b>1 пользователь</b>, 1 база знаний</li>
-          <li>до <b>30 документов</b>, файл до 10 МБ</li>
-          <li><b>200 вопросов</b> в месяц</li>
-          <li>5+ форматов: PDF, DOCX, XLSX, TXT, CSV</li>
-          <li>ответы со ссылками на источники</li>
-          <li>облако на нашем сервере</li>
-          <li>без OCR сканов и виджета на сайт</li>
-        </ul>
-      </div>
-
-      <!-- Команда -->
-      <div class="plan">
-        <div class="tag">Команда</div>
-        <h3>Команда</h3>
-        <p class="who">Небольшой отдел или компания, которой нужна общая база знаний и бот для клиентов.</p>
-        <div class="price">
-          <span class="price-v" data-m="4 900 ₽" data-y="4 083 ₽">4 900 ₽</span>
-          <span class="price-per" data-m="в месяц · облако" data-y="в месяц · 49 000 ₽ в год">в месяц · облако</span>
-        </div>
-        <a href="/register" class="btn btn-outline">Подключить</a>
-        <ul>
-          <li>до <b>5 пользователей</b>, 3 базы знаний</li>
-          <li>до <b>500 документов</b>, файл до 50 МБ</li>
-          <li><b>3 000 вопросов</b> в месяц</li>
-          <li>распознавание сканов (OCR)</li>
-          <li>прайс-листы и таблицы</li>
-          <li>виджет на сайт + Telegram-бот</li>
-          <li>история диалогов 30 дней</li>
-          <li>свой характер ассистента (system prompt)</li>
-        </ul>
-      </div>
-
-      <!-- Бизнес -->
+      <!-- Облако -->
       <div class="plan featured">
-        <div class="tag">Популярный</div>
-        <h3>Бизнес</h3>
-        <p class="who">Компания с несколькими направлениями: продажи, сервис, внутренние регламенты.</p>
+        <div class="tag">Облако</div>
+        <h3>Месяц бесплатно</h3>
+        <p class="who">Познакомиться с системой на своих документах и работать без ограничений по числу пользователей и документов.</p>
         <div class="price">
-          <span class="price-v" data-m="14 900 ₽" data-y="12 417 ₽">14 900 ₽</span>
-          <span class="price-per" data-m="в месяц · облако" data-y="в месяц · 149 000 ₽ в год">в месяц · облако</span>
+          <span class="price-v">0 ₽</span>
+          <span class="price-per">первый месяц · без карты и без срока</span>
+          <span class="price-next">Далее — 4 900 ₽ в месяц</span>
         </div>
-        <a href="/register" class="btn btn-primary">Попробовать 14 дней</a>
-        <ul>
-          <li>до <b>20 пользователей</b>, 10 баз знаний</li>
-          <li>до <b>5 000 документов</b>, файл до 200 МБ</li>
-          <li><b>20 000 вопросов</b> в месяц</li>
-          <li>всё из «Команды», плюс:</li>
-          <li>сайт-импорт: обход сайта в базу знаний</li>
-          <li>справочник цен и подбор товаров</li>
-          <li>аналитика запросов и пробелов в знаниях</li>
-          <li>бот MAX, публичные ссылки на файлы</li>
-          <li>свои ключи LLM · API-интеграции</li>
-          <li>поддержка 8×5, ответ до 8 часов</li>
+        <a href="/register" class="btn btn-primary">🚀 Начать бесплатно</a>
+        <div class="list-cap">Все функции системы:</div>
+        <ul class="tight">
+          <li><b>без ограничений</b> по пользователям, базам знаний и документам</li>
+          <li><b>неограниченные вопросы</b> к ассистенту</li>
+          <li>гибридный поиск и ответы со ссылками на источники</li>
+          <li>PDF, DOCX, XLSX, TXT, CSV, MD, HTML, страницы сайта</li>
+          <li>распознавание сканов (OCR)</li>
+          <li>прайс-листы и таблицы · справочник цен</li>
+          <li>виджет на сайт, Telegram-бот, бот MAX</li>
+          <li>импорт содержимого сайта в базу знаний</li>
+          <li>аналитика запросов и публичные ссылки на файлы</li>
+          <li>свой характер ассистента (system prompt)</li>
+          <li>API-интеграции и свои ключи LLM-провайдера</li>
+          <li>ежедневные копии базы знаний</li>
+          <li>облако на нашем сервере в России</li>
         </ul>
       </div>
 
-      <!-- Корпоративный -->
+      <!-- Индивидуальная установка -->
       <div class="plan">
         <div class="tag">Свой сервер</div>
-        <h3>Корпоративный</h3>
-        <p class="who">Данные не должны уходить наружу: установка на сервер компании, своя или локальная LLM.</p>
+        <h3>Индивидуальная установка</h3>
+        <p class="who">Данные не должны уходить наружу или нужна система под ваши процессы: развёртывание на вашем оборудовании.</p>
         <div class="price">
-          <span class="price-v" data-m="190 000 ₽" data-y="190 000 ₽">190 000 ₽</span>
-          <span class="price-per" data-m="разово · + 39 000 ₽/год поддержка" data-y="разово · + 39 000 ₽/год поддержка">разово · + 39 000 ₽/год поддержка</span>
+          <span class="price-v">от 90 000 ₽</span>
+          <span class="price-per">разово · установка на вашем сервере</span>
+          <span class="price-next">Все функции системы — без подписки за ответы</span>
         </div>
-        <a href="mailto:mail@ragstone.ru?subject=RAGSTONE%20—%20тариф%20Корпоративный" class="btn btn-outline">Обсудить установку</a>
-        <ul>
-          <li><b>без ограничений</b> по пользователям и документам</li>
-          <li>всё из «Бизнеса», плюс:</li>
-          <li>развёртывание на вашем сервере</li>
-          <li>локальная LLM на вашем GPU</li>
-          <li>данные остаются внутри вашей сети</li>
-          <li>интеграция с доменом, своим сайтом, 1С-обменом</li>
-          <li>обучение сотрудников онлайн</li>
-          <li>обновления и поддержка 8×5, SLA</li>
-        </ul>
-      </div>
-
-      <!-- Индивидуально -->
-      <div class="plan">
-        <div class="tag">Под ключ</div>
-        <h3>Индивидуально</h3>
-        <p class="who">Проект с обследованием, интеграциями и доработками под ваши процессы и безопасность.</p>
-        <div class="price">
-          <span class="price-v" data-m="от 490 000 ₽" data-y="от 490 000 ₽">от 490 000 ₽</span>
-          <span class="price-per" data-m="проект · срок от 4 недель" data-y="проект · срок от 4 недель">проект · срок от 4 недель</span>
-        </div>
-        <a href="mailto:mail@ragstone.ru?subject=RAGSTONE%20—%20индивидуальный%20проект" class="btn btn-outline">Обсудить проект</a>
-        <ul>
-          <li>всё из «Корпоративного», плюс:</li>
-          <li>обследование процессов и аудит данных</li>
-          <li>подготовка и очистка базы знаний</li>
-          <li><b>интеграции</b>: CRM, 1С, телефония, портал</li>
-          <li>сценарии и метрики качества ответов</li>
-          <li>дообучение / несколько локальных моделей</li>
-          <li>белый лейбл и ваш домен</li>
-          <li>выделенный инженер, SLA 24/7</li>
+        <a href="mailto:mail@ragstone.ru?subject=RAGSTONE%20—%20индивидуальная%20установка" class="btn btn-outline">Обсудить установку</a>
+        <div class="list-cap">Всё, что в облаке, плюс:</div>
+        <ul class="tight">
+          <li>развёртывание на вашем сервере или в вашей сети</li>
+          <li>локальная LLM на вашем GPU — генерация ответов бесплатна</li>
+          <li>данные не покидают вашу инфраструктуру</li>
+          <li>работа без интернета и внешних провайдеров</li>
+          <li>интеграция с доменом, вашим сайтом, 1С-обменом</li>
+          <li>обучение сотрудников и передача документации</li>
+          <li>резервные копии по вашему регламенту</li>
+          <li>перенос базы знаний из облака без потерь</li>
+          <li>обновления системы и поддержка по SLA</li>
         </ul>
       </div>
     </div>
@@ -411,61 +337,58 @@
     <div class="sec-head">
       <div class="sec-title">Сравнение</div>
       <h2 class="sec-h2">Возможности по тарифам</h2>
-      <p class="sec-sub">Полная детализация: лимиты, функции, каналы, безопасность и поддержка.</p>
+      <p class="sec-sub">Функции одинаковые — различается размещение, поддержка и способ оплаты.</p>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
             <th>Возможность</th>
-            <th>Старт<span class="th-price">0 ₽</span></th>
-            <th>Команда<span class="th-price">4 900 ₽/мес</span></th>
-            <th class="hl">Бизнес<span class="th-price">14 900 ₽/мес</span></th>
-            <th>Корпоративный<span class="th-price">190 000 ₽ разово</span></th>
-            <th>Индивидуально<span class="th-price">от 490 000 ₽</span></th>
+            <th class="hl">Месяц бесплатно<span class="th-price">0 ₽, далее 4 900 ₽/мес · облако</span></th>
+            <th>Индивидуальная установка<span class="th-price">от 90 000 ₽ разово · ваш сервер</span></th>
           </tr>
         </thead>
         <tbody>
-          <tr class="group"><th colspan="6">Лимиты</th></tr>
-          <tr><th>Пользователи</th><td>1</td><td>5</td><td class="hl">20</td><td>без ограничений</td><td>без ограничений</td></tr>
-          <tr><th>Базы знаний</th><td>1</td><td>3</td><td class="hl">10</td><td>без ограничений</td><td>без ограничений</td></tr>
-          <tr><th>Документов</th><td>до 30</td><td>до 500</td><td class="hl">до 5 000</td><td>без ограничений</td><td>без ограничений</td></tr>
-          <tr><th>Вопросов в месяц</th><td>200</td><td>3 000</td><td class="hl">20 000</td><td>без ограничений*</td><td>без ограничений*</td></tr>
-          <tr><th>Размер одного файла</th><td>10 МБ</td><td>50 МБ</td><td class="hl">200 МБ</td><td>по ресурсам сервера</td><td>по ресурсам сервера</td></tr>
+          <tr class="group"><th colspan="3">Лимиты</th></tr>
+          <tr><th>Пользователи</th><td class="hl">без ограничений</td><td>без ограничений</td></tr>
+          <tr><th>Базы знаний</th><td class="hl">без ограничений</td><td>без ограничений</td></tr>
+          <tr><th>Документов</th><td class="hl">без ограничений</td><td>без ограничений</td></tr>
+          <tr><th>Вопросов в месяц</th><td class="hl">без ограничений*</td><td>без ограничений*</td></tr>
+          <tr><th>Размер одного файла</th><td class="hl">до 200 МБ</td><td>по ресурсам сервера</td></tr>
 
-          <tr class="group"><th colspan="6">Возможности</th></tr>
-          <tr><th>Гибридный поиск и ответы со ссылками</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Распознавание сканов (OCR)</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Прайс-листы и таблицы</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>История диалогов и память</th><td>базовая</td><td>30 дней</td><td class="hl">без ограничений</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Импорт содержимого сайта</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Аналитика запросов</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Публичные ссылки на файлы</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Свой характер ассистента</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>API-интеграции</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td>кастомные</td></tr>
+          <tr class="group"><th colspan="3">Возможности</th></tr>
+          <tr><th>Гибридный поиск и ответы со ссылками</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Распознавание сканов (OCR)</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Прайс-листы и справочник цен</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>История диалогов и память</th><td class="hl">без ограничений</td><td class="yes">✓</td></tr>
+          <tr><th>Импорт содержимого сайта</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Аналитика запросов</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Публичные ссылки на файлы</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Свой характер ассистента</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>API-интеграции</th><td class="yes hl">✓</td><td class="yes">✓ · кастомные под ваши системы</td></tr>
 
-          <tr class="group"><th colspan="6">Каналы для пользователей</th></tr>
-          <tr><th>Веб-интерфейс системы</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Виджет на ваш сайт</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Telegram-бот</th><td class="no">—</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Бот MAX</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr class="group"><th colspan="3">Каналы для пользователей</th></tr>
+          <tr><th>Веб-интерфейс системы</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Виджет на ваш сайт</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Telegram-бот</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Бот MAX</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
 
-          <tr class="group"><th colspan="6">Данные и безопасность</th></tr>
-          <tr><th>Изоляция баз знаний пользователей</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Свои ключи LLM-провайдера</th><td class="no">—</td><td class="no">—</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Локальная LLM на вашем GPU</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Данные не покидают вашу сеть</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Копии базы знаний (бэкап)</th><td class="no">—</td><td>ежедневно</td><td class="hl">ежедневно</td><td>по регламенту</td><td>по регламенту</td></tr>
+          <tr class="group"><th colspan="3">Данные и безопасность</th></tr>
+          <tr><th>Изоляция баз знаний пользователей</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Свои ключи LLM-провайдера</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Локальная LLM на вашем GPU</th><td class="no hl">—</td><td class="yes">✓</td></tr>
+          <tr><th>Данные не покидают вашу сеть</th><td class="no hl">—</td><td class="yes">✓</td></tr>
+          <tr><th>Копии базы знаний (бэкап)</th><td class="hl">ежедневно</td><td>по регламенту</td></tr>
 
-          <tr class="group"><th colspan="6">Поддержка</th></tr>
-          <tr><th>Документация и руководства</th><td class="yes">✓</td><td class="yes">✓</td><td class="yes hl">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><th>Поддержка по email</th><td class="no">—</td><td>до 24 ч</td><td class="hl">до 8 ч</td><td>8×5, SLA</td><td>24/7, SLA</td></tr>
-          <tr><th>Обучение сотрудников</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td>онлайн</td><td>на месте</td></tr>
-          <tr><th>Выделенный инженер</th><td class="no">—</td><td class="no">—</td><td class="no hl">—</td><td class="no">—</td><td class="yes">✓</td></tr>
+          <tr class="group"><th colspan="3">Поддержка</th></tr>
+          <tr><th>Документация и руководства</th><td class="yes hl">✓</td><td class="yes">✓</td></tr>
+          <tr><th>Поддержка по email</th><td class="hl">до 24 ч</td><td>по SLA, приоритетно</td></tr>
+          <tr><th>Обучение сотрудников</th><td class="no hl">—</td><td>онлайн</td></tr>
+          <tr><th>Выделенный инженер</th><td class="no hl">—</td><td>по договорённости</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="sec-sub" style="font-size:13.5px;">* На тарифах «Корпоративный» и «Индивидуально» система работает на вашем оборудовании — ограничения по числу запросов определяются ресурсами сервера, а не лицензией.</p>
+    <p class="sec-sub" style="font-size:13.5px;">* «Без ограничений» — без жёстких лимитов в интерфейсе: система опирается на разумное использование. Если объёмы станут сопоставимы с нагрузкой отдельной инсталляции на своём сервере, мы заранее предложим подходящий вариант размещения.</p>
   </div>
 </section>
 
@@ -478,32 +401,36 @@
     </div>
     <div class="faq">
       <details open>
-        <summary>Что можно сделать на бесплатном тарифе?</summary>
-        <p>Зарегистрироваться, загрузить до 30 документов в одну базу знаний и задавать вопросы в чате — 200 вопросов в месяц. Это полноценная система, а не демо-режим: гибридный поиск, ответы со ссылками на источники, 5+ форматов файлов. Ограничения касаются только объёма, числа пользователей и внешних каналов.</p>
+        <summary>Что входит в бесплатный месяц?</summary>
+        <p>Всё, что есть в системе: гибридный поиск и ответы со ссылками на источники, OCR сканов, прайс-листы, виджет на сайт, Telegram-бот и бот MAX, импорт содержимого сайта, аналитика запросов, свой характер ассистента, API-интеграции — без ограничений по пользователям, базам знаний и документам. Карта не нужна, месяц начинается сразу после регистрации.</p>
+      </details>
+      <details>
+        <summary>Что происходит после бесплатного месяца?</summary>
+        <p>Стоимость — 4 900 ₽ в месяц. Оплата помесячная, без годовых обязательств: можно отключить в любой момент, доступ сохранится до конца оплаченного периода. Данные и базы знаний при отключении не теряются.</p>
       </details>
       <details>
         <summary>Где хранятся наши документы?</summary>
-        <p>На облачных тарифах («Старт», «Команда», «Бизнес») система работает на нашем сервере в России, данные изолированы по компаниям и пользователям. Если документы не должны покидать вашу инфраструктуру — выбирайте «Корпоративный» или «Индивидуально»: система разворачивается на вашем сервере, вместе с локальной LLM, и наружу не уходит ни один запрос.</p>
+        <p>На облачном тарифе система работает на нашем сервере в России, данные изолированы по компаниям и пользователям. Если документы не должны покидать вашу инфраструктуру — выбирайте индивидуальную установку: система разворачивается на вашем сервере, вместе с локальной LLM, и наружу не уходит ни один запрос.</p>
       </details>
       <details>
         <summary>Нужен ли свой ключ LLM-провайдера?</summary>
-        <p>На облачных тарифах ключ уже включён в стоимость — платить внешним провайдерам отдельно не нужно. На тарифах со своей установкой вы используете либо собственный ключ, либо локальную модель на GPU сервера: тогда оплата за генерацию ответов вообще отсутствует.</p>
+        <p>Нет: на облачном тарифе ключ уже включён в стоимость — платить внешним провайдерам отдельно не нужно (при желании можно подключить и свой ключ). При установке на вашем сервере используется ваш ключ либо локальная модель на GPU: оплата за генерацию ответов тогда отсутствует.</p>
       </details>
       <details>
-        <summary>Как считаются вопросы и документы?</summary>
-        <p>Документ — это файл в базе знаний (повторная загрузка изменённой версии документа не удваивает счётчик). Вопрос — один запрос к ассистенту: поиск по базе знаний и один ответ. Повторное открытие истории диалогов и скачивание файлов в лимит не входят.</p>
+        <summary>Есть ли ограничения по числу вопросов и документов?</summary>
+        <p>Жёстких лимитов в интерфейсе нет — ни на облачном тарифе, ни при установке на вашем сервере. Мы ориентируемся на разумное использование; если объём станет сопоставим с нагрузкой отдельной инсталляции на своём сервере, предложим подходящий вариант размещения заранее, а не отключим доступ.</p>
       </details>
       <details>
-        <summary>Можно ли перейти на другой тариф?</summary>
-        <p>Да, в любой момент, без потери данных. При переходе на тариф выше лимиты и функции включаются сразу; при переходе на годовой план действует скидка 17% («Команда» — 49 000 ₽/год, «Бизнес» — 149 000 ₽/год).</p>
-      </details>
-      <details>
-        <summary>Что входит в индивидуальный проект?</summary>
-        <p>Обследование ваших процессов, аудит и подготовка базы знаний, развёртывание системы на вашем оборудовании, интеграции (CRM, 1С, телефония, портал), настройка сценариев и метрик качества ответов, обучение команды, выделенный инженер и поддержка 24/7 по SLA. Ориентировочный срок — от 4 недель, стоимость — от 490 000 ₽ в зависимости от объёма интеграций.</p>
+        <summary>Что входит в индивидуальную установку за 90 000 ₽?</summary>
+        <p>Развёртывание системы на вашем сервере или в вашей сети, настройка локальной LLM на вашем GPU (либо вашего ключа провайдера), подключение нужных каналов (виджет, Telegram, MAX), интеграция с вашим доменом и сайтом, передача документации и обучение сотрудников. Итоговая стоимость зависит от объёма интеграций — от 90 000 ₽, точную смету считаем после короткого обсуждения задачи.</p>
       </details>
       <details>
         <summary>Нужен ли отдельный сервер для локальной установки?</summary>
-        <p>Для небольшой компании достаточно рабочей станции или сервера с 16 ГБ оперативной памяти; для десятков одновременных пользователей и локальной LLM рекомендуем GPU (от 8 ГБ видеопамяти). На этапе обследования мы считаем конфигурацию под ваш объём документов и число сотрудников.</p>
+        <p>Для небольшой компании достаточно рабочей станции или сервера с 16 ГБ оперативной памяти; для десятков одновременных пользователей и локальной LLM рекомендуем GPU (от 8 ГБ видеопамяти). На этапе обсуждения мы считаем конфигурацию под ваш объём документов и число сотрудников.</p>
+      </details>
+      <details>
+        <summary>Можно ли перейти с облака на свой сервер (и обратно)?</summary>
+        <p>Да, в любой момент и без потери данных: базы знаний переносятся целиком. Переход на свой сервер включает установку и перенос — это и есть индивидуальная установка от 90 000 ₽; обратный переезд в облако делаем бесплатно.</p>
       </details>
     </div>
     <p class="sec-sub" style="margin-top:22px;font-size:13.5px;">Цены указаны в рублях без НДС и не являются публичной офертой. Для государственных и крупных корпоративных заказчиков — договор, счёт и закрывающие документы.</p>
@@ -514,8 +441,8 @@
 <section class="cta">
   <div class="container">
     <div class="sec-title" style="color:#c7d2fe;">Готовы начать?</div>
-    <h2 class="sec-h2">Бесплатный тариф — прямо сейчас</h2>
-    <p>Зарегистрируйтесь, загрузите документы и получите первые ответы по своей базе знаний сегодня.</p>
+    <h2 class="sec-h2">Первый месяц бесплатно — прямо сейчас</h2>
+    <p>Зарегистрируйтесь, загрузите документы и получите первые ответы по своей базе знаний сегодня. Дальше — 4 900 ₽ в месяц.</p>
     {% if logged_in %}
     <a href="/chat" class="btn">💬 Открыть чат</a>
     {% else %}
@@ -560,26 +487,6 @@
     window.addEventListener('resize', function () {
       if (window.innerWidth > 820) setOpen(false);
     });
-  })();
-
-  // Переключатель периода оплаты: значения берутся из data-m / data-y
-  (function () {
-    var buttons = document.querySelectorAll('.bill-btn');
-    if (!buttons.length) return;
-    function apply(period) {
-      var i, el, nodes = document.querySelectorAll('.price-v, .price-per');
-      for (i = 0; i < nodes.length; i++) {
-        el = nodes[i];
-        var v = el.getAttribute(period === 'y' ? 'data-y' : 'data-m');
-        if (v !== null) el.textContent = v;
-      }
-      for (i = 0; i < buttons.length; i++) {
-        buttons[i].classList.toggle('active', buttons[i].getAttribute('data-period') === period);
-      }
-    }
-    for (var i = 0; i < buttons.length; i++) {
-      buttons[i].addEventListener('click', function () { apply(this.getAttribute('data-period')); });
-    }
   })();
 </script>
 
