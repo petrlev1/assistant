@@ -121,7 +121,8 @@ os.makedirs(RUN_DIR, exist_ok=True)
 
 # Маппинг провайдеров LLM и список OCR-моделей — общий каталог model_catalog.py:
 # им же пользуется веб-админка, чтобы списки в CLI и на странице /admin не разъезжались.
-from model_catalog import PROVIDERS as _PROVIDERS_FALLBACK, OCR_MODELS as _OCR_MODELS
+from model_catalog import (PROVIDERS as _PROVIDERS_FALLBACK, OCR_MODELS as _OCR_MODELS,
+                           IMAGE_MODELS as _IMAGE_MODELS)
 
 # Ключи, значения которых маскируются в выводе (секреты)
 _SECRET_KEYS = ("llm_api_key", "llm_provider_api_key", "llm_openrouter_api_key",
@@ -153,6 +154,9 @@ _DEFAULTS = {
     "ocr_model": "qwen-vl-ocr",
     "ocr_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "ocr_dpi": 150,
+    "image_enabled": True,          # распознавание картинок (текст + описание) — как в rag_core
+    "image_model": "qwen-vl-plus",
+    "image_max_side": 1600,
     "caddy_path": (r"C:\Users\Petrlev\AppData\Local\Microsoft\WinGet\Packages"
                    r"\CaddyServer.Caddy_Microsoft.Winget.Source_8wekyb3d8bbwe\caddy.exe"
                    if os.name == "nt" else "/usr/bin/caddy"),
@@ -169,6 +173,7 @@ SETTINGS_GROUPS = [
     ("API (LLM)", ["llm_provider", "llm_model", "llm_base_url", "llm_api_key",
                    "llm_provider_api_key", "llm_openrouter_api_key"]),
     ("OCR", ["ocr_enabled", "ocr_model", "ocr_base_url", "ocr_dpi"]),
+    ("Изображения", ["image_enabled", "image_model", "image_max_side"]),
     ("Telegram", ["telegram_bot_token"]),
     ("Caddy", ["caddy_path", "caddy_dir"]),
 ]
@@ -198,6 +203,9 @@ _KEY_HINTS = {
     "llm_openrouter_api_key": "ключ провайдера OpenRouter",
     "llm_local_api_key": "ключ локального сервера модели (--api-key llama-server), если он открыт наружу",
     "ocr_model": "qwen-vl-ocr | qwen-vl-plus | qwen-vl-max",
+    "image_enabled": "true/false — распознавать загруженные картинки (текст с картинки + описание)",
+    "image_model": "qwen-vl-plus | qwen-vl-max | qwen3-vl-plus",
+    "image_max_side": "целое число от 200 до 4000: до какой стороны ужимать картинку перед отправкой",
     "ocr_base_url": "URL OCR API (DashScope)",
     "telegram_bot_token": "токен от @BotFather",
     "caddy_path": "путь к исполняемому файлу caddy.exe",
@@ -213,7 +221,7 @@ _WEB_MODES = [
 
 # Булевы настройки (в меню выбираются стрелками true/false)
 _BOOL_KEYS = ("disable_llm_models", "disable_hybrid_search", "disable_knowledge_base_search", "ocr_enabled",
-              "chat_memory_enabled", "chat_memory_external")
+              "image_enabled", "chat_memory_enabled", "chat_memory_external")
 
 # Код, который исполняется в отдельном процессе Telegram-бота (токен читается из БД,
 # чтобы не передавать секрет через аргументы командной строки)
@@ -293,7 +301,7 @@ def validate_setting(key, value):
     """Валидация значения настройки (зеркало validate_and_apply_settings GUI-лаунчера).
     Возвращает (нормализованное_значение, предупреждение_или_None).
     При неверном типе/диапазоне возвращает (None, ошибка) — значение не сохраняется."""
-    if key in ("search_top_k", "max_context_fragments", "ocr_dpi",
+    if key in ("search_top_k", "max_context_fragments", "ocr_dpi", "image_max_side",
                "chat_memory_max_messages", "chat_memory_max_chars",
                "chat_memory_ttl_minutes", "chat_memory_context_questions"):
         try:
@@ -306,6 +314,8 @@ def validate_setting(key, value):
             return None, "максимум фрагментов должен быть от 10 до 500"
         if key == "ocr_dpi" and not (50 <= v <= 600):
             return None, "OCR DPI должен быть от 50 до 600"
+        if key == "image_max_side" and not (200 <= v <= 4000):
+            return None, "сторона изображения должна быть от 200 до 4000 пикселей"
         if key == "chat_memory_max_messages" and not (2 <= v <= 80):
             return None, "память диалога: число сообщений должно быть от 2 до 80"
         if key == "chat_memory_max_chars" and not (500 <= v <= 20000):
@@ -344,6 +354,14 @@ def validate_setting(key, value):
             return None, "OCR-модель не может быть пустой"
         if v not in _OCR_MODELS:
             print(f"  ⚠️ Нестандартная OCR-модель: {v} (обычно: {', '.join(_OCR_MODELS)})")
+        return v, None
+    if key == "image_model":
+        v = str(value).strip()
+        if not v:
+            return None, "модель распознавания изображений не может быть пустой"
+        if v not in _IMAGE_MODELS:
+            print(f"  ⚠️ Нестандартная модель распознавания изображений: {v} "
+                  f"(обычно: {', '.join(_IMAGE_MODELS)})")
         return v, None
     if key in ("llm_base_url", "llm_api_key", "llm_provider_api_key", "llm_openrouter_api_key",
                "telegram_bot_token", "ocr_base_url", "caddy_path", "caddy_dir"):
@@ -1580,6 +1598,12 @@ def _pick_value(key):
         if current and current not in models:
             models.insert(0, current)
         return _select(models, "OCR-модель:")
+    if key == "image_model":
+        models = list(_IMAGE_MODELS)
+        current = settings.get("image_model")
+        if current and current not in models:
+            models.insert(0, current)
+        return _select(models, "Модель распознавания изображений:")
     if key in _BOOL_KEYS:
         current = bool(settings.get(key, False))
         picked = _select(["true", "false"], f"{key}:", selected=0 if current else 1)
