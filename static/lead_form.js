@@ -77,6 +77,7 @@
         form.hidden = true;
         done.hidden = false;
         status.textContent = '';
+        if (window.ragstoneGoal) { window.ragstoneGoal('lead'); }
       } else {
         err((res.data && res.data.error) || 'Не удалось отправить заявку. Попробуйте позже.');
       }

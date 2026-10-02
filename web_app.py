@@ -351,7 +351,8 @@ def register():
     success, message = register_user(username, password)
     if success:
         flash('Регистрация успешна! Теперь вы можете войти.', 'success')
-        return redirect(url_for('login'))
+        # Метка нужна, чтобы посчитать цель в Метрике; страница входа её из адреса убирает.
+        return redirect(url_for('login', registered=1))
     else:
         flash(message, 'error')
         return render_template('register.html')

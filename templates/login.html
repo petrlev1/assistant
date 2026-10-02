@@ -144,5 +144,15 @@
         </div>
         <div style="text-align: center; margin-top: 30px;"><a href="{{ url_for('index') }}" class="btn btn-primary" style="margin-right:8px;">О системе</a></div>
     </div>
+{% include '_metrika.html' %}
+{% if request.args.get('registered') %}
+<script>
+  (function () {
+    if (window.ragstoneGoal) { window.ragstoneGoal('register'); }
+    /* Убираем метку из адреса: перезагрузка страницы не должна считать цель второй раз. */
+    if (window.history && history.replaceState) { history.replaceState(null, '', '/login'); }
+  })();
+</script>
+{% endif %}
 </body>
 </html>
