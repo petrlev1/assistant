@@ -121,15 +121,24 @@
         return div;
     }
     var lastId = 0;
+    // Опрос ленты идёт с after_id=lastId, поэтому lastId — это «докуда уже показано».
+    // Отметку ставят и отрисовка истории (renderMsg), и ответ на вопрос гостя (advanceLast
+    // по last_id от сервера): без этого опрос возвращал уже нарисованные реплики — дубль.
+    function advanceLast(id) {
+        var n = Number(id) || 0;
+        if (n > lastId) lastId = n;
+    }
     function subline(text) {
         var el = document.querySelector('.hd .ttl span');
         if (el) el.textContent = text;
     }
     function renderMsg(m) {
+        // Идемпотентно: то, что уже показано (в т.ч. нарисованное локально), не повторяем
+        if (m.id && Number(m.id) <= lastId) return;
         if (m.role === 'user') add(m.message, 'user');
         else if (m.role === 'operator') add(m.message, 'op', 'op', 'Менеджер');
         else add(m.message, 'bot');
-        if (m.id && Number(m.id) > lastId) lastId = Number(m.id);
+        advanceLast(m.id);
     }
     function loading(on) {
         send.disabled = on; q.disabled = on; dots.style.display = on ? 'flex' : 'none';
@@ -185,6 +194,8 @@
         loading(true);
         api('/api/widget/ask', pack({ question: text })).then(function (d) {
             loading(false);
+            // Вопрос и ответ уже нарисованы; сервер сказал, до какого id лента показана
+            advanceLast(d.last_id);
             if (d.human) {
                 subline('Отвечает менеджер');
                 add(d.answer, null, 'sys');

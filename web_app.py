@@ -2503,8 +2503,15 @@ _WIDGET_SOURCES_RE = re.compile(r'\n*Источники:.*$', re.S)
 _WIDGET_HEX_RE = re.compile(r'#[0-9a-fA-F]{6}')
 
 
+def _saved(msg_id, saved_ids):
+    """Запомнить id сохранённой реплики (см. saved_ids в _visitor_answer)."""
+    if saved_ids is not None and msg_id:
+        saved_ids.append(int(msg_id))
+    return msg_id
+
+
 def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_sources=True,
-                    still_wanted=None):
+                    still_wanted=None, saved_ids=None):
     """Единый путь ответа внешнему собеседнику: виджет на сайте и чат-бот в MAX.
 
     Диалог изолирован по device_id=scope — у каждого собеседника своя лента,
@@ -2512,12 +2519,14 @@ def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_s
     still_wanted — необязательная проверка после генерации: пока модель думала,
     диалог могли забрать на себя, и тогда опоздавший ответ бота не сохраняется
     и не отдаётся собеседнику (иначе бот говорит поверх менеджера).
+    saved_ids — необязательный список: в него складываются id сохранённых реплик
+    (виджету нужно знать, до какого id лента уже показана гостю).
     Возвращает (answer, err): при ошибке answer=None, err — текст для собеседника.
     """
     try:
         user_rag = get_user_rag(user_id)
         provider, model = _rag_provider_model(user_rag)
-        save_message(user_id, 'user', question, device_id=scope)
+        _saved(save_message(user_id, 'user', question, device_id=scope), saved_ids)
         chat_logger.log_message(label, user_id, question, is_bot=False,
                                 provider=provider, model=model)
         history = _chat_context(user_id, scope, external=True)
@@ -2533,7 +2542,7 @@ def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_s
             answer = _WIDGET_SOURCES_RE.sub('', answer or '').strip()
         if not answer:
             answer = 'Не нашёл ответа в базе знаний. Попробуйте переформулировать вопрос.'
-        save_message(user_id, 'assistant', answer, device_id=scope)
+        _saved(save_message(user_id, 'assistant', answer, device_id=scope), saved_ids)
         chat_logger.log_message(bot_label, user_id, answer, is_bot=True,
                                 provider=provider, model=model)
         # Аналитика общая с владельцем: он видит, что спрашивают собеседники, и пробелы в базе
@@ -2669,21 +2678,34 @@ def _widget_manual(w, visitor):
     return True
 
 
-def _external_guest_waiting(user_id, scope, question, label):
+def _external_guest_waiting(user_id, scope, question, label, saved_ids=None):
     """Вопрос собеседника в ручном режиме: в ленту диалога, «непрочитано» и аналитика.
 
     Модель не вызывается и дневные лимиты не тратятся, но вопрос не теряется:
     владелец видит его в панели, аналитика запросов остаётся полной.
     """
-    add_dialog_message(user_id, scope, 'user', question, unread_delta=1)
+    _saved((add_dialog_message(user_id, scope, 'user', question, unread_delta=1) or {}).get('id'),
+           saved_ids)
     chat_logger.log_message(label, user_id, question, is_bot=False)
     save_query_analytics(user_id, question, '')
 
 
-def _widget_guest_waiting(w, visitor, question):
+def _widget_guest_waiting(w, visitor, question, saved_ids=None):
     """Вопрос гостя виджета в ручном режиме."""
     _external_guest_waiting(w['user_id'], _widget_scope(w, visitor), question,
-                            "Виджет «%s»" % w.get('name', ''))
+                            "Виджет «%s»" % w.get('name', ''), saved_ids=saved_ids)
+
+
+def _widget_ask_reply(payload, saved_ids):
+    """Ответ гостю виджета + id последней записанной реплики.
+
+    last_id — докуда лента уже показана гостю. Клиент рисует свой вопрос и ответ
+    сразу, и опрос (`after_id`) без этой отметки вернул бы те же реплики второй
+    раз: каждая пара «вопрос-ответ» дублировалась в ленте виджета.
+    """
+    ids = [int(i) for i in (saved_ids or []) if i]
+    payload['last_id'] = max(ids) if ids else 0
+    return jsonify(payload)
 
 
 @app.route('/api/widget/ask', methods=['POST'])
@@ -2699,24 +2721,26 @@ def widget_ask():
     # 10 сообщений/мин на посетителя + дневной лимит на виджет (за каждым — платный LLM-вызов)
     if _rate_limited('wg:%s:%s' % (w['key'], visitor), limit=10, window=60):
         return jsonify({'error': 'Слишком много сообщений. Подождите минуту.'}), 429
+    saved = []                     # id реплик этой просьбы — уходят гостю как last_id
     # Диалог ведёт человек: модель не зовём, дневной лимит не тратим
     if _widget_manual(w, visitor):
-        _widget_guest_waiting(w, visitor, question)
-        return jsonify({'answer': _MANUAL_WAIT, 'human': True})
+        _widget_guest_waiting(w, visitor, question, saved)
+        return _widget_ask_reply({'answer': _MANUAL_WAIT, 'human': True}, saved)
     if not widget_consume(w['id']):
-        return jsonify({'answer': 'К сожалению, дневной лимит вопросов ассистенту исчерпан. Попробуйте завтра.'})
+        return _widget_ask_reply({'answer': 'К сожалению, дневной лимит вопросов ассистенту исчерпан. Попробуйте завтра.'}, saved)
     if not rag_ready:
-        return jsonify({'answer': 'Ассистент ещё просыпается. Попробуйте через минуту...'})
+        return _widget_ask_reply({'answer': 'Ассистент ещё просыпается. Попробуйте через минуту...'}, saved)
     answer, err_msg = _visitor_answer(w['user_id'], question, _widget_scope(w, visitor),
                                       "Виджет «%s»" % w['name'], bot_label='Бот (виджет)',
-                                      still_wanted=lambda: not _widget_manual(w, visitor))
+                                      still_wanted=lambda: not _widget_manual(w, visitor),
+                                      saved_ids=saved)
     if err_msg:
         logger.error(f"Виджет «{w['name']}»: {err_msg}")
-        return jsonify({'error': err_msg}), 500
+        return _widget_ask_reply({'error': err_msg}, saved), 500
     if answer is None:
         # Диалог перехватили, пока модель думала — ответ бота не отдаём
-        return jsonify({'answer': _MANUAL_WAIT, 'human': True})
-    return jsonify({'answer': answer})
+        return _widget_ask_reply({'answer': _MANUAL_WAIT, 'human': True}, saved)
+    return _widget_ask_reply({'answer': answer}, saved)
 
 
 @app.route('/api/widget/new', methods=['POST'])
