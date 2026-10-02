@@ -89,6 +89,8 @@ class SiteRouteCase(unittest.TestCase):
             stub = types.ModuleType('rag_core')
             stub.DEFAULT_BASE_PROMPT = 'тестовый промт'
             stub.QA_CORRECTION_FILE = 'newdatabase.csv'
+            # web_app импортирует IMAGE_EXTS из rag_core (картинки в базе знаний)
+            stub.IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif')
             for name in ('get_rag_system', 'get_user_rag', 'drop_user_rag', 'RAGSettings',
                          'build_greeting', 'parse_price_list', 'detect_doc_group',
                          '_read_text_preview', 'parse_qa_pairs_file', '_iter_csv_rows'):

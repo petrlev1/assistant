@@ -23,6 +23,8 @@ PROJECT = Path(__file__).resolve().parent.parent
 if 'rag_core' not in sys.modules:
     stub = types.ModuleType('rag_core')
     stub.DEFAULT_BASE_PROMPT = 'тестовый промт'
+    # web_app импортирует IMAGE_EXTS из rag_core (картинки в базе знаний)
+    stub.IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif')
     stub.QA_CORRECTION_FILE = 'newdatabase.csv'
     for name in ('get_rag_system', 'get_user_rag', 'drop_user_rag', 'RAGSettings',
                  'build_greeting', 'parse_price_list', 'detect_doc_group',
