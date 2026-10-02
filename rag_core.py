@@ -18,7 +18,9 @@ import requests
 import re
 import base64
 import io
+import mimetypes
 import threading
+from datetime import datetime
 
 import model_catalog
 
@@ -257,6 +259,10 @@ def detect_doc_group(filename='', preview_text='', is_price_list=False):
     Возвращает название группы с эмодзи (напр. '📖 Инструкции') или '📁 Прочие документы'."""
     if is_price_list:
         return '💲 Прайс-листы'
+    # Изображения — сразу своей группой: иначе картинка «Габариты бака.png» уехала бы
+    # в «📊 Характеристики» по имени, а её описание — в «📝 Описания» по содержимому.
+    if os.path.splitext(filename or '')[1].lower() in IMAGE_EXTS:
+        return '🖼 Изображения'
     haystack = f"{filename or ''} {preview_text or ''}".lower()
     for pattern, group in _DOC_GROUP_PATTERNS:
         if re.search(pattern, haystack):
@@ -327,6 +333,24 @@ def _context_search_query(history, question, max_questions=2):
     return joined or None
 
 
+# Изображения (.jpg/.png/…) сами в эмбеддинги не идут: рядом с картинкой создаётся
+# <имя>.txt с распознанным текстом и описанием изображения, и в базу знаний попадает
+# именно он (приоритет TXT — см. _apply_txt_priority).
+IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif')
+# Промпт распознавания изображения. Формат ответа задан маркерами ТЕКСТ:/ОПИСАНИЕ: —
+# ответ разбирается на построчный текст с картинки и описание (см. _split_image_answer).
+DEFAULT_IMAGE_PROMPT = (
+    "Ты — обработчик изображений для базы знаний компании.\n"
+    "Ответь строго в таком формате, без вступлений и пояснений:\n"
+    "ТЕКСТ:\n"
+    "<весь текст с изображения дословно, таблицы и списки — построчно, сохраняя порядок; "
+    "если текста нет — напиши: нет>\n"
+    "ОПИСАНИЕ:\n"
+    "<одна-две строки: что изображено (изделие, оборудование, схема, чертёж, фото, скриншот), "
+    "ключевые элементы, подписи, марки, артикулы, размеры, даты>"
+)
+
+
 class RAGSettings:
     """Класс для управления настройками RAG-системы.
     Настройки хранятся в PostgreSQL (таблица app_settings). Файл rag_settings.json
@@ -361,7 +385,13 @@ class RAGSettings:
             "ocr_enabled": False,
             "ocr_model": "qwen-vl-ocr",
             "ocr_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-            "ocr_dpi": 150
+            "ocr_dpi": 150,
+            # Распознавание изображений: текст с картинки + описание того, что изображено.
+            # Результат — <имя>.txt рядом с картинкой (кэш — по хэшу файла и модели).
+            "image_enabled": True,
+            "image_model": "qwen-vl-plus",
+            "image_max_side": 1600,          # картинка ужимается до этой стороны перед отправкой
+            "image_prompt": DEFAULT_IMAGE_PROMPT
         }
         self.settings = self.load_settings()
     
@@ -905,6 +935,179 @@ class RAGCore:
             logger.error(f"❌ Ошибка OCR страницы {page_num+1} ({base_name}): {e}")
             return None
 
+    def _get_image_cache_path(self, file_path):
+        """Путь к кэшу распознавания изображения (по хэшу картинки и модели).
+
+        Каталог разбит ПО МОДЕЛИ, как и OCR-кэш страниц: описание от qwen-vl-plus нельзя
+        отдавать как результат другой модели — после смены image_model картинки
+        распознаются заново, а старый кэш остаётся на месте.
+        """
+        if self.current_user_id is not None:
+            cache_dir = Path("embeddings_cache") / f"user_{self.current_user_id}" / "image_cache"
+        else:
+            cache_dir = Path("embeddings_cache") / "image_cache"
+        file_hash = hashlib.md5(open(file_path, 'rb').read()).hexdigest()[:12]
+        model_slug = self._ocr_model_slug(self.settings.get("image_model", "qwen-vl-plus"))
+        cache_dir = cache_dir / file_hash / model_slug
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir / "description.txt"
+
+    @staticmethod
+    def _image_data_url(file_path, max_side):
+        """Изображение → data:URL для мультимодального API.
+
+        Pillow (если установлен) разворачивает картинку по EXIF и ужимает её до max_side
+        по большей стороне: фото с телефона 4000 px иначе уходит в API целиком — это
+        дороже и медленнее без выигрыша в распознавании. Без Pillow файл уходит как есть,
+        формат берётся из расширения.
+        """
+        raw = open(file_path, 'rb').read()
+        mime = mimetypes.guess_type(file_path)[0] or 'image/jpeg'
+        try:
+            from PIL import Image, ImageOps
+            img = Image.open(io.BytesIO(raw))
+            img = ImageOps.exif_transpose(img)      # поворот из EXIF (фото с телефона)
+            if max_side and max(img.size) > max_side:
+                img.thumbnail((max_side, max_side))
+            if img.mode not in ('RGB', 'L'):
+                img = img.convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=90)
+            raw = buf.getvalue()
+            mime = 'image/jpeg'
+        except ImportError:
+            logger.info("ℹ️ Pillow не установлен — изображение уходит в API без ужатия "
+                        "(pip install Pillow)")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось подготовить изображение "
+                           f"{os.path.basename(file_path)}: {e} — отправляю как есть")
+        return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+
+    def _describe_image(self, file_path):
+        """Текст с картинки + описание того, что изображено (DashScope, мультимодальная модель).
+
+        Возвращает ответ модели (он же — содержимое <имя>.txt) или None, если распознавание
+        выключено, нет ключа DashScope или API не ответил. Тот же ключ, что у OCR (llm_api_key).
+        """
+        base_name = os.path.basename(file_path)
+        if not bool(self.settings.get("image_enabled", True)):
+            logger.info(f"⚠️ Распознавание изображений выключено — {base_name} пропущен")
+            return None
+        api_key = self.settings.get("llm_api_key", "")
+        if not api_key:
+            logger.info(f"⚠️ Нет ключа DashScope (llm_api_key) — изображение {base_name} пропущено")
+            return None
+
+        model = self.settings.get("image_model", "qwen-vl-plus")
+        base_url = (self.settings.get("image_base_url")
+                    or self.settings.get("ocr_base_url",
+                                         "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"))
+        try:
+            max_side = int(self.settings.get("image_max_side", 1600) or 0)
+        except (TypeError, ValueError):
+            max_side = 1600
+        prompt = self.settings.get("image_prompt") or DEFAULT_IMAGE_PROMPT
+
+        # Кэш: ту же картинку не распознаём повторно (переиндексация, повторная загрузка)
+        cache_path = self._get_image_cache_path(file_path)
+        if cache_path.exists():
+            cached = cache_path.read_text(encoding='utf-8')
+            if cached.strip():
+                logger.info(f"💾 Распознавание изображения из кэша: {base_name}")
+                return cached
+
+        try:
+            data_url = self._image_data_url(file_path, max_side)
+            logger.info(f"🖼 Распознаю изображение {base_name} через {model}...")
+            resp = requests.post(
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }],
+                },
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                timeout=180,
+            )
+            if resp.status_code != 200:
+                logger.error(f"❌ Ошибка распознавания изображения ({resp.status_code}): {resp.text[:200]}")
+                return None
+            choices = (resp.json() or {}).get("choices") or []
+            if not choices:
+                logger.error(f"❌ Распознавание изображения: ответ без choices "
+                             f"(HTTP {resp.status_code}): {resp.text[:200]}")
+                return None
+            answer = (choices[0].get("message") or {}).get("content")
+            if isinstance(answer, list):    # часть моделей отдаёт content списком частей
+                answer = "\n".join(p.get("text", "") for p in answer if isinstance(p, dict))
+            answer = (answer or "").strip()
+            if not answer:
+                # Пустой ответ (картинка без деталей или модель промолчала) — маркер в кэше,
+                # чтобы не тратить API-вызовы на каждой переиндексации.
+                logger.info(f"ℹ️ Модель не вернула описание для {base_name} — повторно не запрашиваем")
+                cache_path.write_text("", encoding='utf-8')
+                return None
+            cache_path.write_text(answer, encoding='utf-8')
+            return answer
+        except Exception as e:
+            logger.error(f"❌ Ошибка распознавания изображения {base_name}: {e}")
+            return None
+
+    @staticmethod
+    def _split_image_answer(answer):
+        """Ответ модели → (строки текста с картинки, описание одной строкой).
+
+        Формат задан промптом (маркеры ТЕКСТ:/ОПИСАНИЕ:), но модель может его нарушить —
+        тогда весь ответ считаем описанием, а не теряем данные совсем.
+        """
+        raw = (answer or '').replace('\r\n', '\n').strip()
+        text_match = re.search(r'(?ims)^\s*(?:ТЕКСТ|TEXT)\s*:\s*(.*?)'
+                               r'(?=^\s*(?:ОПИСАНИЕ|DESCRIPTION)\s*:|\Z)', raw)
+        desc_match = re.search(r'(?ims)^\s*(?:ОПИСАНИЕ|DESCRIPTION)\s*:\s*(.*)\Z', raw)
+        if text_match:
+            text_block = text_match.group(1)
+            desc_block = desc_match.group(1) if desc_match else ''
+        else:
+            text_block = ''
+            desc_block = desc_match.group(1) if desc_match else raw
+
+        text_lines = []
+        for line in (text_block or '').split('\n'):
+            line = " ".join(line.split()).strip()
+            if line and line.lower().rstrip('.').strip() not in ('нет', 'none', '-', '—'):
+                text_lines.append(line)
+        description = " ".join((desc_block or '').split())
+        if len(description) > 1500:      # одно описание = один факт, без простыней
+            description = description[:1500].rstrip() + '…'
+        return text_lines, description
+
+    def _image_description_text(self, file_path, answer, model):
+        """Содержимое <имя>.txt: шапка-комментарий + описание + текст с картинки.
+
+        Строки с '#' в индекс не идут (их отсекает загрузчик .txt) — это разметка для
+        человека; фактами становятся описание и построчный текст с изображения.
+        """
+        name = os.path.basename(file_path)
+        text_lines, description = self._split_image_answer(answer)
+        lines = [
+            "# Описание изображения — создано автоматически (RAGSTONE)",
+            f"# Файл: {name}",
+            f"# Модель: {model} · {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "",
+        ]
+        if description:
+            lines.append(f"На изображении {name} изображено: {description}")
+        if text_lines:
+            lines.append("")
+            lines.append("# Текст на изображении (распознан дословно):")
+            lines.extend(text_lines)
+        return "\n".join(lines) + "\n"
+
     def _page_fragments(self, paragraphs):
         """Отбор фрагментов страницы из сырых блоков текста.
 
@@ -1018,6 +1221,34 @@ class RAGCore:
                     else:
                         logger.warning(f"⚠️ Файл {os.path.basename(file_path)} пуст")
                         
+            elif file_path.lower().endswith(IMAGE_EXTS):
+                # Изображение: распознаём текст и описание → рядом появляется <имя>.txt.
+                # Распознавание идёт один раз (кэш по хэшу файла и модели); со следующей
+                # индексации картинка сюда вообще не доходит — _apply_txt_priority
+                # пропускает не-txt файл, если рядом лежит одноимённый .txt.
+                txt_path = os.path.splitext(file_path)[0] + ".txt"
+                if os.path.exists(txt_path):
+                    logger.info(f"⏭️ {os.path.basename(file_path)}: описание уже есть "
+                                f"({os.path.basename(txt_path)})")
+                else:
+                    answer = self._describe_image(file_path)
+                    if answer:
+                        content = self._image_description_text(
+                            file_path, answer, self.settings.get("image_model", "qwen-vl-plus"))
+                        knowledge_lines = [line.strip() for line in content.split('\n')
+                                           if line.strip() and not line.lstrip().startswith('#')]
+                        try:
+                            with open(txt_path, "w", encoding="utf-8") as f:
+                                f.write(content)
+                            logger.info(f"🖼 Описание изображения создано: "
+                                        f"{os.path.basename(txt_path)} (фактов: {len(knowledge_lines)})")
+                        except Exception as e:
+                            # Запись не удалась — знания всё равно отдаём в индекс, чтобы
+                            # картинка не осталась невидимой до следующего прогона.
+                            logger.error(f"❌ Не удалось записать описание {txt_path}: {e}")
+                        if knowledge_lines:
+                            all_knowledge[txt_path] = knowledge_lines
+
             elif file_path.lower().endswith(".csv"):
                 # Автодетект разделителя (';' — выгрузки 1С/CRM) и кодировки (utf-8/cp1251).
                 # Без этого ';'-файлы читаются как один столбец, а лишние поля строки

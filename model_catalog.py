@@ -39,6 +39,12 @@ PROVIDERS = {
 
 OCR_MODELS = ["qwen-vl-ocr", "qwen-vl-plus", "qwen-vl-max"]
 
+# Модели распознавания изображений (.jpg/.png/…): из картинки делается текстовое
+# описание рядом с файлом (см. rag_core._describe_image). Модели те же
+# мультимодальные DashScope, что и OCR, но задача шире: не только текст с картинки,
+# но и описание того, что на ней изображено.
+IMAGE_MODELS = ["qwen-vl-plus", "qwen-vl-max", "qwen3-vl-plus", "qwen-vl-ocr"]
+
 # Прошита в rag_core._get_embedding_model() — показывается в админке справочно.
 EMBEDDING_MODEL = "intfloat/multilingual-e5-large"
 
