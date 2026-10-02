@@ -545,7 +545,62 @@ DOCS_PAGES = [
     ('dialogs', 'Диалоги и ответы вручную'),
     ('faq', 'Частые вопросы'),
 ]
-_DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs')
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_DOCS_DIR = os.path.join(_BASE_DIR, 'docs')
+
+# Публичный адрес сайта — для canonical, sitemap и robots (лендинг живёт на одном домене).
+SITE_BASE_URL = 'https://ragstone.ru'
+
+# Приватные и служебные разделы: индексировать в них нечего, а обход по ним только тратит краулинг.
+ROBOTS_DISALLOW = ['/login', '/register', '/logout', '/chat', '/history', '/analytics',
+                   '/inbox', '/widgets', '/admin', '/widget/', '/api/', '/ask', '/status']
+
+
+def _plain_response(body, content_type='text/plain; charset=utf-8'):
+    """Текстовый ответ (robots.txt, sitemap.xml) с явным типом и кэшем на час."""
+    resp = make_response(body)
+    resp.headers['Content-Type'] = content_type
+    resp.headers['Cache-Control'] = 'public, max-age=3600'
+    return resp
+
+
+def _file_lastmod(*parts):
+    """Дата изменения файла для sitemap lastmod (сегодняшняя, если файл не найден)."""
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(os.path.join(_BASE_DIR, *parts))).strftime('%Y-%m-%d')
+    except OSError:
+        return datetime.now().strftime('%Y-%m-%d')
+
+
+@app.route('/robots.txt')
+def robots_txt():
+    """robots.txt: публичные страницы открыты, приватные закрыты, sitemap указан."""
+    lines = ['User-agent: *', 'Allow: /']
+    lines += [f'Disallow: {p}' for p in ROBOTS_DISALLOW]
+    lines += ['', f'Sitemap: {SITE_BASE_URL}/sitemap.xml', '']
+    return _plain_response('\n'.join(lines))
+
+
+@app.route('/sitemap.xml')
+def sitemap_xml():
+    """sitemap.xml: лендинг, тарифы и все разделы публичной документации."""
+    entries = [('/', _file_lastmod('templates', 'about.html')),
+               ('/prices', _file_lastmod('templates', 'prices.html'))]
+    for slug, _title in DOCS_PAGES:
+        url = '/docs' if slug == 'index' else f'/docs/{slug}'
+        entries.append((url, _file_lastmod('docs', f'{slug}.md')))
+    parts = []
+    for url, lastmod in entries:
+        parts.append('  <url>\n'
+                     f'    <loc>{SITE_BASE_URL}{url}</loc>\n'
+                     f'    <lastmod>{lastmod}</lastmod>\n'
+                     '    <changefreq>monthly</changefreq>\n'
+                     f'    <priority>{"1.0" if url == "/" else "0.7"}</priority>\n'
+                     '  </url>')
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+           + '\n'.join(parts) + '\n</urlset>\n')
+    return _plain_response(xml, content_type='application/xml; charset=utf-8')
 
 
 @app.route('/docs')
