@@ -4,7 +4,7 @@
 # и вводятся в админке (/admin → Настройки → Почта). Пустой пароль = отправка выключена.
 #
 # Ключи app_settings:
-#   mail_enabled        (bool) - отправлять письма о заявках
+#   mail_enabled        (bool) - мастер-выключатель: заявки с сайта и уведомления о диалогах
 #   mail_smtp_host      (str)  - например smtp.spaceweb.ru
 #   mail_smtp_port      (int)  - 465 (SSL) или 587 (STARTTLS)
 #   mail_smtp_mode      (str)  - ssl (465) | starttls (587) | plain (локальный релей)
@@ -124,6 +124,139 @@ def _lead_html(lead, cfg):
         f'background:#f8fafc;font-size:14px">{body}</div>{footer}</div>')
 
 
+def _deliver(msg, cfg, label=''):
+    """Общий транспорт: соединение, логин, отправка. Возвращает (успех, ошибка).
+
+    Пароль в лог не попадает: пишем только тип ошибки и адрес сервера.
+    """
+    server = None
+    try:
+        context = ssl.create_default_context()
+        mode = cfg['mail_smtp_mode']
+        if mode == 'ssl':
+            server = smtplib.SMTP_SSL(cfg['mail_smtp_host'], cfg['mail_smtp_port'],
+                                      timeout=MAIL_TIMEOUT, context=context)
+        else:
+            server = smtplib.SMTP(cfg['mail_smtp_host'], cfg['mail_smtp_port'], timeout=MAIL_TIMEOUT)
+            server.ehlo()
+            if mode == 'starttls':
+                server.starttls(context=context)
+                server.ehlo()
+        if cfg['mail_smtp_user']:
+            server.login(cfg['mail_smtp_user'], cfg['mail_smtp_password'])
+        server.send_message(msg)
+        logger.info(f"📧 Письмо отправлено на {msg['To']} — {label}")
+        return True, ""
+    except Exception as e:
+        err = f"{e.__class__.__name__}: {e}"
+        logger.error(f"📧 Не удалось отправить ({label}) через {cfg['mail_smtp_host']}:"
+                     f"{cfg['mail_smtp_port']} — {err}")
+        return False, err[:500]
+    finally:
+        if server is not None:
+            try:
+                server.quit()
+            except Exception:
+                pass
+
+
+def _new_message(subject, from_name, cfg, to, reply_to=None):
+    """Заготовка письма: адреса, дата, Message-ID (домен — из адреса отправителя)."""
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = formataddr((from_name, cfg['mail_from']))
+    msg['To'] = ', '.join(to)
+    if reply_to:
+        msg['Reply-To'] = str(reply_to)[:120]
+    msg['Date'] = formatdate(localtime=True)
+    msg['Message-ID'] = make_msgid(domain=(cfg['mail_from'].split('@')[-1] or 'ragstone.ru'))
+    return msg
+
+
+def mail_ready(settings=None):
+    """Готов ли транспорт к отправке: включён, есть сервер и (если нужен) пароль.
+
+    Получателя проверяет вызывающий: у заявок это настройка mail_to, у уведомлений
+    о диалогах — адрес владельца из панели «Диалоги».
+    """
+    cfg = mail_settings(settings)
+    if not cfg['mail_enabled'] or not cfg['mail_smtp_host']:
+        return False
+    if cfg['mail_smtp_user'] and not cfg['mail_smtp_password']:
+        return False
+    return True
+
+
+def send_mail(recipients, subject, text, html_body=None, settings=None, reply_to=None,
+              from_name='RAGSTONE', label='письмо'):
+    """Письмо конкретным адресам (уведомления владельцу). Возвращает (успех, ошибка).
+
+    Заявки идут своим путём (send_lead_mail): там получатель берётся из настроек.
+    """
+    cfg = mail_settings(settings)
+    to = [str(a).strip() for a in (recipients or []) if str(a).strip()]
+    if not to:
+        return False, "не указан адрес получателя"
+    if not cfg['mail_enabled']:
+        return False, "отправка писем выключена в настройках"
+    if not cfg['mail_smtp_host']:
+        return False, "почта не настроена (нет SMTP-сервера)"
+    if cfg['mail_smtp_user'] and not cfg['mail_smtp_password']:
+        return False, "почта не настроена (нет пароля ящика)"
+    msg = _new_message(subject, from_name, cfg, to, reply_to=reply_to)
+    msg.set_content(text)
+    if html_body:
+        msg.add_alternative(html_body, subtype='html')
+    return _deliver(msg, cfg, label)
+
+
+def send_dialog_mail(dialogs, recipients, panel_url='https://ragstone.ru/inbox', settings=None):
+    """Письмо владельцу о новом диалоге: гость виджета или собеседник в MAX.
+
+    dialogs — список словарей {'source', 'question', 'time'} (обычно один).
+    """
+    if not dialogs:
+        return False, "нет диалогов для письма"
+    first = dialogs[0]
+    source = str(first.get('source') or 'виджет')
+    subject = "RAGSTONE — новый диалог: %s" % source
+    if len(dialogs) > 1:
+        subject = "RAGSTONE — новые диалоги: %s и ещё %d" % (source, len(dialogs) - 1)
+
+    lines = ["Новый диалог в RAGSTONE", ""]
+    for d in dialogs:
+        lines.append("Источник:  %s" % d.get('source', ''))
+        if d.get('time'):
+            lines.append("Время:     %s" % d['time'])
+        if d.get('who'):
+            lines.append("Собеседник: %s" % d['who'])
+        lines += ["Первый вопрос:", "  " + str(d.get('question', '')).replace("\n", "\n  "), ""]
+    lines += ["Отвечать: %s" % panel_url,
+              "",
+              "Письмо приходит один раз на нового собеседника и не чаще одного раза в 5 минут."]
+    text = "\n".join(lines)
+
+    rows = []
+    for d in dialogs:
+        rows.append(
+            '<div style="margin-bottom:14px">'
+            '<div style="color:#64748b;font-size:13px">%s%s</div>'
+            '<div style="white-space:pre-wrap;border-left:3px solid #4f46e5;padding:8px 12px;'
+            'background:#f8fafc;font-size:14px;margin-top:6px">%s</div></div>'
+            % (html.escape(str(d.get('source', ''))),
+               (' · ' + html.escape(str(d['time']))) if d.get('time') else '',
+               html.escape(str(d.get('question', '')))))
+    body = (
+        '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a">'
+        '<h2 style="margin:0 0 12px">Новый диалог в RAGSTONE</h2>'
+        + "".join(rows)
+        + '<p><a href="%s" style="color:#4f46e5">Открыть панель «Диалоги»</a></p>'
+          '<p style="color:#64748b;font-size:13px">Письмо приходит один раз на нового '
+          'собеседника и не чаще одного раза в 5 минут.</p></div>' % html.escape(panel_url))
+    return send_mail(recipients, subject, text, html_body=body, settings=settings,
+                     label='уведомление о диалоге')
+
+
 def send_lead_mail(lead, settings=None):
     """Письмо о заявке на адрес из настроек. Возвращает (успех, текст ошибки)."""
     cfg = mail_settings(settings)
@@ -145,35 +278,7 @@ def send_lead_mail(lead, settings=None):
     msg.set_content(_lead_text(lead, cfg))
     msg.add_alternative(_lead_html(lead, cfg), subtype='html')
 
-    server = None
-    try:
-        context = ssl.create_default_context()
-        mode = cfg['mail_smtp_mode']
-        if mode == 'ssl':
-            server = smtplib.SMTP_SSL(cfg['mail_smtp_host'], cfg['mail_smtp_port'],
-                                      timeout=MAIL_TIMEOUT, context=context)
-        else:
-            server = smtplib.SMTP(cfg['mail_smtp_host'], cfg['mail_smtp_port'], timeout=MAIL_TIMEOUT)
-            server.ehlo()
-            if mode == 'starttls':
-                server.starttls(context=context)
-                server.ehlo()
-        if cfg['mail_smtp_user']:
-            server.login(cfg['mail_smtp_user'], cfg['mail_smtp_password'])
-        server.send_message(msg)
-        logger.info(f"📧 Заявка отправлена на {cfg['mail_to']} ({name})")
-        return True, ""
-    except Exception as e:
-        # Пароль в лог не попадает: пишем только тип ошибки и адрес сервера
-        err = f"{e.__class__.__name__}: {e}"
-        logger.error(f"📧 Не удалось отправить заявку через {cfg['mail_smtp_host']}:{cfg['mail_smtp_port']} — {err}")
-        return False, err[:500]
-    finally:
-        if server is not None:
-            try:
-                server.quit()
-            except Exception:
-                pass
+    return _deliver(msg, cfg, f"заявка ({name})")
 
 
 def send_test_mail(settings=None):

@@ -16,7 +16,7 @@ import csv
 from datetime import datetime
 from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows, IMAGE_EXTS
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_user_greeting, set_user_greeting, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_user_greeting, set_user_greeting, get_notify_email, set_notify_email, scope_has_history, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      get_widget, sync_conversations, list_widget_conversations,
                      list_max_conversations, get_max_dialog,
@@ -2626,6 +2626,8 @@ def _visitor_answer(user_id, question, scope, label, bot_label='Бот', strip_s
     Возвращает (answer, err): при ошибке answer=None, err — текст для собеседника.
     """
     try:
+        # Первый вопрос нового собеседника — владельцу уходит письмо
+        _notify_new_dialog(user_id, scope, question, label)
         user_rag = get_user_rag(user_id)
         provider, model = _rag_provider_model(user_rag)
         _saved(save_message(user_id, 'user', question, device_id=scope), saved_ids)
@@ -2786,6 +2788,8 @@ def _external_guest_waiting(user_id, scope, question, label, saved_ids=None):
     Модель не вызывается и дневные лимиты не тратятся, но вопрос не теряется:
     владелец видит его в панели, аналитика запросов остаётся полной.
     """
+    # Новый собеседник — письмо владельцу (в ручном режиме вопрос приходит сразу в панель)
+    _notify_new_dialog(user_id, scope, question, label)
     _saved((add_dialog_message(user_id, scope, 'user', question, unread_delta=1) or {}).get('id'),
            saved_ids)
     chat_logger.log_message(label, user_id, question, is_bot=False)
@@ -2930,6 +2934,59 @@ def widgets_list():
     if 'user_id' not in session:
         return jsonify({'error': 'Необходима авторизация'}), 401
     return jsonify({'widgets': list_user_widgets(session['user_id'])})
+
+
+@app.route('/api/inbox/notify')
+def inbox_notify_state():
+    """Адреса оповещений о новых диалогах + готовность почты платформы."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    raw = get_notify_email(session['user_id'])
+    emails, _ = _parse_notify_emails(raw)
+    return jsonify({'email': raw, 'emails': emails or [], 'mail_ready': mailer.mail_ready(),
+                    'mail_from': mailer.mail_settings()['mail_from']})
+
+
+@app.route('/api/inbox/notify', methods=['POST'])
+def inbox_notify_save():
+    """Сохранение адресов оповещений (пусто = выключить письма)."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    data = request.get_json(silent=True) or {}
+    emails, err = _parse_notify_emails(data.get('email'))
+    if err:
+        return jsonify({'error': err}), 400
+    if not set_notify_email(session['user_id'], data.get('email') or ''):
+        return jsonify({'error': 'Не удалось сохранить адреса'}), 500
+    if emails:
+        logger.info(f"📧 Пользователь {session.get('username')} включил оповещения о диалогах "
+                    f"({len(emails)} адрес(а))")
+    return jsonify({'success': True, 'emails': emails})
+
+
+@app.route('/api/inbox/notify/test', methods=['POST'])
+def inbox_notify_test():
+    """Пробное письмо: проверяем адрес и настройки почты до первого гостя.
+
+    Адрес можно прислать в теле запроса — тогда его не нужно сохранять заранее.
+    """
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    data = request.get_json(silent=True) or {}
+    raw = data.get('email') if data.get('email') is not None else get_notify_email(session['user_id'])
+    emails, err = _parse_notify_emails(raw)
+    if err:
+        return jsonify({'error': err}), 400
+    if not emails:
+        return jsonify({'error': 'Укажите адрес — иначе письмо некуда отправлять'}), 400
+    ok, error = mailer.send_dialog_mail(
+        [{'source': 'Проверка оповещений', 'time': datetime.now().strftime('%d.%m.%Y %H:%M'),
+          'question': 'Это тестовое письмо из панели «Диалоги». Если вы его видите — оповещения '
+                      'о новых диалогах будут приходить на этот адрес.'}], emails)
+    if not ok:
+        logger.warning(f"📧 Пробное письмо не ушло (пользователь {session.get('user_id')}): {error}")
+        return jsonify({'success': False, 'error': error}), 502
+    return jsonify({'success': True})
 
 
 @app.route('/api/widgets/<int:widget_id>/inbox')
@@ -3248,6 +3305,80 @@ _max_polling = None
 def _norm_command(text):
     """Нормализация текстовой команды собеседника («Новый диалог!» → 'новый диалог')."""
     return ' '.join((text or '').strip().lower().rstrip('!.,').split())
+
+
+# === Оповещения о новых диалогах на e-mail (панель «Диалоги») ===
+#
+# Адрес (до трёх через запятую) владелец вводит в панели; письмо уходит, когда в
+# ленте собеседника появляется первая реплика — то есть пришёл новый гость виджета
+# или новый человек в MAX. Дальше разговор писем не шлёт. Отправка — в фоновом
+# потоке: SMTP не должен задерживать ответ собеседнику. Частоту ограничиваем
+# (NOTIFY_INTERVAL), иначе череда посетителей завалила бы почту.
+
+NOTIFY_INTERVAL = 300          # секунд между письмами одному владельцу (антиспам)
+NOTIFY_MAX_ADDRS = 3           # сколько адресов принимаем в панели
+_NOTIFY_LAST = {}              # user_id -> время последнего письма (в памяти процесса)
+
+
+def _parse_notify_emails(raw):
+    """Разобрать строку адресов из панели: запятая или точка с запятой, максимум три.
+
+    Возвращает (список адресов, текст ошибки).
+    """
+    parts = [p.strip() for p in re.split(r'[,;]', str(raw or '')) if p.strip()]
+    if len(parts) > NOTIFY_MAX_ADDRS:
+        return None, 'Не больше %d адресов — лишние уберите' % NOTIFY_MAX_ADDRS
+    for address in parts:
+        if not _LEAD_EMAIL_RE.match(address) or len(address) > 120:
+            return None, 'Адрес «%s» выглядит некорректно' % address[:60]
+    return parts, None
+
+
+def _run_async(func, *args):
+    """Выполнить в фоне (в тестах подменяется на прямой вызов: так проверки детерминированы)."""
+    thread = threading.Thread(target=func, args=args, daemon=True)
+    thread.start()
+    return thread
+
+
+def _mail_dialog_notice(user_id, source, question):
+    """Синхронная отправка письма о новом диалоге (зовётся из фонового потока)."""
+    try:
+        recipients, err = _parse_notify_emails(get_notify_email(user_id))
+        if err or not recipients:
+            return
+        ok, error = mailer.send_dialog_mail(
+            [{'source': source, 'question': (question or '')[:1500],
+              'time': datetime.now().strftime('%d.%m.%Y %H:%M')}], recipients)
+        if not ok:
+            logger.warning(f"📧 Оповещение о диалоге не ушло (пользователь {user_id}): {error}")
+    except Exception as e:
+        logger.error(f"📧 Сбой оповещения о диалоге: {e}")
+
+
+def _notify_new_dialog(user_id, scope, question, source):
+    """Письмо владельцу о новом собеседнике. Возвращает True, если письмо поставлено в отправку.
+
+    Проверки: у собеседника ещё нет реплик (иначе это продолжение разговора),
+    адрес задан и не битый, и с прошлого письма прошло не меньше NOTIFY_INTERVAL.
+    """
+    try:
+        if scope_has_history(user_id, scope):
+            return False
+        recipients, err = _parse_notify_emails(get_notify_email(user_id))
+        if err or not recipients:
+            return False
+        now = time.time()
+        if now - _NOTIFY_LAST.get(user_id, 0) < NOTIFY_INTERVAL:
+            logger.info(f"📧 Оповещение для пользователя {user_id} пропущено: не чаще одного "
+                        f"письма в {NOTIFY_INTERVAL // 60} мин")
+            return False
+        _NOTIFY_LAST[user_id] = now
+        _run_async(_mail_dialog_notice, user_id, source, question)
+        return True
+    except Exception as e:
+        logger.error(f"📧 Сбой подготовки оповещения: {e}")
+        return False
 
 
 def _greeting_for(user_id, custom, who):

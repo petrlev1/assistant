@@ -154,6 +154,8 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS base_prompt TEXT")
         # Общее приветствие: одно на все виджеты и ботов пользователя (пусто = из роли в промте)
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS greeting TEXT")
+        # Адреса оповещений о новых диалогах (панель «Диалоги»); пусто = оповещения выключены
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_email VARCHAR(200) DEFAULT ''")
         conn.commit()
         cur.close()
         conn.close()
@@ -365,6 +367,62 @@ def set_user_prompt(user_id, prompt):
         return True
     except Exception as e:
         logger.error(f"Ошибка сохранения промта пользователя: {e}")
+        return False
+
+
+def get_notify_email(user_id):
+    """Адреса оповещений о новых диалогах (строка как её ввёл владелец, '' = выключено)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT notify_email FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return ''
+        return (row["notify_email"] or '').strip()
+    except Exception as e:
+        logger.error(f"Ошибка чтения адресов оповещений: {e}")
+        return ''
+
+
+def set_notify_email(user_id, value):
+    """Сохранение адресов оповещений (пустая строка выключает письма)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET notify_email = %s WHERE id = %s",
+                    ((value or '').strip()[:200], user_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения адресов оповещений: {e}")
+        return False
+
+
+def scope_has_history(user_id, scope):
+    """Есть ли у собеседника хоть одна реплика.
+
+    По ней отличаем нового собеседника (→ письмо владельцу) от продолжения
+    разговора. Дешёвая проверка: SELECT 1 ... LIMIT 1 по индексу device_id.
+    """
+    if not scope:
+        return False
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM chat_history WHERE user_id = %s AND device_id = %s LIMIT 1",
+                    (user_id, scope))
+        found = cur.fetchone() is not None
+        cur.close()
+        conn.close()
+        return found
+    except Exception as e:
+        logger.error(f"Ошибка проверки истории собеседника: {e}")
+        # Ошибка чтения не должна выключать оповещения: собеседника считаем новым
         return False
 
 
