@@ -1050,6 +1050,8 @@
             flex-shrink: 0;
         }
         .chat-header h3 { font-size: 16px; color: #333; }
+        /* Кнопки шапки чата: на мобильном переносятся в несколько рядов (см. @media 900px) */
+        .chat-actions { display: flex; align-items: center; gap: 10px; }
         .btn-new-chat { background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe;
             border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 13px; }
         .btn-new-chat:hover { background: #e0e7ff; }
@@ -1116,6 +1118,21 @@
         /* Мобильная версия: панель «Мои документы» — выпадающая почти на всю ширину */
         @media (max-width: 900px) {
             .btn-docs-mobile { display: block; }
+            /* Шапка чата: шесть кнопок не влезают в строку телефона (590px контента при 390px экрана),
+               поэтому переносим их в два ряда и ужимаем; заголовок «Чат» на мобильном скрыт —
+               страница и так про чат, а лишняя строка съедала высоту. */
+            .chat-header { flex-wrap: wrap; row-gap: 6px; padding: 10px 12px; }
+            .chat-header h3 { display: none; }
+            .chat-actions { flex-wrap: wrap; gap: 6px; row-gap: 6px; width: 100%; }
+            .chat-header .btn-analytics,
+            .chat-header .btn-new-chat,
+            .chat-header .btn-clear-chat {
+                padding: 6px 9px;
+                font-size: 12px;
+                white-space: nowrap;
+                border-radius: 7px;
+                flex: 0 0 auto;
+            }
             /* На узких экранах в шапке нет места: документация доступна с главной страницы */
             .btn-docs-link { display: none; }
             /* Чат на всю ширину: колонка документов не занимает места,
@@ -1168,7 +1185,7 @@
         <div class="chat-side">
             <div class="chat-header">
                 <h3>💬 Чат</h3>
-                <div style="display:flex;gap:10px;align-items:center;">
+                <div class="chat-actions">
                     <a href="{{ url_for('widgets_page') }}" class="btn-analytics" title="Виджет чата для вашего сайта">🪶 Виджет</a>
                     <button class="btn-analytics" onClick="toggleMaxPanel()" title="Чат-бот в мессенджере MAX">🤖 MAX-бот</button>
                     <a href="{{ url_for('inbox_page') }}" class="btn-analytics" title="Диалоги гостей: что спрашивают и что отвечает бот">📥 Диалоги{% if inbox_unread %} <span class="cnt">{{ inbox_unread }}</span>{% endif %}</a>
