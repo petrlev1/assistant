@@ -1429,6 +1429,96 @@ def site_info():
     return jsonify(info)
 
 
+# === Исправленные ответы (пары «Вопрос-Ответ» в newdatabase.csv) ===
+
+def _qa_correction_path(user_id):
+    """Путь к файлу исправлений пользователя."""
+    return os.path.join('Database', f'user_{user_id}', QA_CORRECTION_FILE)
+
+
+def _qa_norm(text):
+    """Нормализация вопроса для сравнения: регистр и лишние пробелы не важны."""
+    return ' '.join((text or '').lower().split())
+
+
+def _write_qa_pairs(file_path, pairs):
+    """Атомарная запись пар «Вопрос-Ответ» (utf-8-sig — Excel открывает без кракозябр)."""
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    tmp_path = file_path + '.tmp'
+    with open(tmp_path, 'w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.writer(f, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(['Вопрос', 'Ответ'])
+        for q, a in pairs:
+            writer.writerow([q, a])
+    os.replace(tmp_path, file_path)
+
+
+def _sync_qa_document_record(user_id, has_pairs):
+    """Запись «✅ Исправления» в списке документов: есть пары — есть документ."""
+    docs = [d for d in get_user_documents(user_id) if d['filename'] == QA_CORRECTION_FILE]
+    if has_pairs and not docs:
+        add_document(user_id, QA_CORRECTION_FILE, QA_CORRECTION_FILE, doc_group='✅ Исправления')
+    elif not has_pairs:
+        for d in docs:
+            delete_document(d['id'], user_id)
+
+
+@app.route('/api/kb/qa-corrections')
+def list_qa_corrections():
+    """Список исправленных ответов пользователя — для панели «✏️ Исправления»."""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+    pairs = parse_qa_pairs_file(_qa_correction_path(session['user_id']))
+    items = [
+        {'index': i, 'question': q, 'answer': a}
+        for i, (q, a) in enumerate(pairs)
+    ]
+    return jsonify({'items': items, 'count': len(items)})
+
+
+@app.route('/api/kb/qa-corrections/delete', methods=['POST'])
+def delete_qa_correction():
+    """Удаление одного исправления из файла newdatabase.csv.
+
+    Тело: {index, question}. Индекс сверяем с вопросом: если файл успели изменить
+    в другой вкладке, удалять «не ту» пару не будем.
+    """
+    if 'user_id' not in session:
+        return jsonify({'error': 'Необходима авторизация'}), 401
+
+    data = request.get_json() or {}
+    index = data.get('index')
+    question = (data.get('question') or '').strip()
+    if not isinstance(index, int):
+        return jsonify({'error': 'Не указан номер исправления'}), 400
+
+    user_id = session['user_id']
+    file_path = _qa_correction_path(user_id)
+    pairs = parse_qa_pairs_file(file_path)
+    if index < 0 or index >= len(pairs):
+        return jsonify({'error': 'Исправление не найдено — обновите список'}), 404
+    if question and _qa_norm(pairs[index][0]) != _qa_norm(question):
+        return jsonify({'error': 'Список исправлений изменился — обновите панель'}), 409
+
+    removed = pairs.pop(index)
+    try:
+        if pairs:
+            _write_qa_pairs(file_path, pairs)
+        elif os.path.exists(file_path):
+            os.remove(file_path)   # исправлений не осталось — убираем и файл
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления исправления из {file_path}: {e}")
+        return jsonify({'error': 'Не удалось удалить исправление'}), 500
+
+    _sync_qa_document_record(user_id, bool(pairs))
+    if rag_ready:
+        _reindex_user_async(user_id)
+
+    logger.info(f"🗑️ Пользователь {session.get('username')} удалил исправление: {removed[0][:80]}")
+    return jsonify({'success': True, 'count': len(pairs),
+                    'message': 'Исправление удалено из базы знаний'})
+
+
 @app.route('/api/kb/qa-correction', methods=['POST'])
 def save_qa_correction():
     """Сохранение исправленного ответа в базу знаний (newdatabase.csv).
@@ -1446,38 +1536,26 @@ def save_qa_correction():
         return jsonify({'error': 'Вопрос и ответ не могут быть пустыми'}), 400
 
     user_id = session['user_id']
-    user_folder = os.path.join('Database', f'user_{user_id}')
-    os.makedirs(user_folder, exist_ok=True)
-    file_path = os.path.join(user_folder, QA_CORRECTION_FILE)
+    file_path = _qa_correction_path(user_id)
 
     pairs = parse_qa_pairs_file(file_path)
 
-    def _norm(s):
-        return ' '.join(s.lower().split())
-
-    norm_q = _norm(question)
+    norm_q = _qa_norm(question)
     replaced = False
     for p in pairs:
-        if _norm(p[0]) == norm_q:
+        if _qa_norm(p[0]) == norm_q:
             p[1] = answer
             replaced = True
             break
     if not replaced:
         pairs.append([question, answer])
 
-    # Атомарная запись: временный файл + переименование (без половинок файла).
-    # utf-8-sig (BOM) — чтобы Excel открывал файл без кракозябр.
-    tmp_path = file_path + '.tmp'
     try:
-        with open(tmp_path, 'w', encoding='utf-8-sig', newline='') as f:
-            writer = csv.writer(f, delimiter=',', quoting=csv.QUOTE_MINIMAL)
-            writer.writerow(['Вопрос', 'Ответ'])
-            for q, a in pairs:
-                writer.writerow([q, a])
-        os.replace(tmp_path, file_path)
+        _write_qa_pairs(file_path, pairs)
     except Exception as e:
         logger.error(f"❌ Ошибка записи {file_path}: {e}")
         try:
+            tmp_path = file_path + '.tmp'
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
         except OSError:
@@ -1485,9 +1563,7 @@ def save_qa_correction():
         return jsonify({'error': 'Не удалось сохранить исправление'}), 500
 
     # Запись о документе — для списка «Документы» и ссылки-источника в чате
-    existing = get_user_documents(user_id)
-    if not any(d['filename'] == QA_CORRECTION_FILE for d in existing):
-        add_document(user_id, QA_CORRECTION_FILE, QA_CORRECTION_FILE, doc_group='✅ Исправления')
+    _sync_qa_document_record(user_id, True)
 
     if rag_ready:
         _reindex_user_async(user_id)

@@ -512,6 +512,65 @@
             gap: 8px;
             align-items: center;
         }
+        /* Панель «Исправленные ответы» (каркас .prompt-panel) */
+        .qa-panel-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 16px 20px;
+            overflow: hidden;
+        }
+        .qa-corr-list {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            overflow-y: auto;
+        }
+        .qa-corr-item {
+            border: 1px solid #e3e5ee;
+            border-radius: 8px;
+            padding: 10px 12px;
+            background: #fafbff;
+        }
+        .qa-corr-q {
+            font-size: 13px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 6px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .qa-corr-item textarea {
+            width: 100%;
+            box-sizing: border-box;
+            min-height: 84px;
+            resize: vertical;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 13.5px;
+            font-family: inherit;
+            line-height: 1.45;
+        }
+        .qa-corr-item textarea:focus { outline: none; border-color: #2196f3; }
+        .qa-corr-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+        .qa-corr-actions button {
+            padding: 6px 12px;
+            font-size: 13px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+        }
+        .qa-corr-save { background: #764ba2; color: #fff; }
+        .qa-corr-save:hover { background: #5f3b85; }
+        .qa-corr-save:disabled, .qa-corr-delete:disabled { opacity: 0.55; cursor: default; }
+        .qa-corr-delete { background: #fdecea; color: #c62828; }
+        .qa-corr-delete:hover { background: #f9d7d3; }
+        .qa-corr-status { font-size: 12px; color: #777; }
+        .qa-corr-status.ok { color: #2e7d32; }
+        .qa-corr-status.err { color: #c62828; }
         /* Панель MAX-бота (каркас .prompt-panel) */
         button.btn-analytics { border: none; cursor: pointer; font: inherit; }
         .max-status {
@@ -1225,6 +1284,7 @@
                 <div class="docs-header">
                     <h3>📄 Мои документы</h3>
                     <div style="display:flex;align-items:center;gap:10px;">
+                        <button class="docs-prompt-link" onClick="toggleQaPanel()" title="Исправленные ответы: посмотреть, изменить или удалить">✏️ Исправления</button>
                         <button class="docs-prompt-link" onClick="togglePromptPanel()" title="Открыть окно с персональным промтом">📝 Мой промт</button>
                         <button class="btn-close" onClick="toggleDocsPanel()">✕</button>
                     </div>
@@ -1309,6 +1369,24 @@
         </div>
     </div>
     <div class="docs-overlay" id="promptOverlay" onClick="togglePromptPanel()"></div>
+
+    <!-- Панель исправленных ответов: просмотр, правка и удаление пар «Вопрос-Ответ» -->
+    <div class="prompt-panel" id="qaPanel">
+        <div class="docs-header">
+            <h3>✏️ Исправленные ответы</h3>
+            <button class="btn-close" onClick="toggleQaPanel()">✕</button>
+        </div>
+        <div class="qa-panel-body">
+            <div class="prompt-hint">
+                Здесь хранятся ответы, которые вы исправляли в чате: бот отвечает ими на похожие вопросы.
+                Изменения применяются к базе знаний сразу после сохранения.
+            </div>
+            <div class="qa-corr-list" id="qaCorrList">
+                <div class="docs-empty">Загрузка...</div>
+            </div>
+        </div>
+    </div>
+    <div class="docs-overlay" id="qaOverlay" onClick="toggleQaPanel()"></div>
 
     <!-- Панель подключения личного чат-бота MAX -->
     <div class="prompt-panel" id="maxPanel">
@@ -2857,6 +2935,109 @@
                 })
                 .catch(() => alert('Ошибка соединения с сервером'))
                 .finally(() => { saveBtn.disabled = false; });
+        }
+
+        // === Панель «✏️ Исправления»: просмотр, правка и удаление исправленных ответов ===
+        let qaCorrectionItems = [];
+
+        function toggleQaPanel() {
+            const panel = document.getElementById('qaPanel');
+            const overlay = document.getElementById('qaOverlay');
+            const active = !panel.classList.contains('active');
+            panel.classList.toggle('active', active);
+            overlay.classList.toggle('active', active);
+            if (active) loadQaCorrections();
+        }
+
+        function loadQaCorrections() {
+            const list = document.getElementById('qaCorrList');
+            list.innerHTML = '<div class="docs-empty">Загрузка...</div>';
+            fetch('/api/kb/qa-corrections')
+                .then(r => r.json())
+                .then(data => {
+                    qaCorrectionItems = data.items || [];
+                    renderQaCorrections();
+                })
+                .catch(() => {
+                    list.innerHTML = '<div class="docs-empty">❌ Ошибка загрузки исправлений</div>';
+                });
+        }
+
+        function renderQaCorrections() {
+            const list = document.getElementById('qaCorrList');
+            if (!qaCorrectionItems.length) {
+                list.innerHTML = '<div class="docs-empty">Исправленных ответов пока нет.<br>'
+                    + 'В чате нажмите ✏️ у ответа бота — пара «вопрос — ответ» появится здесь.</div>';
+                return;
+            }
+            list.innerHTML = qaCorrectionItems.map(item => `
+                <div class="qa-corr-item" data-index="${item.index}">
+                    <div class="qa-corr-q">${escapeHtml(item.question)}</div>
+                    <textarea spellcheck="false">${escapeHtml(item.answer)}</textarea>
+                    <div class="qa-corr-actions">
+                        <button class="qa-corr-save" onClick="saveQaCorrectionItem(${item.index}, this)">💾 Сохранить</button>
+                        <button class="qa-corr-delete" onClick="deleteQaCorrectionItem(${item.index}, this)">🗑️ Удалить</button>
+                        <span class="qa-corr-status"></span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function setQaCorrStatus(btn, text, kind) {
+            const box = btn.parentElement.querySelector('.qa-corr-status');
+            if (box) {
+                box.textContent = text;
+                box.className = 'qa-corr-status' + (kind ? ' ' + kind : '');
+            }
+        }
+
+        function saveQaCorrectionItem(index, btn) {
+            const item = qaCorrectionItems.find(x => x.index === index);
+            const card = btn.closest('.qa-corr-item');
+            if (!item || !card) return;
+            const answer = card.querySelector('textarea').value.trim();
+            if (!answer) {
+                setQaCorrStatus(btn, 'Ответ не может быть пустым', 'err');
+                return;
+            }
+            btn.disabled = true;
+            setQaCorrStatus(btn, 'Сохраняю…');
+            fetch('/api/kb/qa-correction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: item.question, answer: answer })
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.success) throw new Error(data.error || 'Не удалось сохранить');
+                    item.answer = answer;
+                    setQaCorrStatus(btn, '✅ Сохранено — база знаний обновляется', 'ok');
+                })
+                .catch(e => setQaCorrStatus(btn, '❌ ' + e.message, 'err'))
+                .finally(() => { btn.disabled = false; });
+        }
+
+        function deleteQaCorrectionItem(index, btn) {
+            const item = qaCorrectionItems.find(x => x.index === index);
+            if (!item) return;
+            if (!confirm('Удалить исправление из базы знаний?\n\n' + item.question)) return;
+            btn.disabled = true;
+            setQaCorrStatus(btn, 'Удаляю…');
+            fetch('/api/kb/qa-corrections/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ index: index, question: item.question })
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.success) throw new Error(data.error || 'Не удалось удалить');
+                    loadQaCorrections();
+                    loadDocuments();   // запись «✅ Исправления» могла исчезнуть из документов
+                })
+                .catch(e => {
+                    setQaCorrStatus(btn, '❌ ' + e.message, 'err');
+                    btn.disabled = false;
+                });
         }
     </script>
 {% set metrika_webvisor = false %}
