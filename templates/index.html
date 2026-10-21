@@ -78,6 +78,22 @@
         .btn-docs-link:hover {
             background: rgba(255,255,255,0.3);
         }
+        /* «Мои файлы» (облако) — та же «пилюля», что у документации, но остаётся
+           видимой на узких экранах: это основной переход к своим файлам */
+        .btn-cloud-link {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            text-decoration: none;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+        .btn-cloud-link:hover {
+            background: rgba(255,255,255,0.3);
+        }
         /* Chat container */
         .chat-container {
             flex: 1;
@@ -1233,8 +1249,8 @@
             <!-- Документация — в новом окне, чтобы не терять кабинет -->
             <a href="{{ url_for('docs') }}" class="btn-docs-link" target="_blank" rel="noopener"
                title="Документация пользователя — откроется в новом окне">📘 Документация</a>
-            <a href="{{ url_for('cloud_files') }}" class="btn-analytics"
-               title="Облако: ваши файлы — загрузка, поиск, общие ссылки (откроется в новой вкладке)"
+            <a href="{{ url_for('cloud_files') }}" class="btn-cloud-link"
+               title="Облако: ваши файлы — те же документы, что загружены в ragstone (откроется в новой вкладке)"
                target="_blank" rel="noopener">☁️ Мои файлы</a>
             <span class="username">👤 {{ session.username }}</span>
             <a href="{{ url_for('logout') }}" class="btn-logout">Выйти</a>
