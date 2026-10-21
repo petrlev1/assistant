@@ -13,6 +13,9 @@ import re
 import secrets
 import shutil
 import csv
+import base64
+import hashlib
+import hmac
 from datetime import datetime
 from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows, IMAGE_EXTS
 from chat_logger import get_chat_logger
@@ -385,6 +388,38 @@ def apple_touch_icon():
 
 
 # === Основные маршруты ===
+
+def _cloud_sso_conf():
+    """Адрес облака и общий секрет SSO — из db_config.json (вне git)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'db_config.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            conf = json.load(f)
+    except Exception:
+        conf = {}
+    return ((conf.get('cloud_url') or 'https://cloud.ragstone.ru').rstrip('/'),
+            conf.get('cloud_sso_secret') or '')
+
+
+@app.route('/cloud')
+def cloud_files():
+    """«Мои файлы»: одноразовый подписанный токен → облако со своей папкой (без второго пароля).
+
+    Формат токена одинаков с облаком (app/ragusers.py): base64url(json{uid,u,exp,n}).hmac.
+    """
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    base, secret = _cloud_sso_conf()
+    if not secret:
+        flash('Переход в облако не настроен: в db_config.json нет cloud_sso_secret', 'error')
+        return redirect(url_for('chat'))
+    payload = {'uid': int(session['user_id']), 'u': session.get('username') or '',
+               'exp': int(time.time()) + 120, 'n': secrets.token_urlsafe(12)}
+    b64 = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=False).encode()).decode().rstrip('=')
+    mac = hmac.new(secret.encode(), b64.encode(), hashlib.sha256).hexdigest()
+    return redirect(f"{base}/sso?t={b64}.{mac}")
+
 
 @app.route('/')
 def index():
