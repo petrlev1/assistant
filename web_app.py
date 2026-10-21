@@ -906,6 +906,61 @@ def status():
 
 # === Управление документами пользователя ===
 
+def _sync_user_documents(user_id):
+    """Сверка папки БЗ (Database/user_<id>) с таблицей user_documents.
+
+    Новые файлы на диске регистрируются, записи без файла удаляются.
+    Возвращает (added, removed) — списки имён файлов.
+    """
+    added, removed = [], []
+    user_db_folder = os.path.join('Database', f'user_{user_id}')
+    if not os.path.exists(user_db_folder):
+        return added, removed
+    files_on_disk = {f for f in os.listdir(user_db_folder)
+                     if os.path.isfile(os.path.join(user_db_folder, f))}
+    db_docs = get_user_documents(user_id)
+    db_filenames = {d['filename'] for d in db_docs}
+    for fname in files_on_disk:
+        if fname not in db_filenames:
+            add_document(user_id, fname, fname)
+            added.append(fname)
+    for doc in db_docs:
+        if doc['filename'] not in files_on_disk:
+            delete_document(doc['id'], user_id)
+            removed.append(doc['filename'])
+    return added, removed
+
+
+@app.route('/api/internal/kb-sync', methods=['POST'])
+def internal_kb_sync():
+    """Внутренний вызов из облака (cloud.ragstone.ru): файл в папке БЗ изменился.
+
+    Подпись — HMAC-SHA256 от тела запроса общим секретом (cloud_sso_secret).
+    Делает ровно то же, что открытие «Мои документы» в кабинете: сверяет папку
+    с таблицей user_documents и запускает фоновую переиндексацию БЗ.
+    """
+    raw = request.get_data() or b'{}'
+    secret = _cloud_sso_conf()[1]
+    if not secret:
+        return jsonify({'error': 'внутренние вызовы не настроены'}), 403
+    expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(request.headers.get('X-Cloud-Signature', ''), expected):
+        return jsonify({'error': 'forbidden'}), 403
+    try:
+        data = json.loads(raw)
+        uid = int(data.get('uid') or 0)
+    except Exception:
+        return jsonify({'error': 'bad request'}), 400
+    if uid <= 0:
+        return jsonify({'error': 'uid required'}), 400
+    added, removed = _sync_user_documents(uid)
+    if (added or removed) and rag_ready:
+        _reindex_user_async(uid)
+    logger.info(f"☁️ облако: БЗ пользователя #{uid} синхронизирована "
+                f"(добавлено {len(added)}, удалено {len(removed)}; причина: {data.get('reason', '—')})")
+    return jsonify({'ok': True, 'added': len(added), 'removed': len(removed)})
+
+
 @app.route('/api/documents')
 def get_documents():
     """Список документов текущего пользователя"""
@@ -913,36 +968,16 @@ def get_documents():
         return jsonify({'error': 'Необходима авторизация'}), 401
 
     user_id = session['user_id']
-    user_db_folder = os.path.join('Database', f'user_{user_id}')
 
-    # Синхронизируем файлы на диске с записями в БД
-    if os.path.exists(user_db_folder):
-        files_on_disk = set(os.listdir(user_db_folder))
-        db_docs = get_user_documents(user_id)
-        db_filenames = {d['filename'] for d in db_docs}
-
-        # Файлы, которые есть на диске, но нет в БД — добавляем
-        added_files = []
-        for fname in files_on_disk:
-            file_path = os.path.join(user_db_folder, fname)
-            if os.path.isfile(file_path) and fname not in db_filenames:
-                add_document(user_id, fname, fname)
-                added_files.append(fname)
-
-        # Файлы, которые есть в БД, но нет на диске — удаляем записи
-        removed_files = []
-        for doc in db_docs:
-            if doc['filename'] not in files_on_disk:
-                delete_document(doc['id'], user_id)
-                removed_files.append(doc['filename'])
-
-        # Состав базы знаний изменился (например, файл записал обход сайта) — без
-        # переиндексации ассистент его не увидит: в памяти остаётся прежняя БЗ.
-        if added_files or removed_files:
-            logger.info(f"📄 Файлы на диске изменились (добавлено {len(added_files)}, "
-                        f"удалено {len(removed_files)}) — переиндексация БЗ пользователя {user_id}")
-            if rag_ready:
-                _reindex_user_async(user_id)
+    # Синхронизируем файлы на диске с записями в БД (см. _sync_user_documents)
+    added_files, removed_files = _sync_user_documents(user_id)
+    # Состав базы знаний изменился (например, файл записал обход сайта или облако) —
+    # без переиндексации ассистент его не увидит: в памяти остаётся прежняя БЗ.
+    if added_files or removed_files:
+        logger.info(f"📄 Файлы на диске изменились (добавлено {len(added_files)}, "
+                    f"удалено {len(removed_files)}) — переиндексация БЗ пользователя {user_id}")
+        if rag_ready:
+            _reindex_user_async(user_id)
 
     # Возвращаем актуальный список
     docs = get_user_documents(user_id)
