@@ -1233,6 +1233,9 @@
             <!-- Документация — в новом окне, чтобы не терять кабинет -->
             <a href="{{ url_for('docs') }}" class="btn-docs-link" target="_blank" rel="noopener"
                title="Документация пользователя — откроется в новом окне">📘 Документация</a>
+            <a href="{{ url_for('cloud_files') }}" class="btn-analytics"
+               title="Облако: ваши файлы — загрузка, поиск, общие ссылки (откроется в новой вкладке)"
+               target="_blank" rel="noopener">☁️ Мои файлы</a>
             <span class="username">👤 {{ session.username }}</span>
             <a href="{{ url_for('logout') }}" class="btn-logout">Выйти</a>
             <button class="btn-docs-mobile" onClick="toggleDocsPanel()" title="Мои документы">☰</button>
