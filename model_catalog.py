@@ -11,9 +11,16 @@ rag_core._get_embedding_model(), а её смена требует полной 
 """
 
 PROVIDERS = {
+    # Одна модель намеренно: qwen3.7-flash — самая дешёвая из живых на аккаунте
+    # ($0.03 / $0.13 за 1M токенов) и с отключённым «размышлением» отвечает за 2–3 с.
+    # Снятые с каталога модели (проверено запросами к API 2026-10-21):
+    #   qwen-turbo        → 429 limit_requests (модели нет в списке /v1/models),
+    #   deepseek-v4-flash → 404 model_not_found (живое имя — deepseek-v4.1-flash).
+    # qwen3.8-flash / qwen-plus / qwen-max работают, но дороже; если понадобится —
+    # добавлять сюда, а не держать «на всякий случай» весь старый список.
     "DashScope": {
         "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        "models": ["deepseek-v4-flash", "qwen-plus", "qwen-turbo", "qwen-max"],
+        "models": ["qwen3.7-flash"],
         "key_hint": "Ключ DashScope (llm_api_key) — он же используется для OCR, не удаляйте его.",
     },
     "DeepSeek": {

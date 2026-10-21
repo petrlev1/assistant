@@ -289,6 +289,36 @@ def _make_test_user():
     return uid, name
 
 
+def test_llm_payload():
+    """payload запроса: qwen3 на DashScope просят не «думать», остальным поле не шлём."""
+    print('\n2c) payload к LLM: enable_thinking и каталог моделей')
+    post = _PostRecorder()
+    rag_core.requests.post = post
+
+    rag = _stub_rag(llm_provider='DashScope', llm_model='qwen3.7-flash',
+                    llm_base_url='https://dashscope-intl.aliyuncs.com/compatible-mode/v1')
+    rag.ask_model('вопрос', user_prompt=None)
+    check('DashScope + qwen3.7-flash: enable_thinking=False',
+          post.payloads[-1].get('enable_thinking') is False, list(post.payloads[-1]))
+
+    rag = _stub_rag(llm_provider='DashScope', llm_model='qwen-plus',
+                    llm_base_url='https://dashscope-intl.aliyuncs.com/compatible-mode/v1')
+    rag.ask_model('вопрос', user_prompt=None)
+    check('DashScope + не-qwen3 модель: поле не отправляем',
+          'enable_thinking' not in post.payloads[-1], list(post.payloads[-1]))
+
+    rag = _stub_rag(llm_provider='Local (llama.cpp)', llm_model='qwen3-4b-instruct-2507',
+                    llm_base_url='http://85.234.31.16:8443/v1')
+    rag.ask_model('вопрос', user_prompt=None)
+    check('локальный сервер: поле не отправляем',
+          'enable_thinking' not in post.payloads[-1], list(post.payloads[-1]))
+
+    import model_catalog
+    check('каталог DashScope: одна рабочая модель — qwen3.7-flash',
+          model_catalog.PROVIDERS['DashScope']['models'] == ['qwen3.7-flash'],
+          model_catalog.PROVIDERS['DashScope']['models'])
+
+
 def test_db_layer(uid):
     print('\n3) Слой БД: области, TTL, лимиты, граница диалога')
     scope = 'test:' + uuid.uuid4().hex[:10]
@@ -513,6 +543,7 @@ def main():
         test_history_helpers()
         test_ask_model_messages()
         test_qa_corrections()
+        test_llm_payload()
         test_db_layer(uid)
         test_chat_label_follows_settings(uid)
         test_http_flow(uid)

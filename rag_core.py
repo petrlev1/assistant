@@ -1985,6 +1985,18 @@ class RAGCore:
             keep.append(line)
         return "\n".join(keep)
 
+    def _qwen_thinking_supported(self, model):
+        """Умеет ли модель отключать «размышления» (поле enable_thinking).
+
+        Признак — base_url провайдера DashScope/QwenCloud и имя qwen3-*: у локального
+        llama.cpp, DeepSeek и OpenRouter такого поля нет, лишний ключ в payload
+        может сломать запрос.
+        """
+        base_url = str(self.settings.get("llm_base_url", "") or "")
+        if "dashscope" not in base_url and "qwencloud" not in base_url:
+            return False
+        return str(model or "").strip().lower().startswith("qwen3")
+
     def _format_correction_answer(self, answer):
         """Исправленный ответ + ссылка на источник newdatabase.csv (или None)."""
         answer = (answer or "").strip()
@@ -2228,6 +2240,12 @@ class RAGCore:
         active_model = self.settings.get("llm_model", "deepseek-v4-flash")
         try:
             logger.info(f"🤖 Отправка запроса к модели {active_model}...")
+            # qwen3-* на DashScope/QwenCloud по умолчанию «думают»: 790–890 reasoning-токенов
+            # на обычный RAG-ответ и 13–30 с вместо 2–3 с (замерено на реальном вопросе).
+            # Отключаем — ответу по базе знаний рассуждение не нужно.
+            payload = {"model": active_model, "messages": messages}
+            if self._qwen_thinking_supported(active_model):
+                payload["enable_thinking"] = False
             # Используем requests напрямую (httpx на Windows может падать на Unicode)
             response = requests.post(
                 f"{self.settings.get('llm_base_url', 'https://api.deepseek.com/v1')}/chat/completions",
@@ -2235,10 +2253,7 @@ class RAGCore:
                     "Authorization": f"Bearer {self.settings.get_llm_api_key()}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": active_model,
-                    "messages": messages,
-                },
+                json=payload,
                 timeout=60,
             )
             response.raise_for_status()
