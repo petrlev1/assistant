@@ -45,6 +45,39 @@ QA_CORRECTION_MARGIN = 0.025  # мин. отрыв лучшего исправл
 # а честный перефраз того же вопроса = 0.961 (замерено на multilingual-e5-large).
 QA_CORRECTION_FUZZY_MODE = "context"
 
+# === Файлы базы знаний пользователя ===
+KB_MAX_DEPTH = 8          # глубина вложенности подпапок, дальше не спускаемся
+KB_SKIP_DIRS = {".versions", "lost+found"}
+
+
+def iter_kb_files(folder):
+    """Все файлы базы знаний пользователя — рекурсивно по подпапкам.
+
+    Раньше брался только верхний уровень (os.listdir), поэтому файлы из подпапок
+    не индексировались. Теперь обход рекурсивный (глубина <= KB_MAX_DEPTH):
+    скрытые и служебные папки (.versions, lost+found) и симлинки пропускаются.
+    Пути возвращаются абсолютные; имя документа считается от `folder`
+    (например «Каталоги/фильтры.pdf») — так же, как в user_documents.
+    """
+    out = []
+    if not os.path.isdir(folder):
+        return out
+    base = os.path.abspath(folder)
+    for dirpath, dirnames, filenames in os.walk(base, onerror=lambda e: None):
+        depth = os.path.relpath(dirpath, base).count(os.sep) + (0 if dirpath == base else 1)
+        dirnames[:] = sorted(d for d in dirnames
+                             if not d.startswith(".") and d not in KB_SKIP_DIRS
+                             and not os.path.islink(os.path.join(dirpath, d)))
+        if depth >= KB_MAX_DEPTH:
+            dirnames[:] = []
+        for fn in sorted(filenames):
+            if fn.startswith("."):
+                continue
+            p = os.path.join(dirpath, fn)
+            if os.path.isfile(p) and not os.path.islink(p):
+                out.append(p)
+    return out
+
 # === Парсер прайс-листов ===
 
 # Ключевые слова колонок прайс-листа (по подстроке, в нижнем регистре)
@@ -755,11 +788,7 @@ class RAGCore:
                 user_db_folder = os.path.join("Database", f"user_{user_id}")
                 if os.path.exists(user_db_folder):
                     logger.info(f"📁 Загрузка базы знаний пользователя #{user_id} из {user_db_folder}")
-                    folder_paths = [
-                        os.path.join(user_db_folder, f)
-                        for f in os.listdir(user_db_folder)
-                        if os.path.isfile(os.path.join(user_db_folder, f))
-                    ]
+                    folder_paths = iter_kb_files(user_db_folder)
                     for file_path in self._apply_txt_priority(folder_paths):
                         self._process_file(file_path, all_knowledge)
                 else:

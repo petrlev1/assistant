@@ -17,7 +17,7 @@ import base64
 import hashlib
 import hmac
 from datetime import datetime
-from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows, IMAGE_EXTS
+from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows, IMAGE_EXTS, iter_kb_files
 from chat_logger import get_chat_logger
 from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_user_greeting, set_user_greeting, get_notify_email, set_notify_email, scope_has_history, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
@@ -909,15 +909,16 @@ def status():
 def _sync_user_documents(user_id):
     """Сверка папки БЗ (Database/user_<id>) с таблицей user_documents.
 
-    Новые файлы на диске регистрируются, записи без файла удаляются.
-    Возвращает (added, removed) — списки имён файлов.
+    Папка обходится рекурсивно (iter_kb_files): файл в подпапке регистрируется
+    под относительным путём («Каталоги/фильтры.pdf»). Новые файлы добавляются,
+    записи без файла удаляются. Возвращает (added, removed) — списки имён.
     """
     added, removed = [], []
     user_db_folder = os.path.join('Database', f'user_{user_id}')
     if not os.path.exists(user_db_folder):
         return added, removed
-    files_on_disk = {f for f in os.listdir(user_db_folder)
-                     if os.path.isfile(os.path.join(user_db_folder, f))}
+    files_on_disk = {os.path.relpath(p, user_db_folder).replace(os.sep, '/')
+                     for p in iter_kb_files(user_db_folder)}
     db_docs = get_user_documents(user_id)
     db_filenames = {d['filename'] for d in db_docs}
     for fname in files_on_disk:
@@ -1659,9 +1660,13 @@ def delete_document_route(doc_id):
         return jsonify({'error': 'Документ не найден'}), 404
 
     # Удаляем файл
-    file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
-    if os.path.exists(file_path):
+    try:
+        file_path = _doc_path(user_id, doc_info['filename'])
+    except ValueError:
+        file_path = ''
+    if file_path and os.path.exists(file_path):
         os.remove(file_path)
+        _prune_empty_dirs(file_path, _docs_dir(user_id))
         logger.info(f"🗑️ Удалён файл: {file_path}")
 
     # Удаляем запись из БД
@@ -1692,7 +1697,10 @@ def download_document(doc_id):
     if not doc_info:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
+    try:
+        file_path = _doc_path(user_id, doc_info['filename'])
+    except ValueError:
+        return jsonify({'error': 'Файл не найден на диске'}), 404
     if not os.path.exists(file_path):
         return jsonify({'error': 'Файл не найден на диске'}), 404
 
@@ -1724,9 +1732,13 @@ def delete_documents_bulk():
         doc_info = by_id.get(doc_id)
         if not doc_info:
             continue
-        file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
-        if os.path.exists(file_path):
+        try:
+            file_path = _doc_path(user_id, doc_info['filename'])
+        except ValueError:
+            file_path = ''
+        if file_path and os.path.exists(file_path):
             os.remove(file_path)
+            _prune_empty_dirs(file_path, _docs_dir(user_id))
             logger.info(f"🗑️ Удалён файл: {file_path}")
         delete_document(doc_id, user_id)
         delete_price_items_for_file(user_id, doc_info['filename'])
@@ -1765,7 +1777,10 @@ def download_documents_bulk():
             doc_info = by_id.get(doc_id)
             if not doc_info:
                 continue
-            file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
+            try:
+                file_path = _doc_path(user_id, doc_info['filename'])
+            except ValueError:
+                continue
             if not os.path.exists(file_path):
                 continue
             # Уникализируем имя внутри архива (два файла с одинаковым именем)
@@ -1881,6 +1896,33 @@ def _versions_dir(user_id):
     return os.path.join('Database', '.versions', f'user_{user_id}')
 
 
+def _ver_key(filename):
+    """Ключ версий документа: подпапки в имени файла версии недопустимы («/» → «__»)."""
+    return (filename or '').replace('\\', '/').replace('/', '__')
+
+
+def _doc_path(user_id, filename):
+    """Путь к файлу документа внутри папки БЗ пользователя (защита от '..' и symlink)."""
+    base = os.path.realpath(_docs_dir(user_id))
+    rel = (filename or '').replace('\\', '/').strip('/')
+    p = os.path.realpath(os.path.join(base, *rel.split('/'))) if rel else base
+    if p != base and not p.startswith(base + os.sep):
+        raise ValueError('путь вне папки документов')
+    return p
+
+
+def _prune_empty_dirs(path, stop):
+    """Удалить опустевшие подпапки после удаления файла (stop — корень БЗ, его не трогаем)."""
+    stop = os.path.realpath(stop)
+    d = os.path.dirname(os.path.realpath(path))
+    while d != stop and d.startswith(stop + os.sep):
+        try:
+            os.rmdir(d)
+        except OSError:
+            return
+        d = os.path.dirname(d)
+
+
 def _is_editable(filename):
     return filename.lower().endswith(EDITABLE_EXT)
 
@@ -1949,16 +1991,20 @@ def _doc_etag(path):
 
 def _save_file_version(user_id, filename, keep=EDIT_VERSIONS_KEEP):
     """Копия текущего файла в .versions перед перезаписью; храним последние keep."""
-    src = os.path.join(_docs_dir(user_id), filename)
+    try:
+        src = _doc_path(user_id, filename)
+    except ValueError:
+        return None
     if not os.path.isfile(src):
         return None
     vdir = _versions_dir(user_id)
     os.makedirs(vdir, exist_ok=True)
-    version = f"{filename}.{time.strftime('%Y%m%d-%H%M%S')}"
+    key = _ver_key(filename)
+    version = f"{key}.{time.strftime('%Y%m%d-%H%M%S')}"
     dst = os.path.join(vdir, version)
     shutil.copy2(src, dst)
     os.utime(dst, None)   # mtime = момент сохранения (для порядка чистки)
-    prefix = filename + '.'
+    prefix = key + '.'
     versions = sorted(v for v in os.listdir(vdir)
                       if v.startswith(prefix) and os.path.isfile(os.path.join(vdir, v)))
     for old in versions[:-keep]:
@@ -2027,11 +2073,14 @@ def get_document_text(doc_id):
     if not doc:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    filename = os.path.basename(doc['filename'])
+    filename = (doc['filename'] or '').replace('\\', '/')
     if not _is_editable(filename):
         return jsonify({'error': 'Этот формат нельзя править как текст — только скачать и загрузить заново'}), 400
 
-    path = os.path.join(_docs_dir(user_id), filename)
+    try:
+        path = _doc_path(user_id, filename)
+    except ValueError:
+        return jsonify({'error': 'Файл не найден на диске'}), 404
     if not os.path.isfile(path):
         return jsonify({'error': 'Файл не найден на диске'}), 404
 
@@ -2091,11 +2140,14 @@ def save_document_text(doc_id):
     if not doc:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    filename = os.path.basename(doc['filename'])
+    filename = (doc['filename'] or '').replace('\\', '/')
     if not _is_editable(filename):
         return jsonify({'error': 'Этот формат нельзя править как текст'}), 400
 
-    path = os.path.join(_docs_dir(user_id), filename)
+    try:
+        path = _doc_path(user_id, filename)
+    except ValueError:
+        return jsonify({'error': 'Файл не найден на диске'}), 404
     if not os.path.isfile(path):
         return jsonify({'error': 'Файл не найден на диске'}), 404
 
@@ -2152,12 +2204,12 @@ def list_document_versions(doc_id):
     if not doc:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    filename = os.path.basename(doc['filename'])
+    filename = (doc['filename'] or '').replace('\\', '/')
     if not _is_editable(filename):
         return jsonify({'error': 'Этот формат нельзя править как текст'}), 400
 
     vdir = _versions_dir(user_id)
-    prefix = filename + '.'
+    prefix = _ver_key(filename) + '.'
     versions = []
     if os.path.isdir(vdir):
         for v in sorted(os.listdir(vdir), reverse=True):
@@ -2184,7 +2236,7 @@ def restore_document_version(doc_id):
     if not doc:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    filename = os.path.basename(doc['filename'])
+    filename = (doc['filename'] or '').replace('\\', '/')
     if not _is_editable(filename):
         return jsonify({'error': 'Этот формат нельзя править как текст'}), 400
 
@@ -2193,10 +2245,13 @@ def restore_document_version(doc_id):
     vdir = _versions_dir(user_id)
     vpath = os.path.join(vdir, version)
     # Берём только имя из списка версий этого файла: защита от path traversal
-    if not version.startswith(filename + '.') or not os.path.isfile(vpath):
+    if not version.startswith(_ver_key(filename) + '.') or not os.path.isfile(vpath):
         return jsonify({'error': 'Версия не найдена'}), 404
 
-    path = os.path.join(_docs_dir(user_id), filename)
+    try:
+        path = _doc_path(user_id, filename)
+    except ValueError:
+        return jsonify({'error': 'Файл не найден на диске'}), 404
     if not os.path.isfile(path):
         return jsonify({'error': 'Файл не найден на диске'}), 404
 
