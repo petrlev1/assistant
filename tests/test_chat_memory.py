@@ -139,7 +139,7 @@ def _stub_rag(**settings):
     rag._setup_client = lambda: None
     rag._sanitize_text = lambda text: text
     rag._try_price_answer = lambda q: None
-    rag._try_qa_correction = lambda q: None
+    rag._find_qa_correction = lambda q: None
     rag.searches = []
     rag.price_queries = []
 
@@ -201,19 +201,75 @@ def test_ask_model_messages():
     check('прайс на follow-up отвечает по склейке с прошлым вопросом',
           out == 'ЦЕНА ИЗ ПРАЙСА' and len(seen) == 2, (out, seen))
 
-    # Исправление «вопрос-ответ» тоже получает шанс на склейке
+    # Исправление «вопрос-ответ»: склейка истории его НЕ подтягивает (только текущий вопрос)
     rag4 = _stub_rag()
     corr_seen = []
 
-    def corr(q):
+    def find_qa(q):
         corr_seen.append(q)
-        return 'ИСПРАВЛЕННЫЙ ОТВЕТ' if q == 'мощность насоса X? а второй?' else None
+        return {'question': 'мощность насоса X?', 'answer': 'ИСПРАВЛЕННЫЙ ОТВЕТ',
+                'score': 0.99, 'exact': False} if q.strip() == 'мощность насоса X?' else None
 
-    rag4._try_qa_correction = corr
+    rag4._find_qa_correction = find_qa
     out4 = rag4.ask_model('а второй?', user_prompt=None,
                           history=[{'role': 'user', 'message': 'мощность насоса X?'}])
-    check('исправление «вопрос-ответ» применяется и к склейке',
-          out4 == 'ИСПРАВЛЕННЫЙ ОТВЕТ', out4)
+    check('исправление ищется только по текущему вопросу, не по склейке истории',
+          corr_seen == ['а второй?'], corr_seen)
+    check('чужое исправление не подменяет ответ на другой вопрос',
+          out4.startswith('ОТВЕТ МОДЕЛИ'), out4)
+
+
+def test_qa_corrections():
+    """Исправление «✏️»: точный вопрос — дословно, похожий — проверенный факт в контексте."""
+    print('\n2b) Исправления «вопрос-ответ»: точное / похожее совпадение')
+    post = _PostRecorder()
+    rag_core.requests.post = post
+    hit = {'question': 'Мембранный элемент OV-ULP 2012-100 (100 галлонов в мин.) '
+                       'Для Аквафор осмо - 50 (100) подходит?',
+           'answer': 'Да, мембранный элемент OV-ULP 2012-100 подходит для Аквафор Осмо',
+           'score': 0.979, 'exact': False}
+
+    # 1) точное совпадение вопроса → готовый ответ дословно, без LLM
+    rag = _stub_rag()
+    rag._find_qa_correction = lambda q: dict(hit, exact=True)
+    before = len(post.payloads)
+    out = rag.ask_model(hit['question'], user_prompt=None)
+    check('точный вопрос: исправление дословно, без вызова LLM',
+          out.startswith('Да, мембранный элемент') and len(post.payloads) == before, out)
+    check('точный вопрос: источник newdatabase.csv в ответе', 'newdatabase.csv' in out, out)
+
+    # 2) тот же артикул, другой смысл («- описание») → отвечает модель, факт — в контексте
+    rag2 = _stub_rag()
+    rag2._find_qa_correction = lambda q: dict(hit)
+    out2 = rag2.ask_model(hit['question'] + ' - описание.', user_prompt='Ты — ассистент.')
+    sysmsg = post.payloads[-1]['messages'][0]['content']
+    check('похожий вопрос: отвечает модель, а не готовый текст',
+          out2.startswith('ОТВЕТ МОДЕЛИ'), out2)
+    check('похожий вопрос: проверенный ответ идёт первым в контексте',
+          'ПРОВЕРЕННЫЙ ОТВЕТ' in sysmsg and sysmsg.index('ПРОВЕРЕННЫЙ ОТВЕТ') < sysmsg.index('КОНТЕКСТ БАЗЫ'),
+          sysmsg[:300])
+    check('похожий вопрос: в промте правило про «вопрос о другом»',
+          'если вопрос о другом' in sysmsg.lower(), sysmsg[:400])
+    check('похожий вопрос: источник newdatabase.csv показан', 'newdatabase.csv' in out2, out2)
+
+    # 3) режим "answer" — прежнее поведение (дословно на любой похожий вопрос)
+    rag3 = _stub_rag(qa_correction_fuzzy_mode='answer')
+    rag3._find_qa_correction = lambda q: dict(hit)
+    out3 = rag3.ask_model(hit['question'] + ' - описание.', user_prompt=None)
+    check('режим answer: дословная выдача сохранена',
+          out3.startswith('Да, мембранный элемент'), out3)
+
+    # 4) дубль пары из результатов поиска вырезается из контекста
+    rag5 = _stub_rag()
+    rag5._find_qa_correction = lambda q: dict(hit)
+    dup = 'Вопрос — ' + hit['question'] + ', Ответ — ' + hit['answer'] + '.'
+    rag5.find_relevant_info = lambda query, top_k=None, alpha=None, alt_query=None: (
+        dup + '\nДРУГОЙ ФРАГМЕНТ БАЗЫ', ['doc.txt'])
+    rag5.ask_model(hit['question'] + ' - описание.', user_prompt=None)
+    sysmsg5 = post.payloads[-1]['messages'][0]['content']
+    check('строка newdatabase.csv не дублируется в контексте',
+          sysmsg5.count('Да, мембранный элемент') == 1 and 'ДРУГОЙ ФРАГМЕНТ БАЗЫ' in sysmsg5,
+          sysmsg5.count('Да, мембранный элемент'))
 
 
 # === 3) Слой БД ====================================================
@@ -456,6 +512,7 @@ def main():
     try:
         test_history_helpers()
         test_ask_model_messages()
+        test_qa_corrections()
         test_db_layer(uid)
         test_chat_label_follows_settings(uid)
         test_http_flow(uid)

@@ -30,11 +30,20 @@ logger = logging.getLogger(__name__)
 
 # === Исправления ответов пользователем (Вариант B) ===
 # Кнопка «✏️» у ответа в чате: неверный ответ правится, пара Вопрос-Ответ
-# сохраняется в Database/user_{id}/newdatabase.csv (CSV: «Вопрос,Ответ»). При повторном похожем
-# вопросе отвечаем исправлением напрямую (без LLM).
+# сохраняется в Database/user_{id}/newdatabase.csv (CSV: «Вопрос,Ответ»).
+# Точный вопрос → отвечаем исправлением дословно, без LLM.
+# Похожий по смыслу вопрос → исправление идёт в контекст как проверенный факт, отвечает модель
+# (вопрос с тем же артикулом может быть про другое: «… - описание», «… - цена»).
 QA_CORRECTION_FILE = "newdatabase.csv"
 QA_CORRECTION_THRESHOLD = 0.92  # мин. косинусная схожесть вопроса с исправлением (e5 даёт высокий базовый фон)
 QA_CORRECTION_MARGIN = 0.025  # мин. отрыв лучшего исправления от второго (при нескольких исправлениях)
+# Что делать при НЕточном совпадении вопроса (косинус >= порога):
+#   "context" — исправление идёт в контекст как проверенный факт (по умолчанию):
+#               вопрос «… - описание» получает описание, а не чужой ответ про совместимость;
+#   "answer"  — прежнее поведение: дословная выдача исправления на любой похожий вопрос.
+# e5 не разделяет эти случаи порогом: «…подходит?» vs «… - описание» = 0.979,
+# а честный перефраз того же вопроса = 0.961 (замерено на multilingual-e5-large).
+QA_CORRECTION_FUZZY_MODE = "context"
 
 # === Парсер прайс-листов ===
 
@@ -1909,11 +1918,11 @@ class RAGCore:
         except Exception as e:
             logger.error(f"❌ Ошибка эмбеддинга исправлений {QA_CORRECTION_FILE}: {e}")
 
-    def _try_qa_correction(self, question):
-        """Вариант B: ищем вопрос среди сохранённых исправлений пользователя.
+    def _find_qa_correction(self, question):
+        """Поиск сохранённого исправления под вопрос (без форматирования ответа).
 
-        Три уровня:
-          1) точное совпадение после нормализации (регистр/пробелы) → ответ однозначно;
+        Возвращает {"question", "answer", "score", "exact"} или None.
+          1) точное совпадение после нормализации (регистр/пробелы) → exact=True;
           2) иначе косинусная схожесть: best ≥ порог И, если исправлений несколько,
              отрыв от второго лучшего ≥ маржи (e5 даёт высокий фон для любых вопросов);
           3) иначе None → обычный RAG-путь (фрагменты newdatabase.csv всё равно в БЗ).
@@ -1921,11 +1930,12 @@ class RAGCore:
         if not self.qa_corrections or not question:
             return None
         try:
-            norm_q = " ".join(question.lower().split())
+            norm_q = _norm_question(question)
             for c in self.qa_corrections:
-                if " ".join(c["question"].lower().split()) == norm_q:
+                if _norm_question(c["question"]) == norm_q:
                     logger.info("✅ Исправление: точное совпадение вопроса")
-                    return self._format_correction_answer(c["answer"])
+                    return {"question": c["question"], "answer": c["answer"],
+                            "score": 1.0, "exact": True}
 
             q_emb = self.model.encode(question, convert_to_tensor=True)
             matrix = torch.stack([c["embedding"] for c in self.qa_corrections])
@@ -1944,11 +1954,36 @@ class RAGCore:
                     logger.info(f"ℹ️ Исправление не применено: маржа {margin:.3f} < {margin_need}")
                     return None
             corr = self.qa_corrections[best_idx]
-            logger.info(f"✅ Применено исправление (схожесть {best_score:.3f}): {corr['question']}")
-            return self._format_correction_answer(corr["answer"])
+            return {"question": corr["question"], "answer": corr["answer"],
+                    "score": best_score, "exact": False}
         except Exception as e:
             logger.error(f"❌ Ошибка поиска исправления: {e}")
             return None
+
+    @staticmethod
+    def _qa_fact_block(hit):
+        """Блок «проверенный ответ» для контекста модели (ставится первым в «Информация»)."""
+        answer = (hit.get("answer") or "").strip()
+        if not answer:
+            return ""
+        question = (hit.get("question") or "").strip()
+        return ("ПРОВЕРЕННЫЙ ОТВЕТ (исправлен сотрудником, приоритет выше остальных фрагментов):\n"
+                f"Вопрос: {question}\n"
+                f"Ответ: {answer}")
+
+    @staticmethod
+    def _drop_duplicate_qa_fragment(context, hit):
+        """Убирает из контекста строку newdatabase.csv той же пары — факт не должен дублироваться."""
+        norm_q = _norm_question(hit.get("question") or "")
+        if not context or not norm_q:
+            return context or ""
+        keep = []
+        for line in context.split("\n"):
+            low = _norm_question(line)
+            if low.startswith("вопрос") and norm_q in low:
+                continue
+            keep.append(line)
+        return "\n".join(keep)
 
     def _format_correction_answer(self, answer):
         """Исправленный ответ + ссылка на источник newdatabase.csv (или None)."""
@@ -2085,14 +2120,29 @@ class RAGCore:
                 price_answer += "\n\n⚠️ Отправка запросов к LLM моделям отключена."
             return price_answer
         
-        # Вариант B: пользователь исправил ответ → пара Вопрос-Ответ в newdatabase.txt.
-        # Похожий вопрос → отвечаем исправлением напрямую (без LLM и поиска по БЗ).
+        # Вариант B: пользователь исправил ответ → пара Вопрос-Ответ в newdatabase.csv.
+        # Совпадение ищем ТОЛЬКО по текущему вопросу: склейка истории (ctx_query) годится
+        # для поиска по БЗ, но не для готового ответа — иначе в одном диалоге исправление
+        # «липнет» к любому следующему сообщению.
+        #   точное совпадение            → отдаём исправление дословно (без LLM и поиска);
+        #   похожий по смыслу вопрос     → кладём его в контекст как проверенный факт
+        #                                  (qa_correction_fuzzy_mode="context", по умолчанию),
+        #                                  потому что вопрос может быть про другое
+        #                                  («… - описание», «… - цена», «аналоги?»);
+        #   режим "answer"               → прежнее поведение, дословно на любой похожий вопрос.
+        qa_fact = None
         if not self.settings.get("disable_qa_corrections", False):
-            correction_answer = self._try_qa_correction(question)
-            if not correction_answer and ctx_query:
-                correction_answer = self._try_qa_correction(ctx_query)
-            if correction_answer:
-                return correction_answer
+            hit = self._find_qa_correction(question)
+            if hit:
+                fuzzy_mode = self.settings.get("qa_correction_fuzzy_mode", QA_CORRECTION_FUZZY_MODE)
+                if hit["exact"] or fuzzy_mode == "answer":
+                    correction_answer = self._format_correction_answer(hit["answer"])
+                    if correction_answer:
+                        return correction_answer
+                elif self._qa_fact_block(hit):
+                    qa_fact = hit
+                    logger.info(f"🧩 Исправление передано в контекст (схожесть {hit['score']:.3f}): "
+                                f"{hit['question']}")
 
         # Проверяем настройку отключения поиска в базе знаний
         disable_kb_search = self.settings.get("disable_knowledge_base_search", False)
@@ -2115,7 +2165,16 @@ class RAGCore:
             logger.info(f"\n🔍 Переданный контекст моделям:\n{context}")
         else:
             logger.info("🔍 Поиск в базе знаний отключен. Запрос отправляется напрямую в LLM.")
-        
+
+        # Проверенный ответ — первым фрагментом контекста: модель опирается на него,
+        # но отвечает на фактически заданный вопрос.
+        if qa_fact:
+            fact_block = self._qa_fact_block(qa_fact)
+            context = self._drop_duplicate_qa_fragment(context, qa_fact)
+            context = fact_block + (f"\n\n{context}" if context else "")
+            if QA_CORRECTION_FILE not in source_files:
+                source_files = list(source_files) + [QA_CORRECTION_FILE]
+
         # Проверяем настройку отключения моделей LLM
         if self.settings.get("disable_llm_models", False):
             if disable_kb_search:
@@ -2141,7 +2200,16 @@ class RAGCore:
         else:
             logger.info("📝 Используется системный промт по умолчанию")
         
-        system_prompt = base_prompt + context_section
+        qa_rules = ""
+        if qa_fact:
+            qa_rules = (
+                "\n\nПроверенный ответ: в разделе «Информация» первым идёт блок «ПРОВЕРЕННЫЙ ОТВЕТ» — "
+                "ответ, который сотрудник уже исправил вручную. Если он отвечает на заданный вопрос — "
+                "опирайся на него как на главный факт. Если вопрос о другом (описание, характеристики, "
+                "цена, наличие) — отвечай на сам заданный вопрос по базе знаний, а проверенный ответ "
+                "не выдавай вместо ответа: упомяни его одной фразой и только если он уместен."
+            )
+        system_prompt = base_prompt + qa_rules + context_section
         # Очищаем текст от символов, не поддерживаемых ascii (проблема Windows)
         if '\u2026' in system_prompt:
             logger.info("⚠️ Найден символ \\u2026 в system_prompt, заменяю...")

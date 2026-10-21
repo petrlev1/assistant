@@ -174,6 +174,8 @@ SETTINGS_GROUPS = [
                    "llm_provider_api_key", "llm_openrouter_api_key"]),
     ("OCR", ["ocr_enabled", "ocr_model", "ocr_base_url", "ocr_dpi"]),
     ("Изображения", ["image_enabled", "image_model", "image_max_side"]),
+    ("Исправления ответов (✏️)", ["disable_qa_corrections", "qa_correction_fuzzy_mode",
+                                  "qa_correction_threshold", "qa_correction_margin"]),
     ("Telegram", ["telegram_bot_token"]),
     ("Caddy", ["caddy_path", "caddy_dir"]),
 ]
@@ -191,6 +193,11 @@ _KEY_HINTS = {
     "chat_memory_ttl_minutes": "целое 0–10080: разрыв диалога (0 — не разрывать по времени)",
     "chat_memory_context_questions": "целое 0–5: сколько прошлых вопросов склеивать для поиска по БЗ",
     "ocr_dpi": "целое число от 50 до 600 (рекомендуется 150)",
+    "disable_qa_corrections": "true/false — выключить исправления «✏️» целиком",
+    "qa_correction_fuzzy_mode": "context — на похожий вопрос отвечает LLM, исправление идёт фактом; "
+                                "answer — дословная выдача исправления на любой похожий вопрос",
+    "qa_correction_threshold": "число 0.0–1.0: мин. схожесть вопроса с исправлением (по умолчанию 0.92)",
+    "qa_correction_margin": "число 0.0–1.0: мин. отрыв лучшего исправления от второго (по умолчанию 0.025)",
     "disable_llm_models": "true/false",
     "disable_hybrid_search": "true/false",
     "disable_knowledge_base_search": "true/false",
@@ -221,7 +228,7 @@ _WEB_MODES = [
 
 # Булевы настройки (в меню выбираются стрелками true/false)
 _BOOL_KEYS = ("disable_llm_models", "disable_hybrid_search", "disable_knowledge_base_search", "ocr_enabled",
-              "image_enabled", "chat_memory_enabled", "chat_memory_external")
+              "image_enabled", "chat_memory_enabled", "chat_memory_external", "disable_qa_corrections")
 
 # Код, который исполняется в отдельном процессе Telegram-бота (токен читается из БД,
 # чтобы не передавать секрет через аргументы командной строки)
@@ -325,7 +332,12 @@ def validate_setting(key, value):
         if key == "chat_memory_context_questions" and not (0 <= v <= 5):
             return None, "память диалога: прошлых вопросов для поиска — от 0 до 5"
         return v, None
-    if key in ("search_alpha", "relevance_threshold"):
+    if key == "qa_correction_fuzzy_mode":
+        v = str(value).strip().lower()
+        if v not in ("context", "answer"):
+            return None, "ожидается context или answer"
+        return v, None
+    if key in ("search_alpha", "relevance_threshold", "qa_correction_threshold", "qa_correction_margin"):
         try:
             v = float(str(value).strip())
         except (TypeError, ValueError):
@@ -1604,6 +1616,15 @@ def _pick_value(key):
         if current and current not in models:
             models.insert(0, current)
         return _select(models, "Модель распознавания изображений:")
+    if key == "qa_correction_fuzzy_mode":
+        modes = [("context", "context — отвечает LLM, исправление идёт фактом в контекст"),
+                 ("answer", "answer — дословная выдача исправления на любой похожий вопрос")]
+        current = str(settings.get(key, "context") or "context")
+        picked = _select([label for _, label in modes], f"{key}:",
+                         selected=0 if current == "context" else 1)
+        if picked is None:
+            return None
+        return next(v for v, label in modes if label == picked)
     if key in _BOOL_KEYS:
         current = bool(settings.get(key, False))
         picked = _select(["true", "false"], f"{key}:", selected=0 if current else 1)
