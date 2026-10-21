@@ -541,7 +541,7 @@ def get_user_documents(user_id):
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
-            "SELECT id, filename, original_name, doc_group, created_at FROM user_documents WHERE user_id = %s ORDER BY created_at DESC",
+            "SELECT id, filename, original_name, doc_group, file_hash, created_at FROM user_documents WHERE user_id = %s ORDER BY created_at DESC",
             (user_id,),
         )
         docs = cur.fetchall()
@@ -551,6 +551,22 @@ def get_user_documents(user_id):
     except Exception as e:
         logger.error(f"Ошибка получения документов: {e}")
         return []
+
+
+def set_document_hash(doc_id, user_id, file_hash):
+    """Отпечаток содержимого файла (размер:mtime) — чтобы замечать правки без переименования."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE user_documents SET file_hash = %s WHERE id = %s AND user_id = %s",
+                    (file_hash, doc_id, user_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка обновления отпечатка документа: {e}")
+        return False
 
 
 def update_document_group(doc_id, user_id, doc_group):

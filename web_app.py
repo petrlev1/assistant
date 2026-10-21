@@ -19,7 +19,7 @@ import hmac
 from datetime import datetime
 from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows, IMAGE_EXTS, iter_kb_files
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_user_greeting, set_user_greeting, get_notify_email, set_notify_email, scope_has_history, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_user_greeting, set_user_greeting, get_notify_email, set_notify_email, scope_has_history, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats, set_document_hash
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      get_widget, sync_conversations, list_widget_conversations,
                      list_max_conversations, get_max_dialog,
@@ -906,30 +906,58 @@ def status():
 
 # === Управление документами пользователя ===
 
+def _file_signature(path):
+    """Отпечаток содержимого файла без чтения: «размер:mtime». Меняется при любой правке."""
+    try:
+        st = os.stat(path)
+        return f"{st.st_size}:{int(st.st_mtime)}"
+    except OSError:
+        return ''
+
+
 def _sync_user_documents(user_id):
     """Сверка папки БЗ (Database/user_<id>) с таблицей user_documents.
 
     Папка обходится рекурсивно (iter_kb_files): файл в подпапке регистрируется
     под относительным путём («Каталоги/фильтры.pdf»). Новые файлы добавляются,
-    записи без файла удаляются. Возвращает (added, removed) — списки имён.
+    записи без файла удаляются, а изменённое содержимое (размер:mtime не совпал
+    с сохранённым отпечатком) помечается как changed — правка файла в облаке,
+    на диске Z: или через scp тоже требует переиндексации, хотя имя не менялось.
+
+    Возвращает (added, removed, changed) — списки имён файлов.
     """
-    added, removed = [], []
+    added, removed, changed = [], [], []
     user_db_folder = os.path.join('Database', f'user_{user_id}')
     if not os.path.exists(user_db_folder):
-        return added, removed
-    files_on_disk = {os.path.relpath(p, user_db_folder).replace(os.sep, '/')
-                     for p in iter_kb_files(user_db_folder)}
+        return added, removed, changed
+    files_on_disk = {}
+    for p in iter_kb_files(user_db_folder):
+        files_on_disk[os.path.relpath(p, user_db_folder).replace(os.sep, '/')] = p
     db_docs = get_user_documents(user_id)
     db_filenames = {d['filename'] for d in db_docs}
-    for fname in files_on_disk:
+    for fname, path in files_on_disk.items():
         if fname not in db_filenames:
-            add_document(user_id, fname, fname)
+            sig = _file_signature(path)
+            add_document(user_id, fname, fname, file_hash=sig)
             added.append(fname)
     for doc in db_docs:
-        if doc['filename'] not in files_on_disk:
+        fname = doc['filename']
+        if fname not in files_on_disk:
             delete_document(doc['id'], user_id)
-            removed.append(doc['filename'])
-    return added, removed
+            removed.append(fname)
+            continue
+        sig = _file_signature(files_on_disk[fname])
+        if not sig:
+            continue
+        stored = doc.get('file_hash') or ''
+        if not stored:
+            # первый проход по старым документам: принимаем текущее состояние за исходное,
+            # чтобы не запускать полную переиндексацию всей базы на пустом месте
+            set_document_hash(doc['id'], user_id, sig)
+        elif sig != stored:
+            set_document_hash(doc['id'], user_id, sig)
+            changed.append(fname)
+    return added, removed, changed
 
 
 @app.route('/api/internal/kb-sync', methods=['POST'])
@@ -954,12 +982,14 @@ def internal_kb_sync():
         return jsonify({'error': 'bad request'}), 400
     if uid <= 0:
         return jsonify({'error': 'uid required'}), 400
-    added, removed = _sync_user_documents(uid)
-    if (added or removed) and rag_ready:
+    added, removed, changed = _sync_user_documents(uid)
+    if (added or removed or changed) and rag_ready:
         _reindex_user_async(uid)
     logger.info(f"☁️ облако: БЗ пользователя #{uid} синхронизирована "
-                f"(добавлено {len(added)}, удалено {len(removed)}; причина: {data.get('reason', '—')})")
-    return jsonify({'ok': True, 'added': len(added), 'removed': len(removed)})
+                f"(добавлено {len(added)}, удалено {len(removed)}, изменено {len(changed)}; "
+                f"причина: {data.get('reason', '—')})")
+    return jsonify({'ok': True, 'added': len(added), 'removed': len(removed),
+                    'changed': len(changed)})
 
 
 @app.route('/api/documents')
@@ -971,12 +1001,13 @@ def get_documents():
     user_id = session['user_id']
 
     # Синхронизируем файлы на диске с записями в БД (см. _sync_user_documents)
-    added_files, removed_files = _sync_user_documents(user_id)
-    # Состав базы знаний изменился (например, файл записал обход сайта или облако) —
-    # без переиндексации ассистент его не увидит: в памяти остаётся прежняя БЗ.
-    if added_files or removed_files:
+    added_files, removed_files, changed_files = _sync_user_documents(user_id)
+    # Состав базы знаний изменился (файл записал обход сайта, облако или правка на диске) —
+    # без переиндексации ассистент не увидит нового содержимого.
+    if added_files or removed_files or changed_files:
         logger.info(f"📄 Файлы на диске изменились (добавлено {len(added_files)}, "
-                    f"удалено {len(removed_files)}) — переиндексация БЗ пользователя {user_id}")
+                    f"удалено {len(removed_files)}, изменено {len(changed_files)}) — "
+                    f"переиндексация БЗ пользователя {user_id}")
         if rag_ready:
             _reindex_user_async(user_id)
 
@@ -1091,7 +1122,8 @@ def upload_document():
         preview = _read_text_preview(file_path)
         doc_group = detect_doc_group(filename, preview)
         # Добавляем запись в БД
-        success, doc_id = add_document(user_id, filename, filename, doc_group=doc_group)
+        success, doc_id = add_document(user_id, filename, filename,
+                                       file_hash=_file_signature(file_path), doc_group=doc_group)
         if not success:
             os.remove(file_path)
             results.append({'filename': filename, 'success': False, 'error': 'Ошибка при сохранении в БД'})
@@ -1197,7 +1229,8 @@ def _site_save_document(user_id, result):
 
     # Группа в «Документах»: у файла сайта — домен, у файла раздела — домен и раздел.
     group = _site_group_label(result['domain'], result.get('section') or '')
-    success, doc_id = add_document(user_id, filename, filename, doc_group=group)
+    success, doc_id = add_document(user_id, filename, filename,
+                                   file_hash=_file_signature(file_path), doc_group=group)
     if not success:
         raise RuntimeError(f'не удалось добавить документ {filename} в базу знаний')
 
