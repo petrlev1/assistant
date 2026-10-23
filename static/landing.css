@@ -231,7 +231,9 @@
 .prose h2 { font-size: 27px; line-height: 1.25; margin: 0 0 14px; color: #0f172a; }
 .prose h3 { font-size: 20px; margin: 26px 0 8px; color: #0f172a; }
 .prose p { color: #334155; line-height: 1.72; margin: 0 0 14px; font-size: 16px; }
-.prose ul, .prose ol { margin: 0 0 16px; padding-left: 22px; color: #334155; line-height: 1.7; }
+.prose ul, .prose ol { margin: 0 0 16px; padding-left: 24px; color: #334155; line-height: 1.7; }
+.prose ul { list-style: disc; }
+.prose ol { list-style: decimal; }
 .prose li { margin-bottom: 7px; }
 .prose .lead { font-size: 18px; color: #1e293b; }
 .cards3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 26px 0 8px; }
