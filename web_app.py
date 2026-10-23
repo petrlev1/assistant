@@ -13,10 +13,13 @@ import re
 import secrets
 import shutil
 import csv
+import base64
+import hashlib
+import hmac
 from datetime import datetime
-from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows, IMAGE_EXTS
+from rag_core import get_rag_system, get_user_rag, drop_user_rag, RAGSettings, DEFAULT_BASE_PROMPT, build_greeting, parse_price_list, detect_doc_group, _read_text_preview, QA_CORRECTION_FILE, parse_qa_pairs_file, _iter_csv_rows, IMAGE_EXTS, iter_kb_files
 from chat_logger import get_chat_logger
-from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_user_greeting, set_user_greeting, get_notify_email, set_notify_email, scope_has_history, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats
+from auth_db import init_db, register_user, login_user, init_chat_history, save_message, get_history, add_document, get_prompt_context, get_session_start, start_new_chat_session, get_user_greeting, set_user_greeting, get_notify_email, set_notify_email, scope_has_history, get_all_settings, set_settings, delete_document, get_user_documents, clear_chat_history, delete_message, delete_message_pair, get_user_prompt, set_user_prompt, get_price_files, replace_price_items, delete_price_items_for_file, update_document_group, init_query_analytics, save_query_analytics, get_analytics, delete_user, delete_user_analytics, get_all_users_with_stats, set_document_hash
 from auth_db import (init_widgets, create_widget, list_user_widgets, update_widget,
                      get_widget, sync_conversations, list_widget_conversations,
                      list_max_conversations, get_max_dialog,
@@ -386,6 +389,38 @@ def apple_touch_icon():
 
 
 # === Основные маршруты ===
+
+def _cloud_sso_conf():
+    """Адрес облака и общий секрет SSO — из db_config.json (вне git)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'db_config.json')
+    try:
+        with open(path, encoding='utf-8') as f:
+            conf = json.load(f)
+    except Exception:
+        conf = {}
+    return ((conf.get('cloud_url') or 'https://cloud.ragstone.ru').rstrip('/'),
+            conf.get('cloud_sso_secret') or '')
+
+
+@app.route('/cloud')
+def cloud_files():
+    """«Мои файлы»: одноразовый подписанный токен → облако со своей папкой (без второго пароля).
+
+    Формат токена одинаков с облаком (app/ragusers.py): base64url(json{uid,u,exp,n}).hmac.
+    """
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    base, secret = _cloud_sso_conf()
+    if not secret:
+        flash('Переход в облако не настроен: в db_config.json нет cloud_sso_secret', 'error')
+        return redirect(url_for('chat'))
+    payload = {'uid': int(session['user_id']), 'u': session.get('username') or '',
+               'exp': int(time.time()) + 120, 'n': secrets.token_urlsafe(12)}
+    b64 = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=False).encode()).decode().rstrip('=')
+    mac = hmac.new(secret.encode(), b64.encode(), hashlib.sha256).hexdigest()
+    return redirect(f"{base}/sso?t={b64}.{mac}")
+
 
 @app.route('/')
 def index():
@@ -913,6 +948,92 @@ def status():
 
 # === Управление документами пользователя ===
 
+def _file_signature(path):
+    """Отпечаток содержимого файла без чтения: «размер:mtime». Меняется при любой правке."""
+    try:
+        st = os.stat(path)
+        return f"{st.st_size}:{int(st.st_mtime)}"
+    except OSError:
+        return ''
+
+
+def _sync_user_documents(user_id):
+    """Сверка папки БЗ (Database/user_<id>) с таблицей user_documents.
+
+    Папка обходится рекурсивно (iter_kb_files): файл в подпапке регистрируется
+    под относительным путём («Каталоги/фильтры.pdf»). Новые файлы добавляются,
+    записи без файла удаляются, а изменённое содержимое (размер:mtime не совпал
+    с сохранённым отпечатком) помечается как changed — правка файла в облаке,
+    на диске Z: или через scp тоже требует переиндексации, хотя имя не менялось.
+
+    Возвращает (added, removed, changed) — списки имён файлов.
+    """
+    added, removed, changed = [], [], []
+    user_db_folder = os.path.join('Database', f'user_{user_id}')
+    if not os.path.exists(user_db_folder):
+        return added, removed, changed
+    files_on_disk = {}
+    for p in iter_kb_files(user_db_folder):
+        files_on_disk[os.path.relpath(p, user_db_folder).replace(os.sep, '/')] = p
+    db_docs = get_user_documents(user_id)
+    db_filenames = {d['filename'] for d in db_docs}
+    for fname, path in files_on_disk.items():
+        if fname not in db_filenames:
+            sig = _file_signature(path)
+            add_document(user_id, fname, fname, file_hash=sig)
+            added.append(fname)
+    for doc in db_docs:
+        fname = doc['filename']
+        if fname not in files_on_disk:
+            delete_document(doc['id'], user_id)
+            removed.append(fname)
+            continue
+        sig = _file_signature(files_on_disk[fname])
+        if not sig:
+            continue
+        stored = doc.get('file_hash') or ''
+        if not stored:
+            # первый проход по старым документам: принимаем текущее состояние за исходное,
+            # чтобы не запускать полную переиндексацию всей базы на пустом месте
+            set_document_hash(doc['id'], user_id, sig)
+        elif sig != stored:
+            set_document_hash(doc['id'], user_id, sig)
+            changed.append(fname)
+    return added, removed, changed
+
+
+@app.route('/api/internal/kb-sync', methods=['POST'])
+def internal_kb_sync():
+    """Внутренний вызов из облака (cloud.ragstone.ru): файл в папке БЗ изменился.
+
+    Подпись — HMAC-SHA256 от тела запроса общим секретом (cloud_sso_secret).
+    Делает ровно то же, что открытие «Мои документы» в кабинете: сверяет папку
+    с таблицей user_documents и запускает фоновую переиндексацию БЗ.
+    """
+    raw = request.get_data() or b'{}'
+    secret = _cloud_sso_conf()[1]
+    if not secret:
+        return jsonify({'error': 'внутренние вызовы не настроены'}), 403
+    expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(request.headers.get('X-Cloud-Signature', ''), expected):
+        return jsonify({'error': 'forbidden'}), 403
+    try:
+        data = json.loads(raw)
+        uid = int(data.get('uid') or 0)
+    except Exception:
+        return jsonify({'error': 'bad request'}), 400
+    if uid <= 0:
+        return jsonify({'error': 'uid required'}), 400
+    added, removed, changed = _sync_user_documents(uid)
+    if (added or removed or changed) and rag_ready:
+        _reindex_user_async(uid)
+    logger.info(f"☁️ облако: БЗ пользователя #{uid} синхронизирована "
+                f"(добавлено {len(added)}, удалено {len(removed)}, изменено {len(changed)}; "
+                f"причина: {data.get('reason', '—')})")
+    return jsonify({'ok': True, 'added': len(added), 'removed': len(removed),
+                    'changed': len(changed)})
+
+
 @app.route('/api/documents')
 def get_documents():
     """Список документов текущего пользователя"""
@@ -920,36 +1041,17 @@ def get_documents():
         return jsonify({'error': 'Необходима авторизация'}), 401
 
     user_id = session['user_id']
-    user_db_folder = os.path.join('Database', f'user_{user_id}')
 
-    # Синхронизируем файлы на диске с записями в БД
-    if os.path.exists(user_db_folder):
-        files_on_disk = set(os.listdir(user_db_folder))
-        db_docs = get_user_documents(user_id)
-        db_filenames = {d['filename'] for d in db_docs}
-
-        # Файлы, которые есть на диске, но нет в БД — добавляем
-        added_files = []
-        for fname in files_on_disk:
-            file_path = os.path.join(user_db_folder, fname)
-            if os.path.isfile(file_path) and fname not in db_filenames:
-                add_document(user_id, fname, fname)
-                added_files.append(fname)
-
-        # Файлы, которые есть в БД, но нет на диске — удаляем записи
-        removed_files = []
-        for doc in db_docs:
-            if doc['filename'] not in files_on_disk:
-                delete_document(doc['id'], user_id)
-                removed_files.append(doc['filename'])
-
-        # Состав базы знаний изменился (например, файл записал обход сайта) — без
-        # переиндексации ассистент его не увидит: в памяти остаётся прежняя БЗ.
-        if added_files or removed_files:
-            logger.info(f"📄 Файлы на диске изменились (добавлено {len(added_files)}, "
-                        f"удалено {len(removed_files)}) — переиндексация БЗ пользователя {user_id}")
-            if rag_ready:
-                _reindex_user_async(user_id)
+    # Синхронизируем файлы на диске с записями в БД (см. _sync_user_documents)
+    added_files, removed_files, changed_files = _sync_user_documents(user_id)
+    # Состав базы знаний изменился (файл записал обход сайта, облако или правка на диске) —
+    # без переиндексации ассистент не увидит нового содержимого.
+    if added_files or removed_files or changed_files:
+        logger.info(f"📄 Файлы на диске изменились (добавлено {len(added_files)}, "
+                    f"удалено {len(removed_files)}, изменено {len(changed_files)}) — "
+                    f"переиндексация БЗ пользователя {user_id}")
+        if rag_ready:
+            _reindex_user_async(user_id)
 
     # Возвращаем актуальный список
     docs = get_user_documents(user_id)
@@ -1062,7 +1164,8 @@ def upload_document():
         preview = _read_text_preview(file_path)
         doc_group = detect_doc_group(filename, preview)
         # Добавляем запись в БД
-        success, doc_id = add_document(user_id, filename, filename, doc_group=doc_group)
+        success, doc_id = add_document(user_id, filename, filename,
+                                       file_hash=_file_signature(file_path), doc_group=doc_group)
         if not success:
             os.remove(file_path)
             results.append({'filename': filename, 'success': False, 'error': 'Ошибка при сохранении в БД'})
@@ -1168,7 +1271,8 @@ def _site_save_document(user_id, result):
 
     # Группа в «Документах»: у файла сайта — домен, у файла раздела — домен и раздел.
     group = _site_group_label(result['domain'], result.get('section') or '')
-    success, doc_id = add_document(user_id, filename, filename, doc_group=group)
+    success, doc_id = add_document(user_id, filename, filename,
+                                   file_hash=_file_signature(file_path), doc_group=group)
     if not success:
         raise RuntimeError(f'не удалось добавить документ {filename} в базу знаний')
 
@@ -1631,9 +1735,13 @@ def delete_document_route(doc_id):
         return jsonify({'error': 'Документ не найден'}), 404
 
     # Удаляем файл
-    file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
-    if os.path.exists(file_path):
+    try:
+        file_path = _doc_path(user_id, doc_info['filename'])
+    except ValueError:
+        file_path = ''
+    if file_path and os.path.exists(file_path):
         os.remove(file_path)
+        _prune_empty_dirs(file_path, _docs_dir(user_id))
         logger.info(f"🗑️ Удалён файл: {file_path}")
 
     # Удаляем запись из БД
@@ -1664,7 +1772,10 @@ def download_document(doc_id):
     if not doc_info:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
+    try:
+        file_path = _doc_path(user_id, doc_info['filename'])
+    except ValueError:
+        return jsonify({'error': 'Файл не найден на диске'}), 404
     if not os.path.exists(file_path):
         return jsonify({'error': 'Файл не найден на диске'}), 404
 
@@ -1696,9 +1807,13 @@ def delete_documents_bulk():
         doc_info = by_id.get(doc_id)
         if not doc_info:
             continue
-        file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
-        if os.path.exists(file_path):
+        try:
+            file_path = _doc_path(user_id, doc_info['filename'])
+        except ValueError:
+            file_path = ''
+        if file_path and os.path.exists(file_path):
             os.remove(file_path)
+            _prune_empty_dirs(file_path, _docs_dir(user_id))
             logger.info(f"🗑️ Удалён файл: {file_path}")
         delete_document(doc_id, user_id)
         delete_price_items_for_file(user_id, doc_info['filename'])
@@ -1737,7 +1852,10 @@ def download_documents_bulk():
             doc_info = by_id.get(doc_id)
             if not doc_info:
                 continue
-            file_path = os.path.join('Database', f'user_{user_id}', doc_info['filename'])
+            try:
+                file_path = _doc_path(user_id, doc_info['filename'])
+            except ValueError:
+                continue
             if not os.path.exists(file_path):
                 continue
             # Уникализируем имя внутри архива (два файла с одинаковым именем)
@@ -1853,6 +1971,33 @@ def _versions_dir(user_id):
     return os.path.join('Database', '.versions', f'user_{user_id}')
 
 
+def _ver_key(filename):
+    """Ключ версий документа: подпапки в имени файла версии недопустимы («/» → «__»)."""
+    return (filename or '').replace('\\', '/').replace('/', '__')
+
+
+def _doc_path(user_id, filename):
+    """Путь к файлу документа внутри папки БЗ пользователя (защита от '..' и symlink)."""
+    base = os.path.realpath(_docs_dir(user_id))
+    rel = (filename or '').replace('\\', '/').strip('/')
+    p = os.path.realpath(os.path.join(base, *rel.split('/'))) if rel else base
+    if p != base and not p.startswith(base + os.sep):
+        raise ValueError('путь вне папки документов')
+    return p
+
+
+def _prune_empty_dirs(path, stop):
+    """Удалить опустевшие подпапки после удаления файла (stop — корень БЗ, его не трогаем)."""
+    stop = os.path.realpath(stop)
+    d = os.path.dirname(os.path.realpath(path))
+    while d != stop and d.startswith(stop + os.sep):
+        try:
+            os.rmdir(d)
+        except OSError:
+            return
+        d = os.path.dirname(d)
+
+
 def _is_editable(filename):
     return filename.lower().endswith(EDITABLE_EXT)
 
@@ -1921,16 +2066,20 @@ def _doc_etag(path):
 
 def _save_file_version(user_id, filename, keep=EDIT_VERSIONS_KEEP):
     """Копия текущего файла в .versions перед перезаписью; храним последние keep."""
-    src = os.path.join(_docs_dir(user_id), filename)
+    try:
+        src = _doc_path(user_id, filename)
+    except ValueError:
+        return None
     if not os.path.isfile(src):
         return None
     vdir = _versions_dir(user_id)
     os.makedirs(vdir, exist_ok=True)
-    version = f"{filename}.{time.strftime('%Y%m%d-%H%M%S')}"
+    key = _ver_key(filename)
+    version = f"{key}.{time.strftime('%Y%m%d-%H%M%S')}"
     dst = os.path.join(vdir, version)
     shutil.copy2(src, dst)
     os.utime(dst, None)   # mtime = момент сохранения (для порядка чистки)
-    prefix = filename + '.'
+    prefix = key + '.'
     versions = sorted(v for v in os.listdir(vdir)
                       if v.startswith(prefix) and os.path.isfile(os.path.join(vdir, v)))
     for old in versions[:-keep]:
@@ -1999,11 +2148,14 @@ def get_document_text(doc_id):
     if not doc:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    filename = os.path.basename(doc['filename'])
+    filename = (doc['filename'] or '').replace('\\', '/')
     if not _is_editable(filename):
         return jsonify({'error': 'Этот формат нельзя править как текст — только скачать и загрузить заново'}), 400
 
-    path = os.path.join(_docs_dir(user_id), filename)
+    try:
+        path = _doc_path(user_id, filename)
+    except ValueError:
+        return jsonify({'error': 'Файл не найден на диске'}), 404
     if not os.path.isfile(path):
         return jsonify({'error': 'Файл не найден на диске'}), 404
 
@@ -2063,11 +2215,14 @@ def save_document_text(doc_id):
     if not doc:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    filename = os.path.basename(doc['filename'])
+    filename = (doc['filename'] or '').replace('\\', '/')
     if not _is_editable(filename):
         return jsonify({'error': 'Этот формат нельзя править как текст'}), 400
 
-    path = os.path.join(_docs_dir(user_id), filename)
+    try:
+        path = _doc_path(user_id, filename)
+    except ValueError:
+        return jsonify({'error': 'Файл не найден на диске'}), 404
     if not os.path.isfile(path):
         return jsonify({'error': 'Файл не найден на диске'}), 404
 
@@ -2124,12 +2279,12 @@ def list_document_versions(doc_id):
     if not doc:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    filename = os.path.basename(doc['filename'])
+    filename = (doc['filename'] or '').replace('\\', '/')
     if not _is_editable(filename):
         return jsonify({'error': 'Этот формат нельзя править как текст'}), 400
 
     vdir = _versions_dir(user_id)
-    prefix = filename + '.'
+    prefix = _ver_key(filename) + '.'
     versions = []
     if os.path.isdir(vdir):
         for v in sorted(os.listdir(vdir), reverse=True):
@@ -2156,7 +2311,7 @@ def restore_document_version(doc_id):
     if not doc:
         return jsonify({'error': 'Документ не найден'}), 404
 
-    filename = os.path.basename(doc['filename'])
+    filename = (doc['filename'] or '').replace('\\', '/')
     if not _is_editable(filename):
         return jsonify({'error': 'Этот формат нельзя править как текст'}), 400
 
@@ -2165,10 +2320,13 @@ def restore_document_version(doc_id):
     vdir = _versions_dir(user_id)
     vpath = os.path.join(vdir, version)
     # Берём только имя из списка версий этого файла: защита от path traversal
-    if not version.startswith(filename + '.') or not os.path.isfile(vpath):
+    if not version.startswith(_ver_key(filename) + '.') or not os.path.isfile(vpath):
         return jsonify({'error': 'Версия не найдена'}), 404
 
-    path = os.path.join(_docs_dir(user_id), filename)
+    try:
+        path = _doc_path(user_id, filename)
+    except ValueError:
+        return jsonify({'error': 'Файл не найден на диске'}), 404
     if not os.path.isfile(path):
         return jsonify({'error': 'Файл не найден на диске'}), 404
 
