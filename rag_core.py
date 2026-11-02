@@ -23,6 +23,7 @@ import threading
 from datetime import datetime
 
 import model_catalog
+import review_scenario
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -423,6 +424,11 @@ class RAGSettings:
             "chat_memory_max_chars": 4000,       # бюджет символов на историю в промпте
             "chat_memory_ttl_minutes": 120,      # разрыв: старше N минут от последнего — не берём
             "chat_memory_context_questions": 2,  # сколько прошлых вопросов склеивать для поиска
+            # Сценарий «ответ на отзыв»: задача определяется по тексту, и в контекст
+            # ПЕРВЫМ блоком идут чеклист ответа + примеры ответов компании из БЗ
+            # («…Отзывы….csv», «Позитивные ответы….txt»). См. review_scenario.py
+            "review_scenario_enabled": True,
+            "review_examples_count": 3,          # сколько примеров подмешивать в контекст
             # Настройки OCR для сканированных PDF (DashScope qwen-vl-ocr)
             "ocr_enabled": False,
             "ocr_model": "qwen-vl-ocr",
@@ -1922,6 +1928,27 @@ class RAGCore:
         answer += "\n\n" + self._format_sources_note(sources)
         return answer
 
+    def _review_scenario(self, question):
+        """Блок сценария «ответ на отзыв»: (текст для контекста, имена файлов-примеров).
+
+        Пустая строка — сообщение не задача про отзыв (обычный RAG-путь не меняется).
+        Примеры берутся из файлов базы знаний пользователя, поэтому кэш инвалидируется
+        по mtime самих файлов (см. review_scenario.load_examples).
+        """
+        if not question or self.current_user_id is None:
+            return "", []
+        try:
+            user_dir = os.path.join("Database", f"user_{self.current_user_id}")
+            text, sources = review_scenario.build_block(
+                user_dir, question, self.settings.get("review_examples_count", 3))
+            if text:
+                logger.info(f"📝 Сценарий «ответ на отзыв»: "
+                            f"примеры — {', '.join(sources) if sources else 'нет файлов'}")
+            return text, sources
+        except Exception as e:
+            logger.error(f"❌ Ошибка сценария «ответ на отзыв»: {e}")
+            return "", []
+
     def _load_qa_corrections(self):
         """Загрузка исправлений Вопрос-Ответ из newdatabase.csv пользователя.
 
@@ -2150,10 +2177,18 @@ class RAGCore:
         else:
             ctx_query = None
 
+        # Сценарий «ответ на отзыв»: чеклист ответа + примеры ответов компании из БЗ.
+        # Для такой задачи точные пути ниже не годятся: вопрос не про цену, а сохранённая
+        # пара «Вопрос-Ответ» относится к другому товару — но при этом обычный поиск
+        # приносит каталог, а не примеры ответов на отзывы.
+        scenario_block, scenario_sources = "", []
+        if self.settings.get("review_scenario_enabled", True):
+            scenario_block, scenario_sources = self._review_scenario(question)
+
         # Точный путь: ценовой вопрос → поиск по прайс-листу (PostgreSQL).
         # Если найдено — отвечаем фактами из таблицы без LLM.
-        price_answer = self._try_price_answer(question)
-        if not price_answer and ctx_query:
+        price_answer = None if scenario_block else self._try_price_answer(question)
+        if not price_answer and ctx_query and not scenario_block:
             # Follow-up про цену («а второй сколько стоит?») — ищем по склейке с прошлым вопросом
             price_answer = self._try_price_answer(ctx_query)
         if price_answer:
@@ -2172,7 +2207,7 @@ class RAGCore:
         #                                  («… - описание», «… - цена», «аналоги?»);
         #   режим "answer"               → прежнее поведение, дословно на любой похожий вопрос.
         qa_fact = None
-        if not self.settings.get("disable_qa_corrections", False):
+        if not scenario_block and not self.settings.get("disable_qa_corrections", False):
             hit = self._find_qa_correction(question)
             if hit:
                 fuzzy_mode = self.settings.get("qa_correction_fuzzy_mode", QA_CORRECTION_FUZZY_MODE)
@@ -2206,6 +2241,14 @@ class RAGCore:
             logger.info(f"\n🔍 Переданный контекст моделям:\n{context}")
         else:
             logger.info("🔍 Поиск в базе знаний отключен. Запрос отправляется напрямую в LLM.")
+
+        # Сценарий «ответ на отзыв» — первым в «Информации»: чеклист важнее фрагментов
+        # каталога, а примеры ответов задают стиль. Файлы-примеры — в «Источники».
+        if scenario_block:
+            context = scenario_block + (f"\n\n{context}" if context else "")
+            for name in scenario_sources:
+                if name not in source_files:
+                    source_files = list(source_files) + [name]
 
         # Проверенный ответ — первым фрагментом контекста: модель опирается на него,
         # но отвечает на фактически заданный вопрос.
@@ -2250,7 +2293,16 @@ class RAGCore:
                 "цена, наличие) — отвечай на сам заданный вопрос по базе знаний, а проверенный ответ "
                 "не выдавай вместо ответа: упомяни его одной фразой и только если он уместен."
             )
-        system_prompt = base_prompt + qa_rules + context_section
+        scenario_rules = ""
+        if scenario_block:
+            scenario_rules = (
+                "\n\nСценарий «ответ на отзыв»: в разделе «Информация» первым идёт блок "
+                "«СЦЕНАРИЙ: ОТВЕТ НА ОТЗЫВ» — это обязательная процедура ответа и примеры стиля. "
+                "Пройди шаги по порядку и напиши готовый публичный ответ. Не пересказывай "
+                "характеристики товара и не оправдывайся общими словами о качестве: клиент "
+                "пишет о проблеме, ответ должен вести к её решению."
+            )
+        system_prompt = base_prompt + qa_rules + scenario_rules + context_section
         # Очищаем текст от символов, не поддерживаемых ascii (проблема Windows)
         if '\u2026' in system_prompt:
             logger.info("⚠️ Найден символ \\u2026 в system_prompt, заменяю...")
