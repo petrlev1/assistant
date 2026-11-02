@@ -698,66 +698,6 @@ def split_long_fragments(fragments, max_chars=CHUNK_MAX_CHARS):
     return out
 
 
-# === Заголовки «# Раздел» в .txt: контекстный префикс фрагмента ===
-# Заголовки в индекс отдельными фрагментами не идут (это разметка для человека), но и
-# терять их нельзя: именно в них лежит ответ на обзорный вопрос — «# Термочехлы …
-# Серия Стандарт — однослойные». Раньше такие строки просто выбрасывались, и описание
-# серии распадалось на 7 коротких фрагментов без единого упоминания серии рядом с
-# «видами». Замер на боевой базе (user_2): строки про Стандарт стояли на рангах 167–2104
-# и не попадали в top-30 даже на прямой вопрос «Какие виды термочехлов у вас есть?».
-# Теперь заголовок становится префиксом контекста для строк своего раздела:
-#   [Термочехлы Aquasegmentum Серия Стандарт — однослойные термочехлы.] <строка>
-HEADING_PREFIX_MAX_CHARS = 120
-
-# Служебные шапки файлов (URL, «Файл:», «Модель:», autodescription) — не раздел:
-# в префиксе они только засоряют лексический поиск.
-_HEADING_SKIP_RE = re.compile(
-    r"^\[?(?:сайт|файл|модель|источник|url|источник данных|метаданные|оглавление|"
-    r"содержание|описание изображения|текст на изображении)\b", re.I)
-
-# В заголовках сайта-каталога URL идёт хвостом: «# Купить X — https://…». Хвост выбрасываем,
-# название страницы оставляем — именно оно называет раздел («Купить Стерилизатор UV-12 GPM»).
-_HEADING_URL_RE = re.compile(r"\s*[—–-]?\s*(?:https?://|www\.)\S+", re.I)
-
-
-def _heading_text(raw_line):
-    """Текст заголовка-раздела из строки .txt ('' — если это не полезный заголовок)."""
-    s = (raw_line or "").strip()
-    if not s.startswith("#"):
-        return ""
-    text = s.lstrip("#").strip()
-    if not text:
-        return ""
-    text = _HEADING_URL_RE.sub("", text).strip(" —–-|,;")
-    if len(text) < 3:
-        return ""
-    if _HEADING_SKIP_RE.match(text):
-        return ""
-    if len(text) > HEADING_PREFIX_MAX_CHARS:
-        cut = text[:HEADING_PREFIX_MAX_CHARS]
-        cut = cut.rsplit(" ", 1)[0] if " " in cut else cut
-        text = cut.rstrip(" .,;:-—") + "…"
-    return text
-
-
-def _txt_fragments(lines):
-    """Строки .txt → фрагменты; заголовок раздела становится префиксом в квадратных скобках.
-
-    Поведение для файлов без заголовков не меняется: строки идут как есть.
-    """
-    out = []
-    heading = ""
-    for raw in lines or []:
-        s = (raw or "").strip()
-        if not s:
-            continue
-        if s.startswith("#"):
-            heading = _heading_text(s)
-            continue
-        out.append(f"[{heading}] {s}" if heading else s)
-    return out
-
-
 class RAGCore:
     def __init__(self, user_id=None):
         """Инициализация RAG-системы"""
@@ -875,8 +815,10 @@ class RAGCore:
             txt_knowledge = []
             try:
                 with open(txt_file, "r", encoding="utf-8") as file:
-                    # Те же правила, что для .txt пользователя: заголовок → префикс раздела.
-                    txt_knowledge = _txt_fragments(file)
+                    for i, line in enumerate(file, 1):
+                        line = line.strip()
+                        if line:
+                            txt_knowledge.append(line)
                 if txt_knowledge:
                     logger.info(f"✅ Загружено {len(txt_knowledge)} строк из {txt_file}")
                     all_knowledge[txt_file] = txt_knowledge
@@ -1305,11 +1247,12 @@ class RAGCore:
         try:
             if file_path.lower().endswith(".txt"):
                 with open(file_path, "r", encoding="utf-8") as file:
-                    # Заголовки «# Раздел» отдельными фрагментами не индексируются, но и не
-                    # теряются: заголовок становится префиксом контекста для строк раздела
-                    # (см. _txt_fragments). Иначе описание серии распадалось на куски без
-                    # имени серии и не находилось на обзорный вопрос.
-                    lines = _txt_fragments(file)
+                    # Строки-заголовки («# Раздел», «# Сайт — https://...») в индекс не идут:
+                    # это разметка файла для человека, а не факт для базы знаний.
+                    # Формат БЗ их разрешает (см. навык rag-knowledge-base-formatting),
+                    # поэтому фильтр обязан быть здесь — иначе заголовки висят в поиске мусором.
+                    lines = [line.strip() for line in file
+                             if line.strip() and not line.lstrip().startswith('#')]
                     if lines:
                         logger.info(f"✅ Загружено {len(lines)} строк из {os.path.basename(file_path)}")
                         all_knowledge[file_path] = lines
