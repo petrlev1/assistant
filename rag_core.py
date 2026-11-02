@@ -712,8 +712,12 @@ HEADING_PREFIX_MAX_CHARS = 120
 # Служебные шапки файлов (URL, «Файл:», «Модель:», autodescription) — не раздел:
 # в префиксе они только засоряют лексический поиск.
 _HEADING_SKIP_RE = re.compile(
-    r"^(?:сайт|файл|модель|источник|url|источник данных|описание изображения|"
-    r"текст на изображении)\b", re.I)
+    r"^\[?(?:сайт|файл|модель|источник|url|источник данных|метаданные|оглавление|"
+    r"содержание|описание изображения|текст на изображении)\b", re.I)
+
+# В заголовках сайта-каталога URL идёт хвостом: «# Купить X — https://…». Хвост выбрасываем,
+# название страницы оставляем — именно оно называет раздел («Купить Стерилизатор UV-12 GPM»).
+_HEADING_URL_RE = re.compile(r"\s*[—–-]?\s*(?:https?://|www\.)\S+", re.I)
 
 
 def _heading_text(raw_line):
@@ -722,9 +726,12 @@ def _heading_text(raw_line):
     if not s.startswith("#"):
         return ""
     text = s.lstrip("#").strip()
+    if not text:
+        return ""
+    text = _HEADING_URL_RE.sub("", text).strip(" —–-|,;")
     if len(text) < 3:
         return ""
-    if _HEADING_SKIP_RE.match(text) or re.search(r"https?://|www\.", text, re.I):
+    if _HEADING_SKIP_RE.match(text):
         return ""
     if len(text) > HEADING_PREFIX_MAX_CHARS:
         cut = text[:HEADING_PREFIX_MAX_CHARS]
