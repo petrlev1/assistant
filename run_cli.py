@@ -147,6 +147,8 @@ _DEFAULTS = {
     "chat_memory_max_chars": 4000,
     "chat_memory_ttl_minutes": 120,
     "chat_memory_context_questions": 2,
+    "review_scenario_enabled": True,
+    "review_examples_count": 3,
     "telegram_bot_token": "",
     "llm_provider_api_key": "",
     "llm_openrouter_api_key": "",
@@ -170,6 +172,7 @@ SETTINGS_GROUPS = [
     ("Память диалога", ["chat_memory_enabled", "chat_memory_external", "chat_memory_max_messages",
                         "chat_memory_max_chars", "chat_memory_ttl_minutes",
                         "chat_memory_context_questions"]),
+    ("Сценарий: ответ на отзыв", ["review_scenario_enabled", "review_examples_count"]),
     ("API (LLM)", ["llm_provider", "llm_model", "llm_base_url", "llm_api_key",
                    "llm_provider_api_key", "llm_openrouter_api_key"]),
     ("OCR", ["ocr_enabled", "ocr_model", "ocr_base_url", "ocr_dpi"]),
@@ -192,6 +195,8 @@ _KEY_HINTS = {
     "chat_memory_max_chars": "целое 500–20000: бюджет символов на историю в промпте",
     "chat_memory_ttl_minutes": "целое 0–10080: разрыв диалога (0 — не разрывать по времени)",
     "chat_memory_context_questions": "целое 0–5: сколько прошлых вопросов склеивать для поиска по БЗ",
+    "review_scenario_enabled": "true/false — на задачу «ответ на отзыв» подмешивать чеклист и примеры ответов из БЗ",
+    "review_examples_count": "целое 1–10: сколько примеров ответов на отзывы класть в контекст",
     "ocr_dpi": "целое число от 50 до 600 (рекомендуется 150)",
     "disable_qa_corrections": "true/false — выключить исправления «✏️» целиком",
     "qa_correction_fuzzy_mode": "context — на похожий вопрос отвечает LLM, исправление идёт фактом; "
@@ -228,7 +233,8 @@ _WEB_MODES = [
 
 # Булевы настройки (в меню выбираются стрелками true/false)
 _BOOL_KEYS = ("disable_llm_models", "disable_hybrid_search", "disable_knowledge_base_search", "ocr_enabled",
-              "image_enabled", "chat_memory_enabled", "chat_memory_external", "disable_qa_corrections")
+              "image_enabled", "chat_memory_enabled", "chat_memory_external", "disable_qa_corrections",
+              "review_scenario_enabled")
 
 # Код, который исполняется в отдельном процессе Telegram-бота (токен читается из БД,
 # чтобы не передавать секрет через аргументы командной строки)
@@ -310,7 +316,8 @@ def validate_setting(key, value):
     При неверном типе/диапазоне возвращает (None, ошибка) — значение не сохраняется."""
     if key in ("search_top_k", "max_context_fragments", "ocr_dpi", "image_max_side",
                "chat_memory_max_messages", "chat_memory_max_chars",
-               "chat_memory_ttl_minutes", "chat_memory_context_questions"):
+               "chat_memory_ttl_minutes", "chat_memory_context_questions",
+               "review_examples_count"):
         try:
             v = int(str(value).strip())
         except (TypeError, ValueError):
@@ -331,6 +338,8 @@ def validate_setting(key, value):
             return None, "память диалога: разрыв должен быть от 0 до 10080 минут (0 — без разрыва)"
         if key == "chat_memory_context_questions" and not (0 <= v <= 5):
             return None, "память диалога: прошлых вопросов для поиска — от 0 до 5"
+        if key == "review_examples_count" and not (1 <= v <= 10):
+            return None, "сценарий «ответ на отзыв»: примеров — от 1 до 10"
         return v, None
     if key == "qa_correction_fuzzy_mode":
         v = str(value).strip().lower()
