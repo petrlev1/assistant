@@ -579,6 +579,9 @@ def blog_article(slug):
             md_text = f.read()
     except OSError:
         abort(404)
+    # В markdown первая строка — заголовок статьи; на странице H1 уже есть из шаблона,
+    # поэтому снимаем его, чтобы не получать два H1 (поисковики считают это ошибкой).
+    md_text = re.sub(r'\A\s*#\s+[^\n]*\n', '', md_text, count=1)
     content_html = docs_renderer.render(md_text)
     related_items = [(u, _related_title(u)) for u in meta.get('related', [])]
     schema = {
