@@ -41,6 +41,7 @@ import max_bot
 import site_crawler
 import model_catalog
 from landing_pages import LANDING_PAGES, ORDER, SOLUTIONS_INTRO
+import articles as blog
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -503,6 +504,113 @@ for _slug in ORDER:
                      view_func=_landing_view(_slug))
 
 
+# === Блог: статьи под информационные запросы (см. articles.py) ===
+_MONTHS_RU = ('января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+              'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря')
+
+
+def _ru_date(iso):
+    """2026-11-03 → «3 ноября 2026» (для карточек и подзаголовка статьи)."""
+    try:
+        y, m, d = (int(x) for x in iso.split('-'))
+        return f'{d} {_MONTHS_RU[m - 1]} {y}'
+    except (ValueError, IndexError):
+        return iso
+
+
+def _related_title(url):
+    """Человеческое название для ссылки «что ещё почитать»."""
+    static_titles = {'/prices': 'Тарифы', '/docs': 'Документация', '/resheniya': 'Все решения',
+                     '/blog': 'Блог'}
+    if url in static_titles:
+        return static_titles[url]
+    if url.startswith('/blog/'):
+        slug = url[len('/blog/'):]
+        return blog.ARTICLES.get(slug, {}).get('h1', slug)
+    slug = url.lstrip('/')
+    if slug in LANDING_PAGES:
+        return LANDING_PAGES[slug]['h1']
+    return url
+
+
+@app.route('/blog')
+def blog_index():
+    """Список статей: единственный вход в блог, чтобы не плодить дубли в индексе."""
+    items = []
+    for slug in blog.ORDER:
+        a = dict(blog.ARTICLES[slug])
+        a['slug'] = slug
+        a['date_ru'] = _ru_date(a['date'])
+        items.append(a)
+    schema = {
+        '@context': 'https://schema.org',
+        '@type': 'Blog',
+        'name': 'Блог RAGSTONE',
+        'url': SITE_BASE_URL + '/blog',
+        'inLanguage': 'ru-RU',
+        'description': 'Практика внедрения ИИ в работу с документами компании.',
+        'blogPost': [{'@type': 'BlogPosting', 'headline': a['h1'],
+                      'url': f'{SITE_BASE_URL}/blog/{a["slug"]}',
+                      'datePublished': a['date']} for a in items],
+    }
+    return render_template('blog.html',
+                           articles=items,
+                           intro=blog.BLOG_INTRO,
+                           page_title='Блог RAGSTONE: практика внедрения ИИ в документах',
+                           page_description=('Статьи о том, как внедрять ИИ-ассистента по документам: '
+                                             'выбор базы знаний, первый сценарий, план пилота на две недели.'),
+                           canonical=SITE_BASE_URL + '/blog',
+                           site_base=SITE_BASE_URL,
+                           schema_json=json.dumps(schema, ensure_ascii=False),
+                           logged_in='user_id' in session,
+                           username=session.get('username', ''))
+
+
+@app.route('/blog/<slug>')
+def blog_article(slug):
+    """Статья из articles/<slug>.md; markdown рендерит docs_renderer (тот же, что в /docs)."""
+    if slug not in blog.ARTICLES:
+        abort(404)
+    meta = dict(blog.ARTICLES[slug])
+    meta['slug'] = slug
+    meta['date_ru'] = _ru_date(meta['date'])
+    try:
+        with open(os.path.join(_BASE_DIR, 'articles', f'{slug}.md'), 'r', encoding='utf-8') as f:
+            md_text = f.read()
+    except OSError:
+        abort(404)
+    content_html = docs_renderer.render(md_text)
+    related_items = [(u, _related_title(u)) for u in meta.get('related', [])]
+    schema = {
+        '@context': 'https://schema.org',
+        '@graph': [
+            {'@type': 'Organization', 'name': 'RAGSTONE', 'url': SITE_BASE_URL},
+            {'@type': 'BlogPosting', 'headline': meta['h1'], 'description': meta['description'],
+             'url': f'{SITE_BASE_URL}/blog/{slug}', 'inLanguage': 'ru-RU',
+             'datePublished': meta['date'], 'dateModified': meta['updated'],
+             'author': {'@type': 'Organization', 'name': 'RAGSTONE'},
+             'publisher': {'@type': 'Organization', 'name': 'RAGSTONE'},
+             'mainEntityOfPage': f'{SITE_BASE_URL}/blog/{slug}'},
+            {'@type': 'BreadcrumbList', 'itemListElement': [
+                {'@type': 'ListItem', 'position': 1, 'name': 'Главная', 'item': SITE_BASE_URL},
+                {'@type': 'ListItem', 'position': 2, 'name': 'Блог', 'item': SITE_BASE_URL + '/blog'},
+                {'@type': 'ListItem', 'position': 3, 'name': meta['h1'],
+                 'item': f'{SITE_BASE_URL}/blog/{slug}'}]},
+        ],
+    }
+    return render_template('article.html',
+                           page=meta,
+                           content_html=content_html,
+                           related_items=related_items,
+                           page_title=meta['title'],
+                           page_description=meta['description'],
+                           canonical=f'{SITE_BASE_URL}/blog/{slug}',
+                           site_base=SITE_BASE_URL,
+                           schema_json=json.dumps(schema, ensure_ascii=False),
+                           logged_in='user_id' in session,
+                           username=session.get('username', ''))
+
+
 # === Заявки с сайта (форма обратной связи вместо mailto на /prices и лендинге) ===
 _LEAD_THANKS = "Заявка отправлена. Спасибо! Ответим в рабочее время."
 _LEAD_NAME_MAX = 120
@@ -685,6 +793,10 @@ def sitemap_xml():
     # Лендинги решений: lastmod — дата правки текста (landing_pages.py), а не mtime шаблона.
     for _slug in ORDER:
         entries.append(('/' + _slug, LANDING_PAGES[_slug]['updated']))
+    # Блог: статьи обновляются независимо от шаблонов — дата из articles.py.
+    entries.append(('/blog', max(blog.ARTICLES[s]['updated'] for s in blog.ORDER)))
+    for _slug in blog.ORDER:
+        entries.append(('/blog/' + _slug, blog.ARTICLES[_slug]['updated']))
     for slug, _title in DOCS_PAGES:
         url = '/docs' if slug == 'index' else f'/docs/{slug}'
         entries.append((url, _file_lastmod('docs', f'{slug}.md')))

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ page_title }}</title>
+<link rel="icon" href="{{ url_for('static', filename='img/favicon.svg') }}" type="image/svg+xml">
+<link rel="icon" href="{{ url_for('static', filename='img/favicon-32x32.png') }}" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta name="description" content="{{ page_description }}">
+<link rel="canonical" href="{{ canonical }}">
+<meta name="robots" content="index, follow">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="RAGSTONE">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:url" content="{{ canonical }}">
+<meta property="og:title" content="{{ page_title }}">
+<meta property="og:description" content="{{ page_description }}">
+<meta property="og:image" content="{{ site_base }}/static/img/hero.webp">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="{{ url_for('static', filename='landing.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='lead_form.css') }}">
+<script type="application/ld+json">
+{{ schema_json|safe }}
+</script>
+</head>
+<body>
+
+<header class="top">
+  <div class="container">
+    <a href="/" class="logo">RAGSTONE</a>
+    <nav class="nav" id="mainNav">
+      <a href="/resheniya">Решения</a>
+      <a href="/blog">Блог</a>
+      <a href="/prices">Тарифы</a>
+      <a href="/docs">Документация</a>
+      {% if logged_in %}
+      <a href="/chat" class="btn btn-ghost" style="padding:8px 18px;" title="Перейти в чат">👤 {{ username }}</a>
+      {% else %}
+      <a href="/login" class="btn btn-ghost" style="padding:8px 18px;">Войти</a>
+      {% endif %}
+    </nav>
+    {% if logged_in %}
+    <a href="/chat" class="btn btn-ghost mobile-cta" title="Перейти в чат">👤 {{ username }}</a>
+    {% else %}
+    <a href="/login" class="btn btn-ghost mobile-cta">Войти</a>
+    {% endif %}
+    <button type="button" class="burger" id="burger" aria-controls="mainNav" aria-expanded="false" aria-label="Меню">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<section class="hero compact" id="top">
+  <div class="container">
+    <p class="crumbs"><a href="/">Главная</a> → Блог</p>
+    <h1>Блог RAGSTONE</h1>
+    <p class="sub">{{ intro }}</p>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="blog-list">
+      {% for a in articles %}
+      <article class="blog-item">
+        <p class="blog-meta">{{ a.date_ru }} · {{ a.minutes }} мин · {% for t in a.tags %}<span class="tag">{{ t }}</span>{% endfor %}</p>
+        <h2><a href="/blog/{{ a.slug }}">{{ a.h1 }}</a></h2>
+        <p>{{ a.excerpt }}</p>
+        <a href="/blog/{{ a.slug }}" style="color:#475ec2;font-weight:600;font-size:14px;">Читать →</a>
+      </article>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="container">
+    <div class="sec-title" style="color:#c7d2fe;">Не статья, а задача?</div>
+    <h2 class="sec-h2">Соберём ассистента по вашим документам</h2>
+    <p>Посмотрите, под какие сценарии есть готовые решения.</p>
+    <a href="/resheniya" class="btn">Смотреть решения</a>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <span>RAGSTONE — корпоративная RAG-платформа</span>
+    <span><a href="/resheniya" style="color:#cbd5e1;">Решения</a> · <a href="/prices" style="color:#cbd5e1;">Тарифы</a> · <a href="/docs" style="color:#cbd5e1;">Документация</a></span>
+    <span><button type="button" class="lead-link" style="color:#cbd5e1;" data-lead-open data-lead-source="Блог → футер">Написать нам</button></span>
+  </div>
+</footer>
+
+{% include '_lead_form.html' %}
+<script src="{{ url_for('static', filename='lead_form.js') }}"></script>
+
+<script>
+  (function () {
+    var nav = document.getElementById('mainNav');
+    var btn = document.getElementById('burger');
+    if (!nav || !btn) return;
+    function setOpen(open) {
+      nav.classList.toggle('open', open);
+      btn.classList.toggle('open', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    btn.addEventListener('click', function (e) { e.stopPropagation(); setOpen(!nav.classList.contains('open')); });
+    nav.addEventListener('click', function (e) { if (e.target.tagName === 'A') setOpen(false); });
+    document.addEventListener('click', function (e) { if (nav.classList.contains('open') && !e.target.closest('.top')) setOpen(false); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+    window.addEventListener('resize', function () { if (window.innerWidth > 820) setOpen(false); });
+  })();
+</script>
+
+{% include '_metrika.html' %}
+</body>
+</html>

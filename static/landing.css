@@ -252,3 +252,30 @@
   .cards3 { grid-template-columns: 1fr; }
   .hero.compact h1 { font-size: 29px; }
 }
+
+
+/* ===== блог ===== */
+.blog-list { display: grid; gap: 18px; max-width: 900px; }
+.blog-item { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 22px 24px; box-shadow: 0 6px 18px rgba(15,23,42,.05); }
+.blog-item h2 { font-size: 22px; margin: 0 0 8px; line-height: 1.3; }
+.blog-item h2 a { color: #0f172a; text-decoration: none; }
+.blog-item h2 a:hover { color: #475ec2; }
+.blog-item p { margin: 0 0 14px; color: #475569; line-height: 1.65; }
+.blog-meta { font-size: 13px; color: #64748b; margin: 0 0 10px; }
+.tag { display: inline-block; font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #eef2ff; color: #3b4fa8; margin-right: 6px; }
+.article-body { max-width: 820px; }
+.article-body h2 { margin-top: 34px; }
+.article-body h3 { margin-top: 24px; }
+.article-body table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 15px; }
+.article-body th, .article-body td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; vertical-align: top; }
+.article-body th { background: #f8fafc; }
+.article-body blockquote { border-left: 3px solid #c7d2fe; margin: 18px 0; padding: 6px 0 6px 16px; color: #334155; }
+.article-body pre { background: #0f172a; color: #e2e8f0; padding: 16px; border-radius: 12px; overflow: auto; }
+.article-body code { background: #f1f5f9; padding: 2px 6px; border-radius: 6px; font-size: 14px; }
+.article-body pre code { background: none; padding: 0; }
+.related { max-width: 820px; }
+.related ul { list-style: none; padding: 0; margin: 14px 0 0; }
+.related li { margin-bottom: 10px; padding-left: 18px; position: relative; }
+.related li::before { content: "→"; position: absolute; left: 0; color: #475ec2; }
+.related a { color: #3b4fa8; text-decoration: none; }
+.related a:hover { text-decoration: underline; }
