@@ -48,6 +48,52 @@ QA_CORRECTION_FUZZY_MODE = "context"
 # === Файлы базы знаний пользователя ===
 KB_MAX_DEPTH = 8          # глубина вложенности подпапок, дальше не спускаемся
 KB_SKIP_DIRS = {".versions", "lost+found"}
+# --- Служебные строки выгрузки каталога сайта (site_crawler: site_<домен>_*.txt) ---
+# В такой выгрузке на каждый товар приходится ~35 строк, из которых 60% — навигация и
+# служебные подписи («Добавить отзыв», «Отзывов: 0», «Купить … в Москве»). Факта они не
+# несут, но повторяют название товара и выигрывают у осмысленных фрагментов по BM25
+# (замер: 21 файл, 47 276 строк, отбрасывается 27 692 — 59%). Фильтр применяется ТОЛЬКО
+# к выгрузкам сайта: в рукописных .txt формат «Ключ: значение» — это и есть факт
+# («Скорость фильтрации м/час: 10-14»), такие строки удалять нельзя.
+SITE_DUMP_FILE_PREFIX = "site_"
+_TXT_NAV_LINE_RE = re.compile(r"""(?ix)^\s*(?:
+      купить\ .{0,120}\ в\ москве\ или\ с\ доставкой
+    | .{0,160}заказать\ для\ систем\ водоочистки\ в\ аквасегментум
+    | .{0,160}заказать\ для\ очистки\ воды\ .{0,120}от\ аквасегментум
+    | мы\ на\ портале\ поставщиков | наши\ новости | специальное\ предложение\ в\ феврале
+    | купить\ .{0,80}\ по\ выгодным\ ценам\ в\ интернет-магазине\ аквасегмент
+    | широкий\ ассортимент\ .{0,160}\ в\ интернет-магазине\ аквасегмент
+    | похожие\ товары\ \(\d+\):
+)\s*""")
+_TXT_TITLE_VALUE_RE = re.compile(r"^(?P<title>[^:]{3,200}):\s*(?P<value>.+)$", re.S)
+_TXT_SERVICE_VALUE_RE = re.compile(r"""(?ix)^(?:
+      артикул|отзывы?|отзывов|добавить\ отзыв|оставить\ отзыв|описание\ товара|характеристики
+    | все\ характеристики|в\ корзину|купить\ в\ 1\ клик|купить\ в\ один\ клик|к\ сравнению
+    | проконсультировать|рассчитать\ доставку|в\ наличии|под\ заказ|базовая\ единица
+    | запросить\ стоимость\ товара|в\ избранное|загрузка\ товара|аккуратно\ упакуем
+    | весь\ ассортимент|скидки\ постоянным\ покупателям|производитель|страна\ производства
+)\b\s*:?""")
+
+
+def _is_catalog_dump_path(file_path):
+    """Выгрузка каталога сайта (её и только её чистим от служебных строк)."""
+    return os.path.basename(str(file_path)).lower().startswith(SITE_DUMP_FILE_PREFIX)
+
+
+def _is_service_catalog_line(text):
+    """Служебная строка выгрузки каталога: навигация или подпись без факта."""
+    s = str(text).strip()
+    if not s:
+        return True
+    if _TXT_NAV_LINE_RE.match(s):
+        return True
+    m = _TXT_TITLE_VALUE_RE.match(s)
+    if not m:
+        return False
+    head = m.group("value").split(":")[0].strip()
+    return bool(_TXT_SERVICE_VALUE_RE.match(head))
+
+
 # Диверсификация контекста (context_per_file_limit) применяется только к большим файлам:
 # выгрузки каталога сайта дают 670–9 700 строк-фрагментов, тогда как инструкции и паспорта —
 # до ~500. Лимит нужен против «мусорных» каталогов; для мануала он вреден (ответ лежит
@@ -424,7 +470,7 @@ class RAGSettings:
             # Без этого один большой .txt (каталог сайта, 3–10 тыс. строк) занимает
             # весь top_k: его строки повторяют название товара и выигрывают по BM25,
             # а отзывы/паспорта/инструкции в контекст не попадают (0 — выключено).
-            "context_per_file_limit": 3,
+            "context_per_file_limit": 4,
             # Память диалога: история уходит в messages, а поиск по БЗ при промахе
             # повторяется по склейке последних вопросов (вариант B, без доп. LLM-вызова)
             "chat_memory_enabled": True,         # веб-чат
@@ -1263,6 +1309,14 @@ class RAGCore:
                     # поэтому фильтр обязан быть здесь — иначе заголовки висят в поиске мусором.
                     lines = [line.strip() for line in file
                              if line.strip() and not line.lstrip().startswith('#')]
+                    # Выгрузка каталога сайта: выкидываем навигацию и служебные подписи
+                    # (см. комментарий у _is_service_catalog_line). Остальные .txt не трогаем —
+                    # там «Ключ: значение» и есть факт.
+                    if lines and _is_catalog_dump_path(file_path):
+                        before = len(lines)
+                        lines = [line for line in lines if not _is_service_catalog_line(line)]
+                        logger.info(f"🧹 {os.path.basename(file_path)}: отброшено служебных строк "
+                                    f"{before - len(lines)} из {before}")
                     if lines:
                         logger.info(f"✅ Загружено {len(lines)} строк из {os.path.basename(file_path)}")
                         all_knowledge[file_path] = lines
@@ -2161,30 +2215,52 @@ class RAGCore:
         Ограничение действует только на большие файлы
         (CONTEXT_DIVERSIFY_MIN_FILE_FRAGMENTS и больше) — то есть на выгрузки каталога.
         Инструкции и паспорта (до ~500 фрагментов) не ограничиваются: там ответ часто
-        лежит в 10–30 соседних фрагментах одного PDF. Лимит — настройка
-        context_per_file_limit (0 или отрицательное значение = без ограничения).
+        лежит в 10–30 соседних фрагментах одного PDF.
+
+        Внутри большого файла лимит считается не на файл, а на «карточку» — строки с
+        одинаковым префиксом до первого двоеточия (карточка товара в выгрузке сайта).
+        Иначе на вопрос «какое давление у VONTRON-1812» карточка обрезалась до 3 строк
+        и характеристики (давление, температура) не доходили до модели. Общий лимит на
+        файл в таком случае — 2 × limit, чтобы один каталог не занимал весь top_k.
+
+        Настройка context_per_file_limit (по умолчанию 4; 0 или отрицательное = без
+        ограничения).
         """
         if not sorted_indices:
             return []
         try:
-            limit = int(self.settings.get("context_per_file_limit", 3))
+            limit = int(self.settings.get("context_per_file_limit", 4))
         except (TypeError, ValueError):
-            limit = 3
+            limit = 4
         if limit <= 0:
             return list(sorted_indices[:top_k])
         counts = self._file_fragment_counts()
         picked = []
         per_file = {}
+        per_card = {}
         for idx in sorted_indices:
             src = str(self.fragment_sources[idx]) if idx < len(self.fragment_sources) else ''
-            big_file = counts.get(src, 0) >= CONTEXT_DIVERSIFY_MIN_FILE_FRAGMENTS
-            if big_file and per_file.get(src, 0) >= limit:
-                continue
+            if counts.get(src, 0) >= CONTEXT_DIVERSIFY_MIN_FILE_FRAGMENTS:
+                if per_file.get(src, 0) >= limit * 2:
+                    continue
+                card = (src, self._card_key(idx))
+                if per_card.get(card, 0) >= limit:
+                    continue
+                per_card[card] = per_card.get(card, 0) + 1
             per_file[src] = per_file.get(src, 0) + 1
             picked.append(idx)
             if len(picked) >= top_k:
                 break
         return picked
+
+    def _card_key(self, idx):
+        """«Карточка» товара в выгрузке каталога: префикс строки до первого двоеточия."""
+        try:
+            text = str(self.my_knowledge[idx])
+        except Exception:
+            return ''
+        title = text.split(':', 1)[0].strip() if ':' in text else text
+        return title[:120]
 
     def ask_model(self, question, user_prompt=None, history=None):
         """Отправка запроса ко всем доступным моделям

@@ -1,8 +1,11 @@
-# test_context_diversity.py - диверсификация контекста: лимит фрагментов на большой файл
+# test_context_diversity.py - диверсификация контекста: лимит на «карточку» в выгрузке каталога
 #
 # Что проверяется (RAGCore._diversify_indices, настройка context_per_file_limit):
 #   1) лимит соблюдается для БОЛЬШОГО файла (>= CONTEXT_DIVERSIFY_MIN_FILE_FRAGMENTS),
 #      добор идёт из других файлов;
+#   1а) внутри большого файла лимит считается на «карточку» (префикс до первого двоеточия):
+#      карточка товара отдаёт до N строк, общий лимит на файл — 2 × N. Иначе на вопрос
+#      о характеристиках приходило 3 строки из 10 и давление/температура не доходили;
 #   2) маленькие файлы (инструкции, паспорта, отзывы — до ~500 фрагментов) НЕ ограничиваются:
 #      ответ на вопрос «как настроить клапан» лежит в 10-30 соседних фрагментах одного PDF
 #      (на проде запрос про Runxin 135A TWIN давал весь top-30 из одного мануала);
@@ -10,7 +13,7 @@
 #   4) context_per_file_limit = 0 / отрицательное → ограничения нет (прежнее поведение);
 #   5) фрагментов меньше, чем top_k → возвращаются все, без исключений;
 #   6) пустой список индексов → пустой результат;
-#   7) ключа нет в настройках или значение мусорное → работает дефолт (3);
+#   7) ключа нет в настройках или значение мусорное → работает дефолт (4);
 #   8) нет источника для индекса → не падаем;
 #   9) счётчик фрагментов по файлам кэшируется и пересчитывается при смене БЗ.
 #
@@ -42,11 +45,13 @@ class _Settings:
         return self._d.get(key, default)
 
 
-def _core(fragment_sources, **settings):
+def _core(fragment_sources, texts=None, **settings):
     """RAGCore без __init__: не тянем модель эмбеддингов и базу знаний."""
     from rag_core import RAGCore
     core = RAGCore.__new__(RAGCore)
     core.fragment_sources = fragment_sources
+    core.my_knowledge = (texts if texts is not None
+                         else ['Товар A: строка %d' % i for i in range(len(fragment_sources))])
     core.settings = _Settings(**settings)
     return core
 
@@ -67,6 +72,21 @@ def test_limit_per_file():
     # порядок сохранён: сначала лучшие из большого файла, потом мелкие
     assert picked == [0, 1, 2, 700, 701], picked
     print("  ✅ лимит на большой файл соблюдён, добор из других файлов")
+
+
+def test_card_limit():
+    # Внутри большого файла две карточки товара: из каждой не больше N строк
+    src = _big(700) + _big(700) + ['/db/other.pdf']
+    texts = ['Товар A: характеристика %d' % i for i in range(700)]
+    texts += ['Товар B: характеристика %d' % i for i in range(700)]
+    texts += ['прочее']
+    core = _core(src, texts=texts, context_per_file_limit=4)
+    picked = core._diversify_indices(list(range(len(src))), 30)
+    per = collections.Counter(src[i] for i in picked)
+    assert per['/db/catalog.txt'] == 8, per          # 2 × limit на файл
+    assert {0, 1, 2, 3, 700, 701, 702, 703} <= set(picked), picked
+    assert 4 not in picked and 704 not in picked, picked  # пятые строки карточек отсечены
+    print("  ✅ лимит на «карточку» товара + общий лимит 2×N на файл")
 
 
 def test_small_files_not_capped():
@@ -118,13 +138,13 @@ def test_empty():
 
 def test_default_and_bad_value():
     src = _big(700) + ['/db/b.pdf']
-    core = _core(src)  # ключа нет → дефолт 3
-    picked = core._diversify_indices(list(range(len(src))), 4)
-    assert collections.Counter(src[i] for i in picked)['/db/catalog.txt'] == 3, picked
+    core = _core(src)  # ключа нет → дефолт 4
+    picked = core._diversify_indices(list(range(len(src))), 6)
+    assert collections.Counter(src[i] for i in picked)['/db/catalog.txt'] == 4, picked
     core_bad = _core(src, context_per_file_limit='мусор')
-    picked_bad = core_bad._diversify_indices(list(range(len(src))), 4)
-    assert collections.Counter(src[i] for i in picked_bad)['/db/catalog.txt'] == 3, picked_bad
-    print("  ✅ дефолт 3 при отсутствии ключа и при мусорном значении")
+    picked_bad = core_bad._diversify_indices(list(range(len(src))), 6)
+    assert collections.Counter(src[i] for i in picked_bad)['/db/catalog.txt'] == 4, picked_bad
+    print("  ✅ дефолт 4 при отсутствии ключа и при мусорном значении")
 
 
 def test_source_missing():
@@ -147,7 +167,7 @@ def test_counts():
 
 if __name__ == '__main__':
     print("Диверсификация контекста (context_per_file_limit):")
-    for fn in (test_limit_per_file, test_small_files_not_capped, test_top_k_respected, test_disabled,
+    for fn in (test_limit_per_file, test_card_limit, test_small_files_not_capped, test_top_k_respected, test_disabled,
                test_fewer_than_top_k, test_empty, test_default_and_bad_value, test_source_missing,
                test_counts):
         fn()
