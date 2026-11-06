@@ -141,6 +141,7 @@ _DEFAULTS = {
     "search_alpha": 0.7,
     "relevance_threshold": 0.1,
     "max_context_fragments": 100,
+    "context_per_file_limit": 3,
     "chat_memory_enabled": True,
     "chat_memory_external": True,
     "chat_memory_max_messages": 20,
@@ -166,7 +167,8 @@ _DEFAULTS = {
 # Группировка настроек для показа в `settings` и для меню
 SETTINGS_GROUPS = [
     ("Основные", ["disable_llm_models", "disable_hybrid_search", "disable_knowledge_base_search"]),
-    ("Поиск", ["search_top_k", "search_alpha", "relevance_threshold", "max_context_fragments"]),
+    ("Поиск", ["search_top_k", "search_alpha", "relevance_threshold", "max_context_fragments",
+              "context_per_file_limit"]),
     ("Память диалога", ["chat_memory_enabled", "chat_memory_external", "chat_memory_max_messages",
                         "chat_memory_max_chars", "chat_memory_ttl_minutes",
                         "chat_memory_context_questions"]),
@@ -186,6 +188,7 @@ _KEY_HINTS = {
     "search_alpha": "число от 0.0 до 1.0 (0 — только ключевые слова, 1 — только семантика)",
     "relevance_threshold": "число от 0.0 до 1.0 (рекомендуется 0.1–0.3)",
     "max_context_fragments": "целое число от 10 до 500",
+    "context_per_file_limit": "целое 0–20: не больше N фрагментов из одного файла (0 — без ограничения; каталог сайта иначе занимает весь top_k)",
     "chat_memory_enabled": "true/false — бот учитывает прошлые сообщения (веб-чат)",
     "chat_memory_external": "true/false — память диалога для виджета на сайте и MAX-бота",
     "chat_memory_max_messages": "целое 2–80: сколько последних сообщений уходит в промпт",
@@ -308,7 +311,7 @@ def validate_setting(key, value):
     """Валидация значения настройки (зеркало validate_and_apply_settings GUI-лаунчера).
     Возвращает (нормализованное_значение, предупреждение_или_None).
     При неверном типе/диапазоне возвращает (None, ошибка) — значение не сохраняется."""
-    if key in ("search_top_k", "max_context_fragments", "ocr_dpi", "image_max_side",
+    if key in ("search_top_k", "max_context_fragments", "context_per_file_limit", "ocr_dpi", "image_max_side",
                "chat_memory_max_messages", "chat_memory_max_chars",
                "chat_memory_ttl_minutes", "chat_memory_context_questions"):
         try:
@@ -319,6 +322,8 @@ def validate_setting(key, value):
             return None, "TOP_K должен быть от 1 до 50"
         if key == "max_context_fragments" and not (10 <= v <= 500):
             return None, "максимум фрагментов должен быть от 10 до 500"
+        if key == "context_per_file_limit" and not (0 <= v <= 20):
+            return None, "лимит фрагментов из одного файла должен быть от 0 до 20 (0 — без ограничения)"
         if key == "ocr_dpi" and not (50 <= v <= 600):
             return None, "OCR DPI должен быть от 50 до 600"
         if key == "image_max_side" and not (200 <= v <= 4000):

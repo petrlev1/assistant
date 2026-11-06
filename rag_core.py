@@ -415,6 +415,11 @@ class RAGSettings:
             "search_alpha": 0.7,
             "relevance_threshold": 0.2,
             "max_context_fragments": 100,
+            # Диверсификация контекста: не больше N фрагментов из одного файла.
+            # Без этого один большой .txt (каталог сайта, 3–10 тыс. строк) занимает
+            # весь top_k: его строки повторяют название товара и выигрывают по BM25,
+            # а отзывы/паспорта/инструкции в контекст не попадают (0 — выключено).
+            "context_per_file_limit": 3,
             # Память диалога: история уходит в messages, а поиск по БЗ при промахе
             # повторяется по склейке последних вопросов (вариант B, без доп. LLM-вызова)
             "chat_memory_enabled": True,         # веб-чат
@@ -2114,8 +2119,11 @@ class RAGCore:
         # Сортировка по комбинированной оценке
         sorted_indices = sorted(combined_scores.keys(), key=lambda x: combined_scores[x], reverse=True)
         
-        # Выбор топ-K результатов
-        top_indices = sorted_indices[:actual_top_k]
+        # Выбор топ-K результатов с диверсификацией по файлам.
+        # Без ограничения один файл (обычно большой .txt каталога сайта) занимает весь
+        # top_k: строки вида «Товар: Добавить отзыв» повторяют название товара и
+        # выигрывают у осмысленных фрагментов, контекст получается пустым по смыслу.
+        top_indices = self._diversify_indices(sorted_indices, actual_top_k)
         
         # Фильтрация по порогу
         best_score = combined_scores[top_indices[0]] if top_indices else 0
@@ -2128,6 +2136,36 @@ class RAGCore:
         logger.info(f"✅ Найдено {len(result)} релевантных фрагментов (лучший скор: {best_score:.3f})")
         return "\n".join(result), source_files, best_score
     
+    def _diversify_indices(self, sorted_indices, top_k):
+        """Взять top_k индексов фрагментов с ограничением на один файл.
+
+        Причина: в базе aquasegmentum 21 файл каталога сайта даёт ~48 тыс. строк
+        (30% из них — служебные «Добавить отзыв», «Артикул», «N руб./шт»). Эти строки
+        повторяют название товара и выигрывают у осмысленных фрагментов, поэтому без
+        ограничения один файл занимает весь top_k, а отзывы, паспорта и инструкции
+        не попадают в контекст вообще. Лимит — настройка context_per_file_limit
+        (0 или отрицательное значение = без ограничения).
+        """
+        if not sorted_indices:
+            return []
+        try:
+            limit = int(self.settings.get("context_per_file_limit", 3))
+        except (TypeError, ValueError):
+            limit = 3
+        if limit <= 0:
+            return list(sorted_indices[:top_k])
+        picked = []
+        per_file = {}
+        for idx in sorted_indices:
+            src = self.fragment_sources[idx] if idx < len(self.fragment_sources) else ''
+            if per_file.get(src, 0) >= limit:
+                continue
+            per_file[src] = per_file.get(src, 0) + 1
+            picked.append(idx)
+            if len(picked) >= top_k:
+                break
+        return picked
+
     def ask_model(self, question, user_prompt=None, history=None):
         """Отправка запроса ко всем доступным моделям
 
