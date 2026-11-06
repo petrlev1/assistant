@@ -66,6 +66,8 @@ _TXT_NAV_LINE_RE = re.compile(r"""(?ix)^\s*(?:
     | похожие\ товары\ \(\d+\):
 )\s*""")
 _TXT_TITLE_VALUE_RE = re.compile(r"^(?P<title>[^:]{3,200}):\s*(?P<value>.+)$", re.S)
+_TXT_NOISE_CHARS_RE = re.compile(r"[\s.,()/\-–—+]")
+_TXT_UNIT_TOKEN_RE = re.compile(r"(?i)м3/ч|м3|м2|г/м3|°С|бар|кг|грамм|дюйм|шт|руб|мм|см|\bг\b|\bл\b|\bм\b")
 _TXT_SERVICE_VALUE_RE = re.compile(r"""(?ix)^(?:
       артикул|отзывы?|отзывов|добавить\ отзыв|оставить\ отзыв|описание\ товара|характеристики
     | все\ характеристики|в\ корзину|купить\ в\ 1\ клик|купить\ в\ один\ клик|к\ сравнению
@@ -80,6 +82,13 @@ def _is_catalog_dump_path(file_path):
     return os.path.basename(str(file_path)).lower().startswith(SITE_DUMP_FILE_PREFIX)
 
 
+def _is_unit_only(value):
+    """Значение — только единица измерения («шт», «м3», «кг») без числа: факта нет."""
+    stripped = _TXT_UNIT_TOKEN_RE.sub('', str(value))
+    stripped = _TXT_NOISE_CHARS_RE.sub('', stripped)
+    return not stripped.strip()
+
+
 def _is_service_catalog_line(text):
     """Служебная строка выгрузки каталога: навигация или подпись без факта."""
     s = str(text).strip()
@@ -90,8 +99,60 @@ def _is_service_catalog_line(text):
     m = _TXT_TITLE_VALUE_RE.match(s)
     if not m:
         return False
-    head = m.group("value").split(":")[0].strip()
-    return bool(_TXT_SERVICE_VALUE_RE.match(head))
+    value = m.group("value").strip()
+    if _TXT_SERVICE_VALUE_RE.match(value.split(":")[0].strip()):
+        return True
+    return _is_unit_only(value)
+
+
+def _looks_like_attr_label(value):
+    """Похоже на название характеристики: коротко, без числа (число только в единице)."""
+    v = str(value).strip()
+    if not v or len(v) > 40 or not any(c.isalpha() for c in v):
+        return False
+    return not any(c.isdigit() for c in _TXT_UNIT_TOKEN_RE.sub('', v))
+
+
+def _looks_like_attr_value(value):
+    """Похоже на значение характеристики: число или единица, но не название."""
+    v = str(value).strip()
+    if not v or len(v) > 40 or _looks_like_attr_label(v):
+        return False
+    return any(c.isdigit() for c in v) or bool(_TXT_UNIT_TOKEN_RE.search(v))
+
+
+def _merge_catalog_label_values(lines):
+    """Склеивает пару «характеристика + её значение» в одну строку-факт.
+
+    В выгрузке каталога характеристика и значение лежат разными строками с тем же
+    названием товара («…: Рабочее давление, бар» и «…: 3–8»). По отдельности такие
+    фрагменты бесполезны: модель не может связать число с параметром, а BM25 считает
+    их за разные факты. Склейка даёт «…: Рабочее давление, бар — 3–8».
+
+    Возвращает (строки, число склеек).
+    """
+    out = []
+    merges = 0
+    i = 0
+    while i < len(lines):
+        cur = lines[i]
+        m = _TXT_TITLE_VALUE_RE.match(cur)
+        if m and i + 1 < len(lines):
+            nxt = _TXT_TITLE_VALUE_RE.match(lines[i + 1])
+            title = m.group("title").strip()
+            label = m.group("value").strip().rstrip(":")
+            if (nxt
+                    and nxt.group("title").strip() == title
+                    and _looks_like_attr_label(label)
+                    and not _is_unit_only(label)
+                    and _looks_like_attr_value(nxt.group("value"))):
+                out.append(f"{title}: {label} — {nxt.group('value').strip()}")
+                merges += 1
+                i += 2
+                continue
+        out.append(cur)
+        i += 1
+    return out, merges
 
 
 # Диверсификация контекста (context_per_file_limit) применяется только к большим файлам:
@@ -1317,6 +1378,10 @@ class RAGCore:
                         lines = [line for line in lines if not _is_service_catalog_line(line)]
                         logger.info(f"🧹 {os.path.basename(file_path)}: отброшено служебных строк "
                                     f"{before - len(lines)} из {before}")
+                        lines, merges = _merge_catalog_label_values(lines)
+                        if merges:
+                            logger.info(f"🔗 {os.path.basename(file_path)}: склеено пар "
+                                        f"«характеристика + значение»: {merges}")
                     if lines:
                         logger.info(f"✅ Загружено {len(lines)} строк из {os.path.basename(file_path)}")
                         all_knowledge[file_path] = lines

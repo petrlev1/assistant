@@ -4,7 +4,10 @@
 #   1) навигация выгрузки отбрасывается («Купить … в Москве или с доставкой: …», «Похожие товары (8): …»);
 #   2) служебные подписи отбрасываются («Добавить отзыв», «Отзывов: 0», «Артикул: X», «В корзину»);
 #   3) ФАКТЫ остаются: «<Товар>: Рабочее давление, бар», «<Товар>: 3–8», проза, цена;
-#   4) рукописные .txt не считаются выгрузкой (фильтр к ним не применяется) — иначе
+#   4) «характеристика + значение» склеиваются в одну строку-факт
+#      («…: Рабочее давление, бар — 3–8»), иначе число и параметр — разные фрагменты
+#      и модель не может их связать;
+#   5) рукописные .txt не считаются выгрузкой (фильтр к ним не применяется) — иначе
 #      «Ключ: значение» формата БЗ («Скорость фильтрации м/час: 10-14») улетало бы в мусор;
 #   5) _process_file: site_*.txt режется, обычный .txt — нет; заголовки «# …» не индексируются.
 #
@@ -103,6 +106,49 @@ def test_handwritten_kv_kept():
     print("  ✅ рукописные «Ключ: значение» не считаются служебными")
 
 
+def test_unit_only_dropped():
+    from rag_core import _is_service_catalog_line as svc
+    for line in ('Мембранный элемент VONTRON-1812 (75 G\\D): шт',
+                 'Мембранный элемент VONTRON-1812 (75 G\\D): м3',
+                 'Мембранный элемент VONTRON-1812 (75 G\\D): кг'):
+        assert svc(line), line
+    assert not svc('Мембранный элемент VONTRON-1812 (75 G\\D): 3–8')
+    print("  ✅ строки из одной единицы измерения («шт», «м3») отбрасываются")
+
+
+def test_merge_pairs():
+    from rag_core import _merge_catalog_label_values as merge
+    lines = [
+        'Мембранный элемент VONTRON-1812 (75 G\\D): Рабочее давление, бар',
+        'Мембранный элемент VONTRON-1812 (75 G\\D): 3–8',
+        'Мембранный элемент VONTRON-1812 (75 G\\D): Рабочая температура, °С',
+        'Мембранный элемент VONTRON-1812 (75 G\\D): +4...+40',
+        # метка другой карточки — не склеивается
+        'Клапан WS1: Длина, мм',
+        'Корпус 1054: 298',
+        # единица без числа не склеивается и не съедает следующую метку
+        'Корпус 1054: шт',
+        'Корпус 1054: Ширина, мм',
+        'Корпус 1054: 45',
+        # проза не значение
+        'Корпус 1054: Гарантия',
+        'Корпус 1054: Подробности уточняйте у менеджера',
+        # цена — значение
+        'Корпус 1054: Цена',
+        'Корпус 1054: 1 168.31 руб. / шт',
+    ]
+    out, merges = merge(lines)
+    assert merges == 4, merges
+    assert 'Мембранный элемент VONTRON-1812 (75 G\\D): Рабочее давление, бар — 3–8' in out, out
+    assert 'Мембранный элемент VONTRON-1812 (75 G\\D): Рабочая температура, °С — +4...+40' in out, out
+    assert 'Клапан WS1: Длина, мм' in out and 'Корпус 1054: 298' in out, out
+    assert 'Корпус 1054: Ширина, мм — 45' in out, out
+    assert 'Корпус 1054: шт' in out, out
+    assert 'Корпус 1054: Гарантия' in out and 'Корпус 1054: Подробности уточняйте у менеджера' in out, out
+    assert 'Корпус 1054: Цена — 1 168.31 руб. / шт' in out, out
+    print("  ✅ «характеристика + значение» склеиваются, проза и чужие карточки — нет")
+
+
 def test_empty_line():
     from rag_core import _is_service_catalog_line as svc
     assert svc(''), 'пустая строка'
@@ -138,7 +184,7 @@ def test_process_file_gate():
         core._process_file(manual, all_knowledge)
         dump_lines = all_knowledge[dump]
         manual_lines = all_knowledge[manual]
-        assert dump_lines == ['Клапан WS1: Расход, м3/ч', 'Клапан WS1: 2,5'], dump_lines
+        assert dump_lines == ['Клапан WS1: Расход, м3/ч — 2,5'], dump_lines
         assert manual_lines == ['Расход, м3/ч: 2,5', 'Артикул: V3007'], manual_lines
     print("  ✅ _process_file: фильтр только для site_*.txt, заголовки не индексируются")
 
@@ -146,6 +192,7 @@ def test_process_file_gate():
 if __name__ == '__main__':
     print("Служебные строки выгрузки каталога (.txt):")
     for fn in (test_dump_path_detection, test_navigation_dropped, test_service_labels_dropped,
-               test_facts_kept, test_handwritten_kv_kept, test_empty_line, test_process_file_gate):
+               test_facts_kept, test_unit_only_dropped, test_merge_pairs, test_handwritten_kv_kept,
+               test_empty_line, test_process_file_gate):
         fn()
     print("Все проверки пройдены.")
