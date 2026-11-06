@@ -121,6 +121,11 @@
         return div;
     }
     var lastId = 0;
+    // Пока идёт запрос /api/widget/ask, вопрос уже записан в ленту, а ответ ещё
+    // генерируется: опрос в это окно (модель думает дольше 5 с) возвращал вопрос
+    // гостя и рисовал его второй раз. Гость рисует вопрос и ответ сам.
+    var inflight = false;
+    var lastLocalUser = null;   // вопрос, нарисованный по клику гостя (для сверки с опросом)
     // Опрос ленты идёт с after_id=lastId, поэтому lastId — это «докуда уже показано».
     // Отметку ставят и отрисовка истории (renderMsg), и ответ на вопрос гостя (advanceLast
     // по last_id от сервера): без этого опрос возвращал уже нарисованные реплики — дубль.
@@ -135,6 +140,13 @@
     function renderMsg(m) {
         // Идемпотентно: то, что уже показано (в т.ч. нарисованное локально), не повторяем
         if (m.id && Number(m.id) <= lastId) return;
+        // Свой вопрос, нарисованный при отправке, опрос не повторяет даже если
+        // ответ на запрос не дошёл (сеть): сравниваем с последним локальным пузырём
+        if (m.role === 'user' && lastLocalUser && lastLocalUser.textContent === m.message) {
+            lastLocalUser = null;
+            advanceLast(m.id);
+            return;
+        }
         if (m.role === 'user') add(m.message, 'user');
         else if (m.role === 'operator') add(m.message, 'op', 'op', 'Менеджер');
         else add(m.message, 'bot');
@@ -180,7 +192,12 @@
         if (document.hidden) return;
         api('/api/widget/history?' + new URLSearchParams(pack({ after_id: lastId }))).then(function (d) {
             if (d.human) subline('Отвечает менеджер');
-            (d.messages || []).forEach(renderMsg);
+            (d.messages || []).forEach(function (m) {
+                // Опрос существует ради реплик менеджера; вопрос гостя и ответ бота
+                // в это время уже нарисованы (или будут) по ответу /api/widget/ask.
+                if (inflight && m.role !== 'operator') return;
+                renderMsg(m);
+            });
         }).catch(function () {});
     }
     setInterval(poll, 5000);
@@ -189,10 +206,12 @@
     function ask() {
         var text = q.value.trim();
         if (!text || send.disabled) return;
-        add(text, 'user');
+        lastLocalUser = add(text, 'user');
         q.value = ''; q.style.height = 'auto';
+        inflight = true;
         loading(true);
         api('/api/widget/ask', pack({ question: text })).then(function (d) {
+            inflight = false;
             loading(false);
             // Вопрос и ответ уже нарисованы; сервер сказал, до какого id лента показана
             advanceLast(d.last_id);
@@ -204,6 +223,7 @@
             }
             q.focus();
         }).catch(function () {
+            inflight = false;
             loading(false);
             add('Нет связи с ассистентом. Попробуйте ещё раз.', 'bot', 'sys');
         });

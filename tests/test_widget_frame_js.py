@@ -144,6 +144,9 @@ const poll = () => timers.forEach(fn => fn());        // «прошло 5 сек
 
   byId.q.value = 'Добрый день';
   byId.send.click();
+  poll();                                             // опрос ВНУТРИ окна запроса: вопрос уже в БД
+  await tick(10);
+  const afterPollWhilePending = bubbles();
   await tick(60);
   const afterAsk = bubbles();
 
@@ -165,7 +168,7 @@ const poll = () => timers.forEach(fn => fn());        // «прошло 5 сек
   const afterOperator = bubbles();
 
   console.log('__RESULT__' + JSON.stringify({
-    afterLoad, afterAsk, afterPoll, afterDoublePoll, afterOperator,
+    afterLoad, afterPollWhilePending, afterAsk, afterPoll, afterDoublePoll, afterOperator,
     db: store.map(m => m.id + ':' + m.role),
   }));
 })();
@@ -206,6 +209,10 @@ class WidgetFrameJsCase(unittest.TestCase):
         answer = 'bot | Добрый день! Как я могу помочь вам сегодня?'
 
         self.assertEqual(len(r['afterLoad']), 1, r['afterLoad'])          # только приветствие
+        # Вопрос уже в БД, ответ ещё генерируется: опрос в это окно не должен дублировать вопрос
+        self.assertEqual(r['afterPollWhilePending'],
+                         ['bot | ' + GREETING, 'user | Добрый день'],
+                         'опрос во время ожидания ответа задвоил вопрос гостя')
         self.assertEqual(r['afterAsk'],
                          ['bot | ' + GREETING, 'user | Добрый день', answer], r['afterAsk'])
         # Главный инвариант: опрос ленты НЕ повторяет то, что уже нарисовано
