@@ -48,6 +48,11 @@ QA_CORRECTION_FUZZY_MODE = "context"
 # === Файлы базы знаний пользователя ===
 KB_MAX_DEPTH = 8          # глубина вложенности подпапок, дальше не спускаемся
 KB_SKIP_DIRS = {".versions", "lost+found"}
+# Диверсификация контекста (context_per_file_limit) применяется только к большим файлам:
+# выгрузки каталога сайта дают 670–9 700 строк-фрагментов, тогда как инструкции и паспорта —
+# до ~500. Лимит нужен против «мусорных» каталогов; для мануала он вреден (ответ лежит
+# в 10–30 соседних фрагментах одного PDF).
+CONTEXT_DIVERSIFY_MIN_FILE_FRAGMENTS = 600
 
 
 def iter_kb_files(folder):
@@ -2136,15 +2141,28 @@ class RAGCore:
         logger.info(f"✅ Найдено {len(result)} релевантных фрагментов (лучший скор: {best_score:.3f})")
         return "\n".join(result), source_files, best_score
     
+    def _file_fragment_counts(self):
+        """Сколько фрагментов дал каждый файл БЗ (для решения, ограничивать ли файл)."""
+        counts = {}
+        for path in self.fragment_sources:
+            name = str(path)
+            counts[name] = counts.get(name, 0) + 1
+        return counts
+
     def _diversify_indices(self, sorted_indices, top_k):
-        """Взять top_k индексов фрагментов с ограничением на один файл.
+        """Взять top_k индексов фрагментов с ограничением на большой файл.
 
         Причина: в базе aquasegmentum 21 файл каталога сайта даёт ~48 тыс. строк
         (30% из них — служебные «Добавить отзыв», «Артикул», «N руб./шт»). Эти строки
         повторяют название товара и выигрывают у осмысленных фрагментов, поэтому без
         ограничения один файл занимает весь top_k, а отзывы, паспорта и инструкции
-        не попадают в контекст вообще. Лимит — настройка context_per_file_limit
-        (0 или отрицательное значение = без ограничения).
+        не попадают в контекст вообще.
+
+        Ограничение действует только на большие файлы
+        (CONTEXT_DIVERSIFY_MIN_FILE_FRAGMENTS и больше) — то есть на выгрузки каталога.
+        Инструкции и паспорта (до ~500 фрагментов) не ограничиваются: там ответ часто
+        лежит в 10–30 соседних фрагментах одного PDF. Лимит — настройка
+        context_per_file_limit (0 или отрицательное значение = без ограничения).
         """
         if not sorted_indices:
             return []
@@ -2154,11 +2172,13 @@ class RAGCore:
             limit = 3
         if limit <= 0:
             return list(sorted_indices[:top_k])
+        counts = self._file_fragment_counts()
         picked = []
         per_file = {}
         for idx in sorted_indices:
-            src = self.fragment_sources[idx] if idx < len(self.fragment_sources) else ''
-            if per_file.get(src, 0) >= limit:
+            src = str(self.fragment_sources[idx]) if idx < len(self.fragment_sources) else ''
+            big_file = counts.get(src, 0) >= CONTEXT_DIVERSIFY_MIN_FILE_FRAGMENTS
+            if big_file and per_file.get(src, 0) >= limit:
                 continue
             per_file[src] = per_file.get(src, 0) + 1
             picked.append(idx)
