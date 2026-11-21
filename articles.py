@@ -24,7 +24,7 @@ ARTICLES = {
   "выбор системы"
  ],
  "related": [
-  "/rag-sistema",
+  "/ii-assistent-po-dokumentam",
   "/rag-152fz",
   "/blog/vnedrenie-ii-assistenta"
  ]
@@ -60,7 +60,7 @@ ARTICLES = {
   "пилот"
  ],
  "related": [
-  "/rag-sistema",
+  "/ii-assistent-po-dokumentam",
   "/chat-bot-po-praysu",
   "/blog/ii-dlya-biznesa-s-chego-nachat"
  ]
