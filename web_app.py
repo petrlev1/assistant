@@ -760,6 +760,9 @@ SITE_BASE_URL = 'https://ragstone.ru'
 # Приватные и служебные разделы: индексировать в них нечего, а обход по ним только тратит краулинг.
 ROBOTS_DISALLOW = ['/login', '/register', '/logout', '/chat', '/history', '/analytics',
                    '/inbox', '/widgets', '/admin', '/widget/', '/api/', '/ask', '/status']
+# Публичные адреса, попадающие под приватный префикс (/chat закрывал бы /chat-bot-po-praysu):
+# явный Allow перекрывает Disallow по правилу самого длинного совпадения.
+ROBOTS_ALLOW = ['/chat-bot-po-praysu']
 
 
 def _plain_response(body, content_type='text/plain; charset=utf-8'):
@@ -782,6 +785,7 @@ def _file_lastmod(*parts):
 def robots_txt():
     """robots.txt: публичные страницы открыты, приватные закрыты, sitemap указан."""
     lines = ['User-agent: *', 'Allow: /']
+    lines += [f'Allow: {p}' for p in ROBOTS_ALLOW]
     lines += [f'Disallow: {p}' for p in ROBOTS_DISALLOW]
     lines += ['', f'Sitemap: {SITE_BASE_URL}/sitemap.xml', '']
     return _plain_response('\n'.join(lines))
